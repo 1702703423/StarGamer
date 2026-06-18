@@ -1,0 +1,28 @@
+# === Keil MDK-ARM Build Output Directory ===
+Star Gamer/
+
+# === Keil IDE User-Specific Files ===
+*.uvguix.*
+*.uvoptx
+JLinkLog.txt
+JLinkSettings.ini
+
+# === Build Artifacts ===
+*.lst
+*.bin
+*.BIN
+*.Bak
+*.scvd
+*XX.bin*
+
+# === Log Files ===
+*.log
+*.log.lock
+
+# === CodeGraph (local tool data) ===
+.codegraph/
+
+# === OS Junk ===
+.DS_Store
+Thumbs.db
+Desktop.ini

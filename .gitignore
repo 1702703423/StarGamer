@@ -1,0 +1,54 @@
+# === Keil MDK-ARM Build Output ===
+MDK-ARM/Star Gamer/
+
+# === Keil IDE User-Specific Files ===
+*.uvguix.*
+*.uvoptx
+JLinkLog.txt
+JLinkSettings.ini
+
+# === Build Artifacts ===
+*.lst
+*.bin
+*.BIN
+*.Bak
+*.scvd
+*XX.bin*
+*.o
+*.d
+*.crf
+*.depend
+*.hex
+*.elf
+*.axf
+*.map
+*.out
+*.iex
+*.htm
+*.dep
+
+# === Log Files ===
+*.log
+*.log.lock
+
+# === CodeGraph (local tool data) ===
+.codegraph/
+
+# === Reasonix (local agent data) ===
+.reasonix/
+
+# === OS Junk ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === IDE / Editor ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === CubeMX generated (tracked by .ioc instead) ===
+# Uncomment if you prefer not to track the generated project file:
+# .mxproject
