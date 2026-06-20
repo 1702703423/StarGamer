@@ -1,9 +1,12 @@
 #include "System_Status.h"
 #include "sys.h"
 #include "FreeRTOS.h"
+#include "shell.h"
+#include "shell_support.h"
 
 extern SRAM_HandleTypeDef hsram3;
 extern SD_HandleTypeDef hsd;
+extern Shell shell;
 
 int GetSdCardInfo()
 {
@@ -14,17 +17,17 @@ int GetSdCardInfo()
 	HAL_SD_GetCardCID(&hsd,&SDCard_CID);
 	HAL_SD_GetCardInfo(&hsd,&SDCardInfo);
 	CardCap=(uint64_t)(SDCardInfo.LogBlockNbr)*(uint64_t)(SDCardInfo.LogBlockSize);
-	printf("====================\r\n");
-	printf("Card ManufacturerID: %d \r\n",SDCard_CID.ManufacturerID);				//??????ID	
- 	printf("CardVersion:         %d \r\n",(uint32_t)(SDCardInfo.CardVersion));		//???ï¿½ï¿½??
-	printf("Class:               %d \r\n",(uint32_t)(SDCardInfo.Class));		    //
- 	printf("Card RCA(RelCardAdd):%d \r\n",SDCardInfo.RelCardAdd);					//????????
-	printf("Card BlockNbr:       %d \r\n",SDCardInfo.BlockNbr);						//??????
- 	printf("Card BlockSize:      %d \r\n",SDCardInfo.BlockSize);					//?????
-	printf("LogBlockNbr:         %d \r\n",(uint32_t)(SDCardInfo.LogBlockNbr));		//?????????
-	printf("LogBlockSize:        %d \r\n",(uint32_t)(SDCardInfo.LogBlockSize));		//????????
-	printf("Card Capacity:       %d MB\r\n",(uint32_t)(CardCap>>20));				//??????
-  printf("====================\r\n");
+	shellPrintEndLine(&shell,"====================\r\n");
+	shellPrintEndLine(&shell,"Card ManufacturerID: %d \r\n",SDCard_CID.ManufacturerID);				//??????ID	
+ 	shellPrintEndLine(&shell,"CardVersion:         %d \r\n",(uint32_t)(SDCardInfo.CardVersion));		//???ï¿½ï¿½??
+	shellPrintEndLine(&shell,"Class:               %d \r\n",(uint32_t)(SDCardInfo.Class));		    //
+ 	shellPrintEndLine(&shell,"Card RCA(RelCardAdd):%d \r\n",SDCardInfo.RelCardAdd);					//????????
+	shellPrintEndLine(&shell,"Card BlockNbr:       %d \r\n",SDCardInfo.BlockNbr);						//??????
+ 	shellPrintEndLine(&shell,"Card BlockSize:      %d \r\n",SDCardInfo.BlockSize);					//?????
+	shellPrintEndLine(&shell,"LogBlockNbr:         %d \r\n",(uint32_t)(SDCardInfo.LogBlockNbr));		//?????????
+	shellPrintEndLine(&shell,"LogBlockSize:        %d \r\n",(uint32_t)(SDCardInfo.LogBlockSize));		//????????
+	shellPrintEndLine(&shell,"Card Capacity:       %d MB\r\n",(uint32_t)(CardCap>>20));				//??????
+  shellPrintEndLine(&shell,"====================\r\n");
 	
 	return SYSTEM_STATUS_OK;
 }
@@ -43,7 +46,7 @@ uint8_t* creat_frame_buffer(int* code)
 		return NULL;
 	}
 	
-	Frame_Buffer_Status_t* FBST_data = (Frame_Buffer_Status_t*)sys_malloc(0,sizeof(Frame_Buffer_Status_t)); //ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿?
+	Frame_Buffer_Status_t* FBST_data = (Frame_Buffer_Status_t*)sys_malloc(0,sizeof(Frame_Buffer_Status_t)); //ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½?
 	
 	if(FBST_data == NULL)
 	{
@@ -52,7 +55,7 @@ uint8_t* creat_frame_buffer(int* code)
 		return NULL;
 	}
 	
-	FBST_data->pointer = ST7789s_ScreenBuffer; //ï¿½ï¿½Â¼Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½Ö?
+	FBST_data->pointer = ST7789s_ScreenBuffer; //ï¿½ï¿½Â¼Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?
 	FBST_data->state = 0;
 	
 	if(insert_head_chain(SRT.frame_buffer_table,FBST_data,&_code) == NULL)
@@ -61,7 +64,7 @@ uint8_t* creat_frame_buffer(int* code)
 		sys_free(0,(void*)FBST_data);
 		*code = OPERATE_FAILED;
 		return NULL;
-	};//ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
+	};//ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½?
 	
 	osKernelUnlock();
 	
@@ -126,7 +129,7 @@ uint8_t* destroy_frame_buffer(uint8_t* pointer, int* code)
 	return NULL; 
 }
 
-osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,osThreadAttr_t* attr,uint8_t ui)
+osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAttr_t* attr,uint8_t ui)
 {
 	int _code;
 	
@@ -180,7 +183,7 @@ int SysTerminateThread(osThreadId_t tid)
 	
 	osKernelLock();
 	
-	// ±éÀú SRT.task_table ²éÕÒÆ¥ÅäµÄÏß³Ì
+	// ï¿½ï¿½ï¿½ï¿½ SRT.task_table ï¿½ï¿½ï¿½ï¿½Æ¥ï¿½ï¿½ï¿½ï¿½ß³ï¿½
 	adt_chain_t* curr = SRT.task_table->next;
 	SYS_Task_Control_Table_t* found = NULL;
 	
@@ -197,12 +200,12 @@ int SysTerminateThread(osThreadId_t tid)
 	
 	if (found == NULL)
 	{
-		// ²»ÔÚ SYS_Task_Control_Table ÖÐ£¬²»ÔÊÐíÖÕÖ¹
+		// ï¿½ï¿½ï¿½ï¿½ SYS_Task_Control_Table ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¹
 		osKernelUnlock();
 		return OPERATE_FAILED;
 	}
 	
-	// ÖÕÖ¹Ïß³Ì
+	// ï¿½ï¿½Ö¹ï¿½ß³ï¿½
 	osStatus_t status = osThreadTerminate(tid);
 	if (status != osOK)
 	{
@@ -210,10 +213,10 @@ int SysTerminateThread(osThreadId_t tid)
 		return OPERATE_FAILED;
 	}
 	
-	// ´ÓÁ´±íÖÐÒÆ³ý
+	// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ³ï¿½
 	delete_node(SRT.task_table, found, &_code);
 	
-	// ÊÍ·Å SYS_Task_Control_Table ½Úµã
+	// ï¿½Í·ï¿½ SYS_Task_Control_Table ï¿½Úµï¿½
 	sys_free(0, (void*)found);
 	
 	osKernelUnlock();

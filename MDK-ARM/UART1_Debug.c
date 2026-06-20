@@ -28,7 +28,7 @@ struct __FILE
 {
     int handle;
     /* Whatever you require here. If the only file you are using is */
-    /* standard output using printf() for debugging, no file handling */
+    /* standard output using shellPrintEndLine() for debugging, no file handling */
     /* is required. */
 };
 
@@ -81,7 +81,7 @@ int fputc(int ch, FILE *f)
 //		va_start(arg, string);			//��format��ʼ�����ղ����б���arg����
 //		vsprintf(String, string, arg);	//ʹ��vsprintf��ӡ��ʽ���ַ����Ͳ����б����ַ�������
 //		va_end(arg);					//��������arg
-//		printf("%s",String);
+//		shellPrintEndLine("%s",String);
 //		return SYSTEM_STATUS_OK;
 //	}
 //	return DEBUG_OPTION_DISABLE;
@@ -130,8 +130,8 @@ void shellTaskList(void)
 	count = osThreadEnumerate(threads, MAX_TASKS);
 
 	shellPrintEndLine(&shell, "\n===== RTOS Task List (%lu tasks) =====\n", count);
-	shellPrintEndLine(&shell, "%-16s %-8s %-12s %-8s %-10s\n",
-	           "Name", "Type", "State", "Prio", "StackFree");
+	shellPrintEndLine(&shell, "%-*s %-8s %-12s %-8s %-10s\n",
+	           configMAX_TASK_NAME_LEN, "Name", "Type", "State", "Prio", "StackFree");
 
 	for (i = 0; i < count && i < MAX_TASKS; i++)
 	{
@@ -156,8 +156,8 @@ void shellTaskList(void)
 			}
 		}
 
-		shellPrintEndLine(&shell, "%-16s %-8s %-12s %-8d %-10lu\n",
-		           name ? name : "(null)",
+		shellPrintEndLine(&shell, "%-*s %-8s %-12s %-8d %-10lu\n",
+		           configMAX_TASK_NAME_LEN, name ? name : "(null)",
 		           type,
 		           shell_task_state_str(state),
 		           (int)prio,

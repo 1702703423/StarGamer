@@ -1,14 +1,19 @@
 #include "Player.h"
 #include "Malloc.h"
+#include "shell.h"
+#include "shell_support.h"
+#include "System_Status.h"
+#include "i2s.h"
 
-extern DAC_HandleTypeDef hdac;
-extern DMA_HandleTypeDef hdma_dac1;
+extern I2S_HandleTypeDef hi2s3;
 extern SD_HandleTypeDef hsd;
 extern TIM_HandleTypeDef htim7;
+extern Shell shell;
 
 /* Private typedef -----------------------------------------------------------*/
 typedef StaticTask_t osStaticThreadDef_t;
 typedef StaticEventGroup_t osStaticEventGroupDef_t;
+audio_play_info_t apif;
 
 /* Definitions for WAV_DMA_EVENT */
 osEventFlagsId_t WAV_DMA_EVENTHandle;
@@ -26,31 +31,25 @@ typedef enum WAV_RES_t  {
   ER_WAV_FORMAT,ER_WAV_CHANNELS,ER_WAV_DEPTH,ER_WAV_DATA,ER_WAV_NOT_SUPPORT
 }WAV_RES;
 
-typedef struct Wave_Infomation_t {
-  uint32_t WAV_Second;
-  uint32_t Sample_Rate;
-  int Channels;
-  int deepth;
-}Wave_Infomation;
-
 #define RIFF_CHUNK_SIZE_BYTE  12
-
-#define Sample22050   1904
-#define Sample44010   1905
 
 #define EVENT_HALF_DMA (1 << 0)  
 #define EVENT_OVER_DMA (1 << 1)  
+#define EVENT_STOP_PLAYER (1 << 2)
+#define EVENT_QUIT (1<<3)
 
 uint32_t WavTaskBuffer[ 4096 ];
 osStaticThreadDef_t WavTaskControlBlock;
 const osThreadAttr_t WavTaskAttr = {
-  .name = "defaultTask",
+  .name = "WaveDataTransmitTask",
   .cb_mem = &WavTaskControlBlock,
   .cb_size = sizeof(WavTaskControlBlock),
   .stack_mem = &WavTaskBuffer[0],
   .stack_size = sizeof(WavTaskBuffer),
   .priority = (osPriority_t) osPriorityHigh2,
 };
+#define WAV_PLAY_BUFF_SIZE 2048
+static uint8_t wav_play_buf[WAV_PLAY_BUFF_SIZE];
 
 int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation);
 
@@ -59,77 +58,29 @@ void PlayerStart(FIL* audio_file)
   Wave_Infomation WI;
 	
 	int res = WavePlayTaskStart(audio_file,&WI);
-	printf("WavePlayTaskCreatCode:%d\r\n",res);
+	shellPrintEndLine(&shell,"WavePlayTaskCreatCode:%d\r\n",res);
   if(res == WAV_OK)
   {
-		printf("SampleRate:%d\r\n",WI.Sample_Rate);
-    printf("Channels:%d\r\n",WI.Channels);
-    printf("deepth:%d\r\n",WI.deepth);
-    printf("WI.WAV_Second:%d\r\n",WI.WAV_Second);
+		shellPrintEndLine(&shell,"SampleRate:%d\r\n",WI.Sample_Rate);
+    shellPrintEndLine(&shell,"Channels:%d\r\n",WI.Channels);
+    shellPrintEndLine(&shell,"deepth:%d\r\n",WI.deepth);
+    shellPrintEndLine(&shell,"WI.WAV_Second:%d\r\n",WI.WAV_Second);
   }
-}
-
-void PCM_DataTransmitSet(u16 samplerate,u16 channel,u8 bits)
-{
-//	switch(bits)
-//	{
-//		case 8:
-//			hdac.DMA_Handle1->Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-//			break;
-//	}
-//	
-//	switch(channel)
-//	{
-//		case 1:
-//			hdac.DMA_Handle1->Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
-//			break;
-//		case 2:
-//			hdac.DMA_Handle1->Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
-//			break;
-//	}
-	hdac.DMA_Handle1->Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
-	hdac.DMA_Handle1->Init.Mode = DMA_NORMAL;
-	htim7.Init.Period = 1904;
-  htim7.Init.Prescaler = 0x01;
-	
-	if (HAL_TIM_Base_Init(&htim7) != HAL_OK || HAL_DMA_Init(hdac.DMA_Handle1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-	
-	HAL_TIM_Base_Start(&htim7);
-}
-
-void PCM_DataTransmit(u8* pcm_data_addr, u32 length, u32 alignment)
-{
-	HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_1);
-
-	HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1,(u32*)pcm_data_addr, length, alignment);
-}
-
-void PCM_DataTransmitStop()
-{
-	 HAL_DAC_Stop_DMA(&hdac,DAC_CHANNEL_1);
-   HAL_TIM_Base_Stop(&htim7);
 }
 
 void WaveDataTransmitTask(void *argument)
 {
   uint32_t flag;
-  audio_play_info_t* apif = (audio_play_info_t*)argument;
-	uint8_t* WAV_PLAY_BUFF = apif->wav_buffer;
-	FIL* file = apif->file;
+	FIL* file = (FIL* )argument;
   UINT br;
   FRESULT fr;
-  fr = f_read(file,WAV_PLAY_BUFF,WAV_PLAY_BUFF_SIZE,&br);
+  fr = f_read(file,wav_play_buf,WAV_PLAY_BUFF_SIZE,&br);
+	audio_card_write(wav_play_buf,br);
   if(fr != FR_OK)
   {
-    printf("TASK_ERROR:WAVE_FILE"); //printf need to be removed after testing
-    HAL_DAC_Stop_DMA(&hdac,DAC_CHANNEL_1);
-    HAL_TIM_Base_Stop(&htim7);
-    f_close(file);
-		sys_free(1,apif->wav_buffer);
-		sys_free(0,apif);
+    shellPrintEndLine(&shell,"TASK_ERROR:WAVE_FILE\r\n");
+		audio_card_close();
+    f_close(file);;
     osThreadExit();
   }
   while(1)
@@ -137,79 +88,30 @@ void WaveDataTransmitTask(void *argument)
     flag = osEventFlagsWait(WAV_DMA_EVENTHandle,EVENT_HALF_DMA | EVENT_OVER_DMA,osFlagsWaitAny,20000);
     if(flag & osFlagsError)
     {
-      printf("WaitEventError\n");
-      HAL_DAC_Stop_DMA(&hdac,DAC_CHANNEL_1);
-      HAL_TIM_Base_Stop(&htim7);
+      shellPrintEndLine(&shell,"WaitEventError\r\n");
+			audio_card_close();
       f_close(file);
-			sys_free(1,apif->wav_buffer);
-			sys_free(0,apif);
       osThreadExit();
-    }
-    if(flag & EVENT_HALF_DMA)
-    {
-      osEventFlagsClear(WAV_DMA_EVENTHandle,EVENT_HALF_DMA);
-			fr = f_read(file,WAV_PLAY_BUFF,WAV_PLAY_BUFF_SIZE / 2,&br);
-      if(f_eof(file))
-      {
-        printf("PlayOver");
-        HAL_DAC_Stop_DMA(&hdac,DAC_CHANNEL_1);
-        HAL_TIM_Base_Stop(&htim7);
-        f_close(file);
-				sys_free(1,apif->wav_buffer);
-				sys_free(0,apif);
-        osThreadExit();
-      }
-      for(int i = 0;i<WAV_PLAY_BUFF_SIZE / 8;i++)//one channle only -handle
-				*((uint32_t*)WAV_PLAY_BUFF + i) ^= 0x8000;
     }
     if(flag & EVENT_OVER_DMA)
     {
       osEventFlagsClear(WAV_DMA_EVENTHandle,EVENT_OVER_DMA);
-			fr = f_read(file,WAV_PLAY_BUFF + (WAV_PLAY_BUFF_SIZE / 2),WAV_PLAY_BUFF_SIZE / 2,&br);
+			fr = f_read(file,wav_play_buf,WAV_PLAY_BUFF_SIZE,&br);
+			audio_card_write(wav_play_buf,br);
       if(f_eof(file))
       {
-        printf("PlayOver");
-        HAL_DAC_Stop_DMA(&hdac,DAC_CHANNEL_1);
-        HAL_TIM_Base_Stop(&htim7);
-				sys_free(1,apif->wav_buffer);
-				sys_free(0,apif);
+        shellPrintEndLine(&shell,"PlayOver\r\n");
+				audio_card_close();
         f_close(file);
         osThreadExit();
       }
-      for(int i = 0;i<WAV_PLAY_BUFF_SIZE / 8;i++)//one channle only -handle
-				*((uint32_t*)WAV_PLAY_BUFF+ WAV_PLAY_BUFF_SIZE / 8 + i) ^= 0x8000;
     }
   }
 }
 
-int WavePlayInit(int sample_rate,int channels,uint8_t* buffer)
+void audio_feeder()
 {
-  int32_t sample;
-  switch (sample_rate)
-  {
-  case 22050:
-    sample = Sample22050;
-    break;
-  case 44010:
-    sample = Sample44010;
-    break;
-  default:
-    return ER_WAV_NOT_SUPPORT;
-  }
-	
-	hdac.DMA_Handle1->Init.Mode = DMA_CIRCULAR;
-  htim7.Init.Period = sample;
-  htim7.Init.Prescaler = 0x01;
-
-  if (HAL_TIM_Base_Init(&htim7) != HAL_OK || HAL_DMA_Init(hdac.DMA_Handle1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  HAL_DAC_Start_DMA(&hdac,DAC_CHANNEL_1,(uint32_t*)buffer,WAV_PLAY_BUFF_SIZE / 4,DAC_ALIGN_12B_L);
-  HAL_TIM_Base_Start(&htim7);
-	
-	return 0;
+	osEventFlagsSet(WAV_DMA_EVENTHandle,EVENT_OVER_DMA);
 }
 
 int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
@@ -328,25 +230,14 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
   {
     Wave_Infomation->WAV_Second = 0;
   }
-	uint8_t* WAV_PLAY_BUFF = (uint8_t*)sys_malloc(1,WAV_PLAY_BUFF_SIZE);
-	audio_play_info_t* apif = (audio_play_info_t*)sys_malloc(0,sizeof(audio_play_info_t));
-	apif->file = file;
-	apif->wav_buffer = WAV_PLAY_BUFF;
 	
 	WAV_DMA_EVENTHandle = osEventFlagsNew(&WAV_DMA_EVENT_attributes);
-
-  WavePlayInit(Wave_Infomation->Sample_Rate,Wave_Infomation->Channels,apif->wav_buffer);
-  osThreadNew(WaveDataTransmitTask,(void*)apif,&WavTaskAttr);
+	audio_card_init(50);
+	audio_card_open(Wave_Infomation->Sample_Rate,Wave_Infomation->deepth,Wave_Infomation->Channels,WAV_PLAY_BUFF_SIZE);
+	audio_card_register_tx(audio_feeder);
+	SysCreateThread(WaveDataTransmitTask,file,&WavTaskAttr,0);
 
   return WAV_OK;
 }
 
-void HAL_DAC_ConvHalfCpltCallbackCh1(DAC_HandleTypeDef *hdac)
-{
-  osEventFlagsSet(WAV_DMA_EVENTHandle,EVENT_HALF_DMA);
-}
 
-void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac)
-{
-  osEventFlagsSet(WAV_DMA_EVENTHandle,EVENT_OVER_DMA);
-}

@@ -85,7 +85,7 @@ extern System_Core_Information_t SCI;
 
 uint8_t* creat_frame_buffer(int* code);
 int AxfDebugInfoPushToUart(const char* string, va_list arg);
-osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,osThreadAttr_t* attr,uint8_t ui);
+osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAttr_t* attr,uint8_t ui);
 int SysTerminateThread(osThreadId_t tid);
 
 #include "adt_chain.h"

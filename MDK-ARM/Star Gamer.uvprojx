@@ -340,7 +340,7 @@
               <MiscControls>-Wno-deprecated-non-prototype</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Drivers/LCD;../ELFLoader/common;../ELFLoader;../Debug;../Debug/fs_support;..\ELF Loader;..\ELF Loader\common;..\Debug\shell_support</IncludePath>
+              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Drivers/LCD;../ELFLoader/common;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;..\ELF Loader</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1238,11 +1238,6 @@
               <FilePath>..\System\adt_chain.c</FilePath>
             </File>
             <File>
-              <FileName>adt_chain.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\adt_chain.h</FilePath>
-            </File>
-            <File>
               <FileName>System_Status.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\System\System_Status.c</FilePath>
@@ -1252,6 +1247,11 @@
               <FileType>5</FileType>
               <FilePath>..\System\System_Status.h</FilePath>
             </File>
+            <File>
+              <FileName>adt_chain.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\System\adt_chain.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1260,12 +1260,12 @@
             <File>
               <FileName>Player.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\Player.c</FilePath>
+              <FilePath>..\Media\Player.c</FilePath>
             </File>
             <File>
               <FileName>Player.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\Player.h</FilePath>
+              <FilePath>..\Media\Player.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -4314,6 +4314,31 @@
         </Group>
         <Group>
           <GroupName>EXTERN API</GroupName>
+        </Group>
+        <Group>
+          <GroupName>BSP</GroupName>
+          <Files>
+            <File>
+              <FileName>i2s.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\i2s.c</FilePath>
+            </File>
+            <File>
+              <FileName>i2s.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\i2s.h</FilePath>
+            </File>
+            <File>
+              <FileName>w25q64.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\w25q64.c</FilePath>
+            </File>
+            <File>
+              <FileName>w25q64.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\w25q64.h</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>::CMSIS</GroupName>

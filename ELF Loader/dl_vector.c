@@ -7,8 +7,8 @@
 
 extern Shell shell;
 
-#include "../common/dl_extern_lib.h"
-#include "../common/dl_string_lib.h"
+#include "/common/dl_extern_lib.h"
+#include "/common/dl_string_lib.h"
 
 int UserAdd(int a, int b);
 

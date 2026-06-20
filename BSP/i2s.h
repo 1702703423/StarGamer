@@ -1,0 +1,39 @@
+#ifndef I2S__H
+#define I2S__H
+
+#include "stm32f4xx.h"
+#include "sys.h"
+
+typedef struct audio_play_info
+{
+	uint32_t sample;
+	uint8_t sample_bits;
+	uint8_t channels;
+
+	uint16_t volume;
+	uint32_t pkg_size;
+	uint32_t WAV_PLAY_BUFF_SIZE;
+
+	uint8_t *wav_buffer;
+	uint8_t curr_buf_index;
+
+	void *file;
+	void (*tx_callback)(void);
+} audio_play_info_t;
+
+int audio_card_init(int volume);
+int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size);
+int audio_card_get_freq(void);
+int audio_card_chg_freq(int sample_rate);
+int audio_card_chg_volume(int volume);
+int audio_card_get_volume(void);
+int audio_card_register_feeder(void (*feeding_func)(void));
+void audio_card_register_tx(void (*callback)(void));
+int audio_card_write(void *pkg_buff, int pkg_size);
+int audio_card_close(void);
+uint8_t *audio_card_get_buffer(uint8_t index);
+uint32_t audio_card_get_pkg_size(void);
+uint32_t audio_card_get_pcm_size(void);
+uint8_t audio_card_get_idle_buffer_index(void);
+
+#endif

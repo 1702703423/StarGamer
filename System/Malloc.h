@@ -4,7 +4,6 @@
 #include "sys.h"
 #include "cmsis_os.h"
 
-#define WAV_PLAY_BUFF_SIZE    (64*1024)
 #define CCMRAMSize (60 * 1024)
 #define ST7789s_ScreenBufferSize (150*1024)
 

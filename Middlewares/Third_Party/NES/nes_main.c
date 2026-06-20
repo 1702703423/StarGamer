@@ -395,7 +395,7 @@ int nes_sound_open(int samples_per_sync,int sample_rate)
 void nes_sound_close(void) 
 { 
 	//省略，外部设置
-	PCM_DataTransmitStop();
+
 } 
 
 #endif
@@ -403,7 +403,7 @@ void nes_sound_close(void)
 //在6502.s里面被调用
 void debug_6502(u16 reg0,u8 reg1)
 {
-	printf("6502 error:%x,%d\r\n",reg0,reg1);
+//	shellPrintEndLine("6502 error:%x,%d\r\n",reg0,reg1);
 }
 
 void nes_apu_fill_buffer(int samples,u8* wavebuf)
@@ -422,7 +422,7 @@ void nes_apu_fill_buffer(int samples,u8* wavebuf)
 //		PCM_DataTransmit(wavebuf + i,nbytes,DAC_ALIGN_8B_R);
 		for(int z = 0; z < nbytes; z++)
 		{
-			printf("DATA[%d]:%d\n",z + i,(wavebuf + i)[z + i]);
+//			shellPrintEndLine("DATA[%d]:%d\n",z + i,(wavebuf + i)[z + i]);
 		}
 	}
 	

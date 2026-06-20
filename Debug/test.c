@@ -17,6 +17,7 @@
 #include "shell.h"
 #include "shell_support.h"
 #include "test.h"
+#include "Player.h"
 
 /* External globals */
 extern Shell shell;
@@ -119,9 +120,13 @@ int mount_fs()
 }
 
 /* ---- Main application entry (called from StartDefaultTask) ---- */
+
+FIL file;
+
 void test_run(void)
 {
 	System_init();
+	Wave_Infomation WI;
 	uint8_t *p = ((Frame_Buffer_Status_t *)(SRT.frame_buffer_table->next->data))->pointer;
 	int res;
 
@@ -158,6 +163,9 @@ void test_run(void)
 		shellPrintEndLine(&shell, "res:%d\n", enterFunc(0, NULL));
 		dl_destroy_lib(&DL);
 	}
+	
+	f_open(&file,"0:/33.wav",FA_READ);
+	PlayerStart(&file);
 
 	if (res) {
 		while (1) {
