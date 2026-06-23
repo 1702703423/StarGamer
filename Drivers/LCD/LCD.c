@@ -332,6 +332,33 @@ void LCD_direction(u8 direction)
 //}
 
 // 刷新屏幕到硬件（横屏 320x240 正确）
+void LCD_DisplayArea(u16 xStart, u16 yStart, u16 xEnd, u16 yEnd, uint8_t *data)
+{
+    uint32_t total_len;
+    uint32_t offset = 0;
+
+    if(data == NULL || xStart > xEnd || yStart > yEnd) return;
+    if(xEnd >= lcddev.width || yEnd >= lcddev.height) return;
+
+    total_len = ((uint32_t)(xEnd - xStart + 1) * (yEnd - yStart + 1)) << 1;
+    LCD_SetWindows(xStart, yStart, xEnd, yEnd);
+
+    LCD_CS_CLR;
+    LCD_RS_SET;
+
+    while(offset < total_len)
+    {
+        uint16_t chunk = (total_len - offset) > 0xFFFF ? 0xFFFF : (uint16_t)(total_len - offset);
+
+        HAL_SPI_Transmit_DMA(lcd_spi, data + offset, chunk);
+        while (HAL_SPI_GetState(lcd_spi) != HAL_SPI_STATE_READY);
+
+        offset += chunk;
+    }
+
+    LCD_CS_SET;
+}
+
 void LCD_Flush(uint8_t* screen_buff)
 {
     // 设置全屏窗口（横屏）

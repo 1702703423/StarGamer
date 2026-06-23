@@ -106,6 +106,7 @@ void LCD_DrawLine(u16 x1, u16 y1, u16 x2, u16 y2);
 void LCD_DrawRectangle(u16 x1, u16 y1, u16 x2, u16 y2);		   
 void LCD_SetWindows(u16 xStar, u16 yStar,u16 xEnd,u16 yEnd);
 void LCD_DisplayWindows(u16 Xstart, u16 Ystart, u16 Xend, u16 Yend, u16 *Image);
+void LCD_DisplayArea(u16 xStart, u16 yStart, u16 xEnd, u16 yEnd, uint8_t *data);
 void LCD_Fill(u16 xsta, u16 ysta, u16 xend, u16 yend, u16 color, uint8_t* buff);
 void LCD_Flush(uint8_t* scrren_buff);//加载屏幕缓存
 void LCD_ShowChar(u16 x,u16 y,u8 num,u16 fc,u16 bc,u8 sizey,u8 mode,u8* screen_buff);

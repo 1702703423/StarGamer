@@ -239,6 +239,8 @@ volatile uint32_t ulDummy = 0;
 }
 /*-----------------------------------------------------------*/
 
+extern void* svc_dl_vector_get_lib_func_entry(void);
+
 void __attribute__((naked)) vPortSVCHandler(void)
 {
     __asm volatile(

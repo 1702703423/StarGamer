@@ -123,6 +123,7 @@ static const char *shell_task_state_str(osThreadState_t state)
 void shellTaskList(void)
 {
 #define MAX_TASKS 16
+#define TASK_LIST_LINE "==================================================================\n"
 	osThreadId_t threads[MAX_TASKS];
 	uint32_t count;
 	uint32_t i;
@@ -164,7 +165,8 @@ void shellTaskList(void)
 		           stack_free);
 	}
 
-	shellPrintEndLine(&shell, "======================================\n");
+	shellPrintEndLine(&shell, TASK_LIST_LINE);
+#undef TASK_LIST_LINE
 }
 
 SHELL_EXPORT_CMD(

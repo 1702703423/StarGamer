@@ -286,4 +286,17 @@ void sys_free_aligned(uint8_t memx, void *ptr)
     sys_free(memx, raw);
 }
 
+void *lv_mem_malloc(uint32_t size)
+{
+	return (void*)sys_malloc(0,size);
+}
 
+void lv__mem_free(void* ptr)
+{
+	sys_free(0,ptr);
+}
+
+void *lv__mem_realloc(void* ptr,uint32_t size)
+{
+	return (void*)myrealloc(0,ptr,size);
+}

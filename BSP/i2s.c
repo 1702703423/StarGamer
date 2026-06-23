@@ -180,7 +180,23 @@ int audio_card_init(int volume)
 	return audio_card_chg_volume(volume);
 }
 
-int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size)
+int audio_card_start(void)
+{
+	if (!audio_card_opened || (apif.wav_buffer == NULL))
+	{
+		return -1;
+	}
+
+	if (audio_card_start_dma() != 0)
+	{
+		audio_card_opened = 0;
+		return -2;
+	}
+
+	return 0;
+}
+
+int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_size)
 {
 	uint32_t i2s_freq;
 	uint32_t pcm_size;
@@ -263,9 +279,23 @@ int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size)
 #endif
 
 	audio_card_opened = 1;
-	if (audio_card_start_dma() != 0)
+
+	return 0;
+}
+
+int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size)
+{
+	int res = audio_card_open_prepare(sample_rate, deepth, channels, pkg_size);
+
+	if (res != 0)
 	{
-		audio_card_opened = 0;
+		return res;
+	}
+
+	if (audio_card_start() != 0)
+	{
+		void (*saved_callback)(void) = apif.tx_callback;
+
 		sys_free(AUDIO_CARD_MEM_POOL, apif.wav_buffer);
 		memset(&apif, 0, sizeof(apif));
 		apif.tx_callback = saved_callback;
@@ -341,9 +371,8 @@ void audio_card_register_tx(void (*callback)(void))
 	apif.tx_callback = callback;
 }
 
-int audio_card_write(void *pkg_buff, int pkg_size)
+int audio_card_write_to_buffer(uint8_t index, void *pkg_buff, int pkg_size)
 {
-	uint8_t idle_index;
 	uint8_t *dst;
 
 	if (!audio_card_opened || (apif.wav_buffer == NULL))
@@ -366,8 +395,12 @@ int audio_card_write(void *pkg_buff, int pkg_size)
 		return -4;
 	}
 
-	idle_index = audio_card_get_idle_buffer_index();
-	dst = apif.wav_buffer + ((uint32_t)idle_index * apif.WAV_PLAY_BUFF_SIZE);
+	if (index > 1U)
+	{
+		return -5;
+	}
+
+	dst = apif.wav_buffer + ((uint32_t)index * apif.WAV_PLAY_BUFF_SIZE);
 	memset(dst, 0, apif.WAV_PLAY_BUFF_SIZE);
 
 	if (pkg_size == 0)
@@ -399,10 +432,15 @@ int audio_card_write(void *pkg_buff, int pkg_size)
 	}
 	else
 	{
-		return -5;
+		return -6;
 	}
 
 	return 0;
+}
+
+int audio_card_write(void *pkg_buff, int pkg_size)
+{
+	return audio_card_write_to_buffer(audio_card_get_idle_buffer_index(), pkg_buff, pkg_size);
 }
 
 int audio_card_close(void)

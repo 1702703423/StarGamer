@@ -18,6 +18,10 @@
 #include "shell_support.h"
 #include "test.h"
 #include "Player.h"
+#include "w25q64.h"
+#include "lvgl.h"
+#include "lv_port_disp_template.h"
+#include "lv_demo_stress.h"
 
 /* External globals */
 extern Shell shell;
@@ -25,17 +29,45 @@ extern System_Resource_Table_t SRT;
 extern System_Status_Information_t SSI;
 extern System_Core_Information_t SCI;
 extern SPI_HandleTypeDef hspi2;
+extern SPI_HandleTypeDef hspi1;
 extern int AxfDebugInfoPushToUart(const char *string, va_list arg);
 extern void shell_fs_init(void);
+extern void lv_port_indev_init(void);
+
+/* ---- LVGL timer handler thread ---- */
+#define LVGL_THREAD_STACK_SIZE  1024
+typedef StaticTask_t osStaticThreadDef_t;
+static uint32_t lvglTaskBuffer[LVGL_THREAD_STACK_SIZE];
+static osStaticThreadDef_t lvglTaskControlBlock;
+static const osThreadAttr_t lvglTask_attributes = {
+	.name = "LVGL",
+	.cb_mem = &lvglTaskControlBlock,
+	.cb_size = sizeof(lvglTaskControlBlock),
+	.stack_mem = &lvglTaskBuffer[0],
+	.stack_size = sizeof(lvglTaskBuffer),
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+/* ---- LVGL timer handler task ---- */
+static void lvgl_timer_task(void *arg)
+{
+	(void)arg;
+	while (1) {
+		lv_timer_handler();
+		osDelay(20);
+	}
+}
 
 /* ---- System Init ---- */
 void System_init()
 {
 	int code;
-
+	
+	//内存池初始化
 	sys_mem_init(0);
 	sys_mem_init(1);
-
+	
+	//开发阶段，调试模式常开
 	SCI.Debug = 1;
 
 	shell.read = shell_read;
@@ -52,11 +84,9 @@ void System_init()
 	SRT.frame_buffer_table = creat_chain(0, &code);
 	SRT.task_table = creat_chain(0, &code);
 
-	creat_frame_buffer(&code);
-
-	shellPrintEndLine(&shell, "ScreenFrameNum:%d\n",
-	                  get_chain_length(SRT.frame_buffer_table, &code));
-	shellPrintEndLine(&shell, "MemPresureExMem:%d\n", sys_mem_perused(1));
+	creat_frame_buffer(&code);/*本项目架构中默认第一缓冲区为LVGL缓冲*/
+	creat_frame_buffer(&code);//当前开发阶段第二缓冲区用于屏幕debug
+	
 }
 
 /* ---- HardFault Handler (C part) ---- */
@@ -66,18 +96,18 @@ void HardFault_Handler_C(uint32_t *stack_pointer, uint32_t lr_value, uint32_t du
 	uint32_t hfsr = SCB->HFSR;
 
 	printf("HardFault!\r\n");
-	printf("LR: 0x%08lX\r\n", lr_value);
-	printf("CFSR: 0x%08lX\r\n", cfsr);
-	printf("HFSR: 0x%08lX\r\n", hfsr);
+	printf("LR: 0x%08X\r\n", lr_value);
+	printf("CFSR: 0x%08X\r\n", cfsr);
+	printf("HFSR: 0x%08X\r\n", hfsr);
 
-	printf("R0: 0x%08lX\r\n", stack_pointer[0]);
-	printf("R1: 0x%08lX\r\n", stack_pointer[1]);
-	printf("R2: 0x%08lX\r\n", stack_pointer[2]);
-	printf("R3: 0x%08lX\r\n", stack_pointer[3]);
-	printf("R12: 0x%08lX\r\n", stack_pointer[4]);
-	printf("LR: 0x%08lX\r\n", stack_pointer[5]);
-	printf("PC: 0x%08lX\r\n", stack_pointer[6]);
-	printf("PSR: 0x%08lX\r\n", stack_pointer[7]);
+	printf("R0: 0x%08X\r\n", stack_pointer[0]);
+	printf("R1: 0x%08X\r\n", stack_pointer[1]);
+	printf("R2: 0x%08X\r\n", stack_pointer[2]);
+	printf("R3: 0x%08X\r\n", stack_pointer[3]);
+	printf("R12: 0x%08X\r\n", stack_pointer[4]);
+	printf("LR: 0x%08X\r\n", stack_pointer[5]);
+	printf("PC: 0x%08X\r\n", stack_pointer[6]);
+	printf("PSR: 0x%08X\r\n", stack_pointer[7]);
 
 	printf("Please Contact to Us\r\n");
 
@@ -87,7 +117,7 @@ void HardFault_Handler_C(uint32_t *stack_pointer, uint32_t lr_value, uint32_t du
 /* ---- LCD test ---- */
 void lcd_test()
 {
-	uint8_t *p = ((Frame_Buffer_Status_t *)(SRT.frame_buffer_table->next->data))->pointer;
+	uint8_t *p = ((Frame_Buffer_Status_t *)(SRT.frame_buffer_table->next->next->data))->pointer;
 
 	LCD_Fill(0, 0, 320, 120, BLUE, p);
 	LCD_Fill(0, 120, 320, 240, RED, p);
@@ -99,10 +129,39 @@ void lcd_test()
 	LCD_Flush(p);
 }
 
+/* ---- GPIO init ---- */
+static void gpio_init(void)
+{
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+	__HAL_RCC_GPIOE_CLK_ENABLE();
+
+	GPIO_InitStruct.Pin = GPIO_PIN_6;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+	/* Deselect W25Q64 (CS high) */
+	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_6, GPIO_PIN_SET);
+}
+
 /* ---- Board support init ---- */
 static void bsp_init()
 {
-	LCD_Init(&hspi2);
+	uint8 mid;
+	uint16_t did;
+	
+	gpio_init();
+	LCD_Init(&hspi1);
+	if(W25Q64_Init() == W25Q64_OK)
+	{
+		W25Q64_ReadID(&mid,&did);
+		shellPrintEndLine(&shell,"W25Q64InitSuccess,MID,DID:%X,%X\r\n",mid,did);
+	}else
+	{
+		shellPrintEndLine(&shell,"W25Q64Failed\r\n");
+	}
 }
 
 /* ---- Mount FATFS ---- */
@@ -125,44 +184,48 @@ FIL file;
 
 void test_run(void)
 {
-	System_init();
-	Wave_Infomation WI;
-	uint8_t *p = ((Frame_Buffer_Status_t *)(SRT.frame_buffer_table->next->data))->pointer;
 	int res;
-
+	System_init();
 	bsp_init();
-	LCD_Fill(1, 1, 320, 240, BLACK, p);
-	LCD_Flush(p);
-
+		/* LVGL 初始化 */
+	lv_init();
+	lv_port_disp_init();
+	lv_port_indev_init();
+	osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
 	res = mount_fs();
+	Wave_Infomation WI;
+	lv_demo_stress();
 
-	if (res)
-	{
-		DL_Handler DL;
-		int (*enterFunc)(int argc, char *argv[]);
-		DL_Err_Type err;
+//	LCD_Fill(1, 1, 320, 240, BLACK, p);
+//	LCD_Flush(p);lcd_test();
 
-		osKernelLock();
-		err = dl_load_file(&DL, "0:/debug.axf");
-		osKernelUnlock();
+//	if (res)
+//	{
+//		DL_Handler DL;
+//		int (*enterFunc)(int argc, char *argv[]);
+//		DL_Err_Type err;
 
-		shellPrintEndLine(&shell, "err:%d\n", err);
+//		osKernelLock();
+//		err = dl_load_file(&DL, "0:/debug.axf");
+//		osKernelUnlock();
 
-		if (err) {
-			while (1);
-		}
+//		shellPrintEndLine(&shell, "err:%d\n", err);
 
-		enterFunc = dl_get_entry(&DL);
-		shellPrintEndLine(&shell, "StartAddressAt:%p\n", enterFunc);
+//		if (err) {
+//			while (1);
+//		}
 
-		if (enterFunc == NULL) {
-			shellPrintEndLine(&shell, "cant find entry\n");
-		}
+//		enterFunc = dl_get_entry(&DL);
+//		shellPrintEndLine(&shell, "StartAddressAt:%p\n", enterFunc);
 
-		shellPrintEndLine(&shell, "NeedExecute:%p\n", AxfDebugInfoPushToUart);
-		shellPrintEndLine(&shell, "res:%d\n", enterFunc(0, NULL));
-		dl_destroy_lib(&DL);
-	}
+//		if (enterFunc == NULL) {
+//			shellPrintEndLine(&shell, "cant find entry\n");
+//		}
+
+//		shellPrintEndLine(&shell, "NeedExecute:%p\n", AxfDebugInfoPushToUart);
+//		shellPrintEndLine(&shell, "res:%d\n", enterFunc(0, NULL));
+//		dl_destroy_lib(&DL);
+//	}
 	
 	f_open(&file,"0:/33.wav",FA_READ);
 	PlayerStart(&file);

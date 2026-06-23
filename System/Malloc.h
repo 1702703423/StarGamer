@@ -54,5 +54,8 @@ void *sys_malloc(uint8_t memx, uint32_t size);                /* 内存分配(外部调
 void *sys_realloc(uint8_t memx, void *ptr, uint32_t size);    /* 重新分配内存(外部调用) */
 void *sys_malloc_align(uint8_t memx, uint32_t size, uint32_t align);
 void sys_free_align(uint8_t memx, void *ptr);
+void *lv_mem_malloc(uint32_t size);
+void lv__mem_free(void* ptr);
+void *lv__mem_realloc(void* ptr,uint32_t size);
 
 #endif

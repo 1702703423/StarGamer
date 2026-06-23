@@ -12,17 +12,7 @@ extern Shell shell;
 
 /* Private typedef -----------------------------------------------------------*/
 typedef StaticTask_t osStaticThreadDef_t;
-typedef StaticEventGroup_t osStaticEventGroupDef_t;
 audio_play_info_t apif;
-
-/* Definitions for WAV_DMA_EVENT */
-osEventFlagsId_t WAV_DMA_EVENTHandle;
-osStaticEventGroupDef_t WAV_DMA_EVENTControlBlock;
-const osEventFlagsAttr_t WAV_DMA_EVENT_attributes = {
-  .name = "WAV_DMA_EVENT",
-  .cb_mem = &WAV_DMA_EVENTControlBlock,
-  .cb_size = sizeof(WAV_DMA_EVENTControlBlock),
-};
 
 /* this code used for testing and need to be move to other file */
 
@@ -33,12 +23,14 @@ typedef enum WAV_RES_t  {
 
 #define RIFF_CHUNK_SIZE_BYTE  12
 
-#define EVENT_HALF_DMA (1 << 0)  
-#define EVENT_OVER_DMA (1 << 1)  
-#define EVENT_STOP_PLAYER (1 << 2)
-#define EVENT_QUIT (1<<3)
+#define EVENT_HALF_DMA (1U << 0)
+#define EVENT_OVER_DMA (1U << 1)
+#define EVENT_STOP_PLAYER (1U << 2)
+#define EVENT_QUIT (1U << 3)
+#define EVENT_DMA_EMPTY (EVENT_HALF_DMA | EVENT_OVER_DMA)
 
 uint32_t WavTaskBuffer[ 4096 ];
+static osThreadId_t WavTaskHandle;
 osStaticThreadDef_t WavTaskControlBlock;
 const osThreadAttr_t WavTaskAttr = {
   .name = "WaveDataTransmitTask",
@@ -48,10 +40,72 @@ const osThreadAttr_t WavTaskAttr = {
   .stack_size = sizeof(WavTaskBuffer),
   .priority = (osPriority_t) osPriorityHigh2,
 };
-#define WAV_PLAY_BUFF_SIZE 2048
-static uint8_t wav_play_buf[WAV_PLAY_BUFF_SIZE];
+#define WAV_PLAY_BUFF_SIZE 8192U
+__ALIGNED(4) static uint8_t wav_play_buf[WAV_PLAY_BUFF_SIZE];
 
 int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation);
+
+static int player_fill_dma_buffer(FIL *file, uint8_t dma_index)
+{
+  UINT br;
+  FRESULT fr;
+
+  fr = f_read(file, wav_play_buf, WAV_PLAY_BUFF_SIZE, &br);
+  if(fr != FR_OK)
+  {
+    shellPrintEndLine(&shell,"TASK_ERROR:WAVE_FILE\r\n");
+    return -1;
+  }
+
+  if(audio_card_write_to_buffer(dma_index, wav_play_buf, br) != 0)
+  {
+    return -1;
+  }
+
+  if((br < WAV_PLAY_BUFF_SIZE) || f_eof(file))
+  {
+    return 1;
+  }
+
+  return 0;
+}
+
+static int player_service_dma_buffer(FIL *file, uint8_t dma_index, uint8_t *drain_events)
+{
+  int fill_res;
+
+  if(*drain_events > 0U)
+  {
+    if(audio_card_write_to_buffer(dma_index, NULL, 0) != 0)
+    {
+      return -1;
+    }
+
+    (*drain_events)--;
+    return (*drain_events == 0U) ? 1 : 0;
+  }
+
+  fill_res = player_fill_dma_buffer(file, dma_index);
+  if(fill_res < 0)
+  {
+    return -1;
+  }
+
+  if(fill_res > 0)
+  {
+    *drain_events = 2U;
+  }
+
+  return 0;
+}
+
+static void player_exit(FIL *file)
+{
+  WavTaskHandle = NULL;
+  audio_card_close();
+  f_close(file);
+  osThreadExit();
+}
 
 void PlayerStart(FIL* audio_file)                                                                                                                                                                    
 {
@@ -72,38 +126,69 @@ void WaveDataTransmitTask(void *argument)
 {
   uint32_t flag;
 	FIL* file = (FIL* )argument;
-  UINT br;
-  FRESULT fr;
-  fr = f_read(file,wav_play_buf,WAV_PLAY_BUFF_SIZE,&br);
-	audio_card_write(wav_play_buf,br);
-  if(fr != FR_OK)
+  int fill_res;
+  uint8_t drain_events = 0U;
+
+  fill_res = player_fill_dma_buffer(file, 0U);
+  if(fill_res < 0)
   {
-    shellPrintEndLine(&shell,"TASK_ERROR:WAVE_FILE\r\n");
-		audio_card_close();
-    f_close(file);;
-    osThreadExit();
+		player_exit(file);
   }
+
+  if(fill_res == 0)
+  {
+    fill_res = player_fill_dma_buffer(file, 1U);
+    if(fill_res < 0)
+    {
+      player_exit(file);
+    }
+  }
+
+  if(fill_res > 0)
+  {
+    drain_events = 2U;
+  }
+
+  if(audio_card_start() != 0)
+  {
+    shellPrintEndLine(&shell,"TASK_ERROR:AUDIO_START\r\n");
+    player_exit(file);
+  }
+
   while(1)
   {
-    flag = osEventFlagsWait(WAV_DMA_EVENTHandle,EVENT_HALF_DMA | EVENT_OVER_DMA,osFlagsWaitAny,20000);
+    flag = osThreadFlagsWait(EVENT_DMA_EMPTY,osFlagsWaitAny,20000);
     if(flag & osFlagsError)
     {
       shellPrintEndLine(&shell,"WaitEventError\r\n");
-			audio_card_close();
-      f_close(file);
-      osThreadExit();
+			player_exit(file);
     }
-    if(flag & EVENT_OVER_DMA)
+
+    if((flag & EVENT_DMA_EMPTY) == EVENT_DMA_EMPTY)
     {
-      osEventFlagsClear(WAV_DMA_EVENTHandle,EVENT_OVER_DMA);
-			fr = f_read(file,wav_play_buf,WAV_PLAY_BUFF_SIZE,&br);
-			audio_card_write(wav_play_buf,br);
-      if(f_eof(file))
+      fill_res = player_service_dma_buffer(file, audio_card_get_idle_buffer_index(), &drain_events);
+      if(fill_res != 0)
       {
         shellPrintEndLine(&shell,"PlayOver\r\n");
-				audio_card_close();
-        f_close(file);
-        osThreadExit();
+        player_exit(file);
+      }
+    }
+    else if(flag & EVENT_HALF_DMA)
+    {
+      fill_res = player_service_dma_buffer(file, 0U, &drain_events);
+      if(fill_res != 0)
+      {
+        shellPrintEndLine(&shell,"PlayOver\r\n");
+				player_exit(file);
+      }
+    }
+    else if(flag & EVENT_OVER_DMA)
+    {
+      fill_res = player_service_dma_buffer(file, 1U, &drain_events);
+      if(fill_res != 0)
+      {
+        shellPrintEndLine(&shell,"PlayOver\r\n");
+        player_exit(file);
       }
     }
   }
@@ -111,7 +196,21 @@ void WaveDataTransmitTask(void *argument)
 
 void audio_feeder()
 {
-	osEventFlagsSet(WAV_DMA_EVENTHandle,EVENT_OVER_DMA);
+	uint8_t dma_index = audio_card_get_idle_buffer_index();
+
+  if(WavTaskHandle == NULL)
+  {
+    return;
+  }
+
+	if(dma_index == 0U)
+	{
+		osThreadFlagsSet(WavTaskHandle,EVENT_HALF_DMA);
+	}
+	else
+	{
+		osThreadFlagsSet(WavTaskHandle,EVENT_OVER_DMA);
+	}
 }
 
 int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
@@ -186,8 +285,7 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
 
   // Bits Per Sample 
   Wave_Infomation->deepth = buffer[14] | (buffer[15] << 8);
-  if (Wave_Infomation->deepth != 8 && Wave_Infomation->deepth != 16 &&
-      Wave_Infomation->deepth != 24 && Wave_Infomation->deepth != 32)
+  if (Wave_Infomation->deepth != 8 && Wave_Infomation->deepth != 16)
   {
     return ER_WAV_DEPTH;
   }
@@ -231,11 +329,18 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
     Wave_Infomation->WAV_Second = 0;
   }
 	
-	WAV_DMA_EVENTHandle = osEventFlagsNew(&WAV_DMA_EVENT_attributes);
 	audio_card_init(50);
-	audio_card_open(Wave_Infomation->Sample_Rate,Wave_Infomation->deepth,Wave_Infomation->Channels,WAV_PLAY_BUFF_SIZE);
+  if(audio_card_open_prepare(Wave_Infomation->Sample_Rate,Wave_Infomation->deepth,Wave_Infomation->Channels,WAV_PLAY_BUFF_SIZE) != 0)
+  {
+    return ER_WAV_NOT_SUPPORT;
+  }
 	audio_card_register_tx(audio_feeder);
-	SysCreateThread(WaveDataTransmitTask,file,&WavTaskAttr,0);
+	WavTaskHandle = SysCreateThread(WaveDataTransmitTask,file,&WavTaskAttr,0);
+  if(WavTaskHandle == NULL)
+  {
+    audio_card_close();
+    return ER_WAV_FILE;
+  }
 
   return WAV_OK;
 }
