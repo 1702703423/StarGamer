@@ -6,6 +6,7 @@
 #include "string.h"
 #include "fatfs.h"
 #include "Malloc.h"
+#include "i2s.h"
 //////////////////////////////////////////////////////////////////////////////////	 
 //本程序移植自网友ye781205的NES模拟器工程
 //ALIENTEK STM32F407开发板
@@ -47,14 +48,79 @@ u8* romfile;			//nes文件指针,指向整个nes文件的起始地址.
 
 u8 nes_xoff=0;	//显示在x轴方向的偏移量(实际显示宽度=256-2*nes_xoff)
 
-//wav声音头
-const u8 nes_wav_head[]=
+#define NES_APU_SAMPLE_BITS        8
+#define NES_APU_CHANNELS           1
+#define NES_APU_VOLUME             50
+#define NES_APU_PCM_SILENCE        0x80
+#define NES_APU_DMA_WAIT_TICKS     25
+
+static volatile u8 nes_apu_dma_ready_mask = 0;
+static volatile u8 nes_apu_dma_running = 0;
+static u16 nes_apu_dma_pkg_size = APU_PCMBUF_SIZE;
+
+static int nes_apu_try_take_ready_buffer(void)
 {
-	0X52,0X49,0X46,0X46,0XFF,0XFF,0XFF,0XFF,0X57,0X41,0X56,0X45,0X66,0X6D,0X74,0X20,
-	0X10,0X00,0X00,0X00,0X01,0X00,0X01,0X00,0X11,0X2B,0X00,0X00,0X11,0X2B,0X00,0X00,
-	0X01,0X00,0X08,0X00,0X64,0X61,0X74,0X61,0XFF,0XFF,0XFF,0XFF,0X00,0X00,0X00,0X00,
-	0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
-};
+	u32 primask;
+	u8 mask;
+	u8 idle_index;
+	u8 idle_mask;
+	int dma_index = -1;
+
+	primask = __get_PRIMASK();
+	__disable_irq();
+
+	mask = nes_apu_dma_ready_mask;
+	idle_index = audio_card_get_idle_buffer_index();
+	idle_mask = (u8)(1U << idle_index);
+	if(mask & idle_mask)
+	{
+		nes_apu_dma_ready_mask = ((mask & 0x03) == 0x03) ? 0 : (mask & (u8)~idle_mask);
+		dma_index = idle_index;
+	}
+	else if(mask != 0)
+	{
+		nes_apu_dma_ready_mask = 0;
+	}
+
+	__set_PRIMASK(primask);
+
+	return dma_index;
+}
+
+static void nes_apu_wait_tick(void)
+{
+	if(osKernelGetState() == osKernelRunning)
+	{
+		osDelay(1);
+	}
+}
+
+static int nes_apu_take_ready_buffer(void)
+{
+	u8 wait_ticks = NES_APU_DMA_WAIT_TICKS;
+	int dma_index;
+
+	while(wait_ticks--)
+	{
+		dma_index = nes_apu_try_take_ready_buffer();
+		if(dma_index >= 0)
+		{
+			return dma_index;
+		}
+
+		nes_apu_wait_tick();
+	}
+
+	return -1;
+}
+
+static void nes_apu_make_silence(u8 *buffer, u16 samples)
+{
+	if(buffer != NULL)
+	{
+		memset(buffer, NES_APU_PCM_SILENCE, samples);
+	}
+}
 
 #if 1
 //加载ROM
@@ -356,47 +422,57 @@ void nes_emulate_frame()
 //NES打开音频输出
 int nes_sound_open(int samples_per_sync,int sample_rate) 
 {	
-	u8 *p;
-	u8 i;
-	u8 volume;
-	
-	p = sys_malloc(1,100);
-	if(p==NULL)return 1;
-	
-	for(i=0;i<sizeof(nes_wav_head);i++)
+	u16 pkg_size;
+
+	if(wave_buffers == NULL)
 	{
-		p[i]=nes_wav_head[i];
+		return 0;
 	}
-	
-	p[24]=sample_rate&0XFF;			
-	p[25]=(sample_rate>>8)&0XFF;
-	p[28]=sample_rate&0XFF;			
-	p[29]=(sample_rate>>8)&0XFF; 
-	
-//	PCM_DataTransmitSet(APU_SAMPLE_RATE,1,8);
-	
-	
-//	VS1053_SoftReset();
-//	volume = device_cfg.vs10_volume * 10;
-//	
-//	if(!VS1053_SetMode(0x4800)) return 0;	/* SM LINE1 | SM SDINEW */
-//	if(!VS1053_AutoResync()) return 0;		/* AutoResync */
-//	if(!VS1053_SetDecodeTime(0)) return 0;	
-//	MP3_SetVolume(volume);
-//	
-//	VS1053_SdiWrite32(p);
-//	VS1053_SdiWrite32(p + 32);
-	
-	sys_free(1,p);
-	
+
+	if(sample_rate <= 0)
+	{
+		sample_rate = APU_SAMPLE_RATE;
+	}
+
+	pkg_size = (samples_per_sync > 0) ? (u16)samples_per_sync : (u16)(sample_rate / 60);
+	if((pkg_size == 0) || (pkg_size > APU_PCMBUF_SIZE))
+	{
+		pkg_size = APU_PCMBUF_SIZE;
+	}
+
+	nes_apu_dma_running = 0;
+	nes_apu_dma_ready_mask = 0;
+	nes_apu_dma_pkg_size = pkg_size;
+
+	audio_card_init(NES_APU_VOLUME);
+	if(audio_card_open_prepare(sample_rate, NES_APU_SAMPLE_BITS, NES_APU_CHANNELS, pkg_size) != 0)
+	{
+		return 0;
+	}
+
+	audio_card_register_tx(nes_i2s_dma_tx_callback);
+	nes_apu_make_silence(wave_buffers, pkg_size);
+	audio_card_write_to_buffer(0, wave_buffers, pkg_size);
+	audio_card_write_to_buffer(1, wave_buffers, pkg_size);
+
+	if(audio_card_start() != 0)
+	{
+		audio_card_close();
+		return 0;
+	}
+
+	nes_apu_dma_running = 1;
 	return 1;
 }
 //NES关闭音频输出
 void nes_sound_close(void) 
 { 
-	//省略，外部设置
+	nes_apu_dma_running = 0;
+	nes_apu_dma_ready_mask = 0;
+	audio_card_register_tx(NULL);
+	audio_card_close();
 
-} 
+}
 
 #endif
 
@@ -408,44 +484,35 @@ void debug_6502(u16 reg0,u8 reg1)
 
 void nes_apu_fill_buffer(int samples,u8* wavebuf)
 {	
-	int i;
-	u8 n;
-	u8 nbytes;
-	for(i=0;i<APU_PCMBUF_SIZE;i+=32)
+	int dma_index;
+	u16 pkg_size;
+
+	if((!nes_apu_dma_running) || (wavebuf == NULL))
 	{
-		nbytes = (i+32 < APU_PCMBUF_SIZE) ? 32 : (APU_PCMBUF_SIZE - i);
-		for(n = 0; n<nbytes;n++) if(*(wavebuf + i + n) != 0) break; 
-		if(n == nbytes) continue;	//防止数据全部为0时出现哒哒声
-//		VS1053_SdiWriteLen(wavebuf + i, nbytes);
-//		PCM_DataTransmit((u32*)wavebuf + i,nbytes / 2,DAC_ALIGN_8B_R);
-//		for(n = 0;n<nbytes;n++) *(wavebuf + i + n) = (*(wavebuf + i + n) >> 8) + 128; 
-//		PCM_DataTransmit(wavebuf + i,nbytes,DAC_ALIGN_8B_R);
-		for(int z = 0; z < nbytes; z++)
-		{
-//			shellPrintEndLine("DATA[%d]:%d\n",z + i,(wavebuf + i)[z + i]);
-		}
+		return;
 	}
-	
+
+	pkg_size = (samples > 0) ? (u16)samples : nes_apu_dma_pkg_size;
+	if(pkg_size > nes_apu_dma_pkg_size)
+	{
+		pkg_size = nes_apu_dma_pkg_size;
+	}
+
+	dma_index = nes_apu_take_ready_buffer();
+	if(dma_index < 0)
+	{
+		return;
+	}
+
+	audio_card_write_to_buffer((u8)dma_index, wavebuf, pkg_size);
 }
 
-//void nes_apu_fill_buffer(int samples,u8* wavebuf)
-//{	
-//	int i;
-//	u8 n;
-//	u8 nbytes;
+void nes_i2s_dma_tx_callback(void)
+{
+	if(!nes_apu_dma_running)
+	{
+		return;
+	}
 
-//	for(i=0;i<APU_PCMBUF_SIZE;i+=32)
-//	{
-//		nbytes = (i+32 < APU_PCMBUF_SIZE) ? 32 : (APU_PCMBUF_SIZE - i);
-//		
-//		// 全0跳过，防哒哒声
-//		for(n = 0; n<nbytes;n++) 
-//			if(wavebuf[i + n] != 0) 
-//				break; 
-//		
-//		if(n == nbytes) 
-//			continue;
-//		
-//		PCM_DataTransmit((uint32_t)(&wavebuf[i]), nbytes / 4, DAC_ALIGN_8B_R);
-//	}
-//}
+	nes_apu_dma_ready_mask |= (u8)(1U << audio_card_get_idle_buffer_index());
+}

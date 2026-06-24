@@ -4282,6 +4282,16 @@
               <FileType>5</FileType>
               <FilePath>..\BSP\w25q64.h</FilePath>
             </File>
+            <File>
+              <FileName>at24c02.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\at24c02.c</FilePath>
+            </File>
+            <File>
+              <FileName>at24c02.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\at24c02.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

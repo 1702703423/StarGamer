@@ -1209,14 +1209,13 @@ void apu_init(void)
 void apu_soundoutput(void)          
 {	 
 	u16 i;
-	apu_process(wave_buffers,APU_PCMBUF_SIZE);
+	apu_process(wave_buffers,apu->num_samples);
 	for(i=0;i<30;i++)if(wave_buffers[i]!=wave_buffers[i+1])break;//判断前30个数据,是不是都相等?
 	if(i==30&&wave_buffers[i])//都相等,且不等于0
 	{
-		for(i=0;i<APU_PCMBUF_SIZE;i++)wave_buffers[i]=0;//是暂停状态输出的重复无效数据,直接修改为0.从而不输出杂音.		
+		for(i=0;i<apu->num_samples;i++)wave_buffers[i]=0x80;//是暂停状态输出的重复无效数据,直接修改为静音.		
 	}
 	clocks=0;
-	nes_apu_fill_buffer(0,(u8*)wave_buffers);
+	nes_apu_fill_buffer(apu->num_samples,(u8*)wave_buffers);
 }
-
 
