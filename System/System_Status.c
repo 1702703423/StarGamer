@@ -1,6 +1,7 @@
 #include "System_Status.h"
 #include "sys.h"
 #include "FreeRTOS.h"
+#include "task.h"
 #include "shell.h"
 #include "shell_support.h"
 
@@ -149,9 +150,10 @@ osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAt
 	}
 	
 	SYS_Task_Control_Table_t* SYS_TCT = (SYS_Task_Control_Table_t*)sys_malloc(0,sizeof(SYS_Task_Control_Table_t));
-	
+
 	if(SYS_TCT == NULL)
 	{
+		osThreadTerminate(tid);
 		osKernelUnlock();
 		return NULL;
 	}
@@ -162,6 +164,7 @@ osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAt
 	
 	if(insert_head_chain(SRT.task_table,SYS_TCT,&_code) == NULL)
 	{
+		osThreadTerminate(tid);
 		sys_free(0,(void*)SYS_TCT);
 		osKernelUnlock();
 		return NULL;
@@ -175,17 +178,27 @@ osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAt
 int SysTerminateThread(osThreadId_t tid)
 {
 	int _code;
-	
+	TaskHandle_t task;
+	SYS_Task_Control_Table_t* found;
+
 	if (tid == NULL) 
 	{
 		return OPERATE_FAILED;
 	}
-	
+
+	task = (TaskHandle_t)tid;
+
 	osKernelLock();
-	
+
+	if (eTaskGetState(task) == eDeleted)
+	{
+		osKernelUnlock();
+		return OPERATE_FAILED;
+	}
+
 	// ���� SRT.task_table ����ƥ����߳�
 	adt_chain_t* curr = SRT.task_table->next;
-	SYS_Task_Control_Table_t* found = NULL;
+	found = NULL;
 	
 	while (curr != NULL)
 	{
@@ -205,16 +218,16 @@ int SysTerminateThread(osThreadId_t tid)
 		return OPERATE_FAILED;
 	}
 	
-	// ��ֹ�߳�
-	osStatus_t status = osThreadTerminate(tid);
-	if (status != osOK)
+	// ���������Ƴ�
+	delete_node(SRT.task_table, found, &_code);
+	if (_code != SYSTEM_STATUS_OK)
 	{
 		osKernelUnlock();
 		return OPERATE_FAILED;
 	}
-	
-	// ���������Ƴ�
-	delete_node(SRT.task_table, found, &_code);
+
+	// ��ֹ�߳�
+	vTaskDelete(task);
 	
 	// �ͷ� SYS_Task_Control_Table �ڵ�
 	sys_free(0, (void*)found);
@@ -222,6 +235,50 @@ int SysTerminateThread(osThreadId_t tid)
 	osKernelUnlock();
 	
 	return SYSTEM_STATUS_OK;
+}
+
+int SysUnregisterThread(osThreadId_t tid)
+{
+	int _code;
+	adt_chain_t* curr;
+	SYS_Task_Control_Table_t* found;
+
+	if (tid == NULL)
+	{
+		return OPERATE_FAILED;
+	}
+
+	osKernelLock();
+
+	curr = SRT.task_table->next;
+	found = NULL;
+
+	while (curr != NULL)
+	{
+		SYS_Task_Control_Table_t* entry = (SYS_Task_Control_Table_t*)curr->data;
+		if (entry->tid == tid)
+		{
+			found = entry;
+			break;
+		}
+		curr = curr->next;
+	}
+
+	if (found == NULL)
+	{
+		osKernelUnlock();
+		return OPERATE_FAILED;
+	}
+
+	delete_node(SRT.task_table, found, &_code);
+	if (_code == SYSTEM_STATUS_OK)
+	{
+		sys_free(0, (void*)found);
+	}
+
+	osKernelUnlock();
+
+	return (_code == SYSTEM_STATUS_OK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
 }
 
 

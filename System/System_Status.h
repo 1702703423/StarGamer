@@ -1,4 +1,4 @@
-//AllStar GamerÄÚºËÏà¹Ø²¿·Ö
+//AllStar Gamerï¿½Úºï¿½ï¿½ï¿½Ø²ï¿½ï¿½ï¿½
 
 #ifndef System_Status_H
 #define System_Status_H
@@ -61,8 +61,8 @@ typedef struct adt_chain
 
 typedef struct Frame_Buffer_Status
 {
-	uint8_t* pointer;//Ö¡»º³åÇøÖ¸Õë
-	uint8_t state;//×´Ì¬£¨Ã¦/¿ÕÏÐ£©
+	uint8_t* pointer;//Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
+	uint8_t state;//×´Ì¬ï¿½ï¿½Ã¦/ï¿½ï¿½ï¿½Ð£ï¿½
 }Frame_Buffer_Status_t;
 
 typedef struct SYS_Task_Control_Table
@@ -86,6 +86,7 @@ extern System_Core_Information_t SCI;
 uint8_t* creat_frame_buffer(int* code);
 int AxfDebugInfoPushToUart(const char* string, va_list arg);
 osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAttr_t* attr,uint8_t ui);
+int SysUnregisterThread(osThreadId_t tid);
 int SysTerminateThread(osThreadId_t tid);
 
 #include "adt_chain.h"

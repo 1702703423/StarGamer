@@ -7,6 +7,7 @@
 #include "fatfs.h"
 #include "Malloc.h"
 #include "i2s.h"
+#include "key.h"
 //////////////////////////////////////////////////////////////////////////////////	 
 //本程序移植自网友ye781205的NES模拟器工程
 //ALIENTEK STM32F407开发板
@@ -26,8 +27,8 @@ int VROM_1K_SIZE;
 int VROM_8K_SIZE;
 u32 NESrom_crc32;
 
-u8 PADdata0;   			//手柄1键值 [7:0]右7 左6 下5 上4 Start3 Select2 B1 A0  
-u8 PADdata1;   			//手柄2键值 [7:0]右7 左6 下5 上4 Start3 Select2 B1 A0  
+volatile u32 PADdata0;  /* joypad1 [7:0]: R L D U Start Select B A */
+volatile u32 PADdata1;  /* joypad2 [7:0]: R L D U Start Select B A */
 u8 *NES_RAM;			//保持1024字节对齐
 u8 *NES_SRAM;  
 NES_header *RomHeader; 	//rom文件头
@@ -53,6 +54,15 @@ u8 nes_xoff=0;	//显示在x轴方向的偏移量(实际显示宽度=256-2*nes_xo
 #define NES_APU_VOLUME             50
 #define NES_APU_PCM_SILENCE        0x80
 #define NES_APU_DMA_WAIT_TICKS     25
+
+#define NES_PAD_A                  0x01U
+#define NES_PAD_B                  0x02U
+#define NES_PAD_SELECT             0x04U
+#define NES_PAD_START              0x08U
+#define NES_PAD_UP                 0x10U
+#define NES_PAD_DOWN               0x20U
+#define NES_PAD_LEFT               0x40U
+#define NES_PAD_RIGHT              0x80U
 
 static volatile u8 nes_apu_dma_ready_mask = 0;
 static volatile u8 nes_apu_dma_running = 0;
@@ -360,26 +370,48 @@ u8 nes_load(u8* pname)
 void nes_set_window(void)
 {	
   nes_xoff = 0;
-	LCD_SetWindows(1,0,272,240);
+	LCD_SetWindows(1,0,272,239);
 }
 
 //读取游戏手柄数据
 void nes_get_gamepadval(void)
 { 
-//	u8 *pt;
-//	KEYBRD_FCPAD_Decode(pt,0);
-//	PADdata0=fcpad.ctrlval;
+	u32 key_state;
+	u32 pad = 0;
+
+	key_state = KEY_GetState();
+
+	if((key_state & KEY_NES_UP) != 0U) pad |= NES_PAD_UP;
+	if((key_state & KEY_NES_DOWN) != 0U) pad |= NES_PAD_DOWN;
+	if((key_state & KEY_NES_LEFT) != 0U) pad |= NES_PAD_LEFT;
+	if((key_state & KEY_NES_RIGHT) != 0U) pad |= NES_PAD_RIGHT;
+	if((key_state & KEY_NES_START) != 0U) pad |= NES_PAD_START;
+	if((key_state & KEY_NES_A) != 0U) pad |= NES_PAD_A;
+	if((key_state & KEY_NES_B) != 0U) pad |= NES_PAD_B;
+
+	PADdata0 = pad;
+	PADdata1 = 0;
 }
+
+static u8 nes_exit_requested(void)
+{
+	return ((KEY_GetState() & KEY_NES_EXIT) != 0U) ? 1U : 0U;
+}
+
 //nes模拟器主循环
 void nes_emulate_frame()
 {  
-	u8 nes_frame;
+	u8 nes_frame = 0;
 	nes_set_window();//设置窗口
 //	Debug("NES Run\n");
 //	LCD_Clear(BLACK);
 	for(;;)
 	{	
-//		if(KEY_EXIT_VAL == KEY_EXIT_EN) break;
+		if(nes_exit_requested()) break;
+		if(nes_frame==0)
+		{
+			nes_set_window();
+		}
 		// LINES 0-239
 		PPU_start_frame();
 		for(NES_scanline = 0; NES_scanline< 240; NES_scanline++)
@@ -414,6 +446,7 @@ void nes_emulate_frame()
 		nes_frame_cnt++; 	
 		nes_frame++;
 		if(nes_frame>NES_SKIP_FRAME)nes_frame=0;//跳帧
+		osThreadYield();
 	}
 
 }

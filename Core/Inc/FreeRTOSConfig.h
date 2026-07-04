@@ -169,6 +169,8 @@ standard names. */
 /* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
 #undef configMAX_TASK_NAME_LEN
 #define configMAX_TASK_NAME_LEN                  ( 24 )
+#undef configUSE_IDLE_HOOK
+#define configUSE_IDLE_HOOK                      1
 /* USER CODE END Defines */
 
 #endif /* FREERTOS_CONFIG_H */

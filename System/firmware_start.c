@@ -19,6 +19,7 @@
 #include "test.h"
 #include "Player.h"
 #include "w25q64.h"
+#include "key.h"
 #include "lvgl.h"
 #include "lv_port_disp_template.h"
 #include "lv_demo_stress.h"
@@ -54,8 +55,13 @@ static void lvgl_timer_task(void *arg)
 	(void)arg;
 	while (1) {
 		lv_timer_handler();
-		osDelay(20);
+		osDelay(10);
 	}
+}
+
+static int key_init()
+{
+	return KEY_Init();
 }
 
 /* ---- System Init ---- */
@@ -154,6 +160,7 @@ static void bsp_init()
 	
 	gpio_init();
 	LCD_Init(&hspi1);
+	key_init();
 	if(W25Q64_Init() == W25Q64_OK)
 	{
 		W25Q64_ReadID(&mid,&did);
@@ -191,10 +198,11 @@ void test_run(void)
 	lv_init();
 	lv_port_disp_init();
 	lv_port_indev_init();
-	osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
+//	osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
 	res = mount_fs();
 	Wave_Infomation WI;
 	lv_demo_stress();
+	nes_load((u8*)"0://Super Mario.NES");
 
 //	LCD_Fill(1, 1, 320, 240, BLACK, p);
 //	LCD_Flush(p);lcd_test();

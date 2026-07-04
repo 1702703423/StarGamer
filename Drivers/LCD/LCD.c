@@ -2,6 +2,7 @@
 #include "LCD_Font.h"
 
 SPI_HandleTypeDef *lcd_spi;
+static int LCD_WaitForSPI(void);
 
 //管理LCD重要参数
 //默认为竖屏
@@ -398,14 +399,45 @@ static void LCD_BuffWrite_HalfWord(u16 x, u16 y, u16 color, uint8_t* buff)
 
 void LCD_LineBufFlushForNes(u8* buf,u16 len)
 {
+	LCD_NesBeginFrame();
+	LCD_NesWriteAsync(buf, len);
+	LCD_NesEndFrame();
+}
+
+void LCD_NesBeginFrame(void)
+{
+	(void)LCD_WaitForSPI();
 	LCD_CS_CLR;
-  LCD_RS_SET;
-	HAL_SPI_Transmit_DMA(lcd_spi,buf,len);
-	while (HAL_SPI_GetState(lcd_spi) != HAL_SPI_STATE_READY);
+	LCD_RS_SET;
+}
+
+int LCD_NesWriteAsync(u8* buf, u16 len)
+{
+	if((buf == NULL) || (len == 0))
+	{
+		return 1;
+	}
+
+	if(LCD_WaitForSPI() != 0)
+	{
+		return 1;
+	}
+
+	return (HAL_SPI_Transmit_DMA(lcd_spi, buf, len) == HAL_OK) ? 0 : 1;
+}
+
+void LCD_NesWaitTransfer(void)
+{
+	(void)LCD_WaitForSPI();
+}
+
+void LCD_NesEndFrame(void)
+{
+	(void)LCD_WaitForSPI();
 	LCD_CS_SET;
 }
 
-static int LCD_WaitForSPI()
+static int LCD_WaitForSPI(void)
 {
 	u32 count = 65536000;
 	

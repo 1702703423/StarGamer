@@ -11,7 +11,7 @@
 #define SHELL_BUFFER_SIZE  1024
 
 /* Global for cpu_idle_ticks (exported for sysstats command) */
-extern uint32_t cpu_idle_ticks;
+extern volatile uint32_t cpu_idle_ticks;
 
 /* Shell thread attributes (exported for System_init) */
 extern const osThreadAttr_t shellTask_attributes;

@@ -41,12 +41,24 @@ const osThreadAttr_t shellTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 
-/* ---- CPU idle counter ---- */
-uint32_t cpu_idle_ticks = 0;
+/* ---- CPU idle counter (counts OS ticks observed by the idle task) ---- */
+volatile uint32_t cpu_idle_ticks = 0;
 
 void vApplicationIdleHook(void)
 {
-	cpu_idle_ticks++;
+	/*
+	 * Count one idle tick per OS tick period. The idle hook runs in a tight
+	 * loop inside the idle task and may be called many times per tick.
+	 * Without this guard, cpu_idle_ticks would increment far faster than
+	 * the OS tick, causing sysstats to always report 100% CPU usage.
+	 */
+	static TickType_t last_idle_tick = 0;
+	TickType_t now = xTaskGetTickCount();
+
+	if (now != last_idle_tick) {
+		cpu_idle_ticks++;
+		last_idle_tick = now;
+	}
 }
 
 /* ---- Shell mutex ---- */

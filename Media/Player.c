@@ -3,6 +3,8 @@
 #include "shell.h"
 #include "shell_support.h"
 #include "System_Status.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "i2s.h"
 
 extern I2S_HandleTypeDef hi2s3;
@@ -101,10 +103,36 @@ static int player_service_dma_buffer(FIL *file, uint8_t dma_index, uint8_t *drai
 
 static void player_exit(FIL *file)
 {
+  osThreadId_t tid = WavTaskHandle;
+
   WavTaskHandle = NULL;
+  audio_card_register_tx(NULL);
   audio_card_close();
   f_close(file);
+
+  if(tid != NULL)
+  {
+    SysUnregisterThread(tid);
+  }
+
   osThreadExit();
+}
+
+void WavePlayTaskStop(osThreadId_t tid)
+{
+  if(tid == WavTaskHandle)
+  {
+    WavTaskHandle = NULL;
+  }
+
+  audio_card_register_tx(NULL);
+  audio_card_close();
+
+  if(tid != NULL)
+  {
+    SysUnregisterThread(tid);
+    vTaskDelete((TaskHandle_t)tid);
+  }
 }
 
 void PlayerStart(FIL* audio_file)                                                                                                                                                                    
@@ -200,6 +228,13 @@ void audio_feeder()
 
   if(WavTaskHandle == NULL)
   {
+    return;
+  }
+
+  if(osThreadGetState(WavTaskHandle) == osThreadTerminated)
+  {
+    WavTaskHandle = NULL;
+    audio_card_register_tx(NULL);
     return;
   }
 

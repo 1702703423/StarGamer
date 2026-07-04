@@ -18,6 +18,7 @@ extern uint8_t play_buf1[1024];
 extern uint8_t play_buf2[1024];
 
 void PlayerStart(FIL* audio_file);
+void WavePlayTaskStop(osThreadId_t tid);
 
 
 #endif

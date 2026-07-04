@@ -51,12 +51,12 @@ extern int VROM_1K_SIZE;
 extern int VROM_8K_SIZE; 
 extern u8 cpunmi;  				//cpu中断标志  在 6502.s里面
 extern u8 cpuirq;			
-extern u8 PADdata;   			//手柄1键值 
-extern u8 PADdata1;   			//手柄1键值 
+extern volatile u32 PADdata0;   /* joypad1 */
+extern volatile u32 PADdata1;   /* joypad2 */
 extern u8 lianan_biao;			//连按标志 
 #define  CPU_NMI  cpunmi=1;
 #define  CPU_IRQ  cpuirq=1;
-#define  NES_RAM_SPEED	1 	 	//1:内存占用小  0:速度快
+#define  NES_RAM_SPEED	0 	 	//1:内存占用小  0:速度快
 
 
 void cpu6502_init(void);		//在 cart.s
@@ -74,14 +74,10 @@ void nes_i2s_dma_tx_callback(void);
 int nes_sound_open(int samples_per_sync,int sample_rate);
 void nes_sound_close(void);
 void nes_apu_fill_buffer(int samples,u8* wavebuf);
-void LCD_LineBufFlushForNes(u8* buf,u16 len);
 
 extern u32 get_crc32(u8* buf, u32 len);
 
 #endif
-
-
-
 
 
 

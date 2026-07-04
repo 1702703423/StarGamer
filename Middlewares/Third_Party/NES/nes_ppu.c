@@ -1,6 +1,64 @@
 #include "nes_ppu.h"
 #include "string.h"
 #include "Malloc.h"
+
+#define NES_LCD_STRIPE_LINES 16
+#define NES_LCD_STRIPE_WORDS_PER_LINE (NES_BACKBUF_WIDTH / 2)
+
+static u16 nes_lcd_palette[64];
+static u32 nes_lcd_stripe[2][NES_LCD_STRIPE_LINES * NES_LCD_STRIPE_WORDS_PER_LINE] __ALIGNED(4);
+static u8 nes_lcd_palette_ready;
+static u8 nes_lcd_stripe_index;
+static u8 nes_lcd_stripe_rows;
+
+static void nes_lcd_prepare_palette(void)
+{
+	u8 i;
+
+	if(nes_lcd_palette_ready)
+	{
+		return;
+	}
+
+	for(i = 0; i < 64; i++)
+	{
+		nes_lcd_palette[i] = FLIPW(NES_Palette[i]);
+	}
+
+	nes_lcd_palette_ready = 1;
+}
+
+static void nes_lcd_begin_visible_frame(void)
+{
+	nes_lcd_prepare_palette();
+	nes_lcd_stripe_index = 0;
+	nes_lcd_stripe_rows = 0;
+	LCD_NesBeginFrame();
+}
+
+static void nes_lcd_submit_stripe(u8 wait_done)
+{
+	u16 len;
+
+	if(nes_lcd_stripe_rows == 0)
+	{
+		return;
+	}
+
+	len = (u16)(nes_lcd_stripe_rows * NES_BACKBUF_WIDTH * sizeof(u16));
+	if(LCD_NesWriteAsync((u8*)nes_lcd_stripe[nes_lcd_stripe_index], len) != 0)
+	{
+		nes_lcd_stripe_rows = 0;
+		return;
+	}
+	nes_lcd_stripe_index ^= 1;
+	nes_lcd_stripe_rows = 0;
+
+	if(wait_done)
+	{
+		LCD_NesWaitTransfer();
+	}
+}
 //////////////////////////////////////////////////////////////////////////////////	 
 //本程序移植自网友ye781205的NES模拟器工程
 //ALIENTEK STM32F407开发板
@@ -12,8 +70,6 @@
 ////////////////////////////////////////////////////////////////////////////////// 	 
  
 uint8* PPU_patterntables;       //8192  VROM开始地址 图案表 
-u16 line_colors[272];		//图像缓存
-//static uint16_t* line_colors;
 
 void set_tile_banks(uint8 *bank0, uint8 *bank1, uint8 *bank2, uint8 *bank3,
       uint8 *bank4, uint8 *bank5, uint8 *bank6, uint8 *bank7)
@@ -306,8 +362,9 @@ void PPU_reset(void)
   if(RomHeader->flags_1 &0x01)set_mirroring(0,1,0,1);//垂直镜像	//  PPU_set_mirroring(); 设置镜像
   else set_mirroring(0,0,1,1);//水平镜像
 
-	//行显示缓存申请内存
-	memset(line_colors, 0, sizeof(line_colors));
+	nes_lcd_palette_ready = 0;
+	nes_lcd_stripe_index = 0;
+	nes_lcd_stripe_rows = 0;
 }
 //***********************************************************************************************
 void set_mirroring(uint32 nt0, uint32 nt1, uint32 nt2, uint32 nt3)//设置垂直水平镜像
@@ -378,16 +435,66 @@ void scanline_draw(int LineNo)
 {
 	u16 i; 
 	u16 sx,ex;
+	u32 *line32;
+	u16 start;
+	u16 blank_start;
+	u8 last_line;
+
+	if(LineNo == 0)
+	{
+		nes_lcd_begin_visible_frame();
+	}
+
 	do_scanline_and_draw(ppu->dummy_buffer);	
 	sx=nes_xoff + 8; 
 	ex=256+8-nes_xoff;
-	
-	for(i=sx;i<ex;i++)
+	line32 = &nes_lcd_stripe[nes_lcd_stripe_index][nes_lcd_stripe_rows * NES_LCD_STRIPE_WORDS_PER_LINE];
+
+	for(i=0;i<(sx >> 1);i++)
 	{
-		line_colors[i] = FLIPW(NES_Palette[ppu->dummy_buffer[i]]);
+		line32[i] = 0;
 	}
-	LCD_LineBufFlushForNes((uint8_t*)line_colors,272*2);
-//	LCD_DisplayWindows(32,LineNo,288,LineNo,(u16*)line_colors); //(320-256)/2
+	if((sx & 1U) != 0U)
+	{
+		line32[sx >> 1] = ((u32)nes_lcd_palette[ppu->dummy_buffer[sx]] << 16);
+		start = sx + 1U;
+	}
+	else
+	{
+		start = sx;
+	}
+	
+	for(i=start;i<ex;i += 2U)
+	{
+		u32 color_pair = (u32)nes_lcd_palette[ppu->dummy_buffer[i]];
+		if((i + 1U) < ex)
+		{
+			color_pair |= ((u32)nes_lcd_palette[ppu->dummy_buffer[i + 1U]] << 16);
+		}
+		line32[i >> 1] = color_pair;
+	}
+
+	blank_start = (ex + 1U) >> 1;
+	if((ex & 1U) == 0U)
+	{
+		blank_start = ex >> 1;
+	}
+	for(i=blank_start;i<NES_LCD_STRIPE_WORDS_PER_LINE;i++)
+	{
+		line32[i] = 0;
+	}
+
+	nes_lcd_stripe_rows++;
+	last_line = (LineNo >= (NES_SCREEN_HEIGHT - 1)) ? 1 : 0;
+	if((nes_lcd_stripe_rows >= NES_LCD_STRIPE_LINES) || last_line)
+	{
+		nes_lcd_submit_stripe(last_line);
+	}
+
+	if(last_line)
+	{
+		LCD_NesEndFrame();
+	}
 }
 
 void do_scanline_and_dont_draw(int LineNo)
@@ -1067,11 +1174,4 @@ void render_spr(uint8* buf)
 /**********************************************************************************************************/
 void ppu_close()
 {
-	//if(line_colors != NULL) myfree(SRAMIN, line_colors);
 }
-
-
-
-
-
-

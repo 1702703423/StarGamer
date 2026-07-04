@@ -1112,24 +1112,9 @@
               <FilePath>..\Debug\shell_support\shell_support.h</FilePath>
             </File>
             <File>
-              <FileName>test.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Debug\test.c</FilePath>
-            </File>
-            <File>
-              <FileName>test.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Debug\test.h</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Listing</GroupName>
-          <Files>
-            <File>
               <FileName>UART1_Debug.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\UART1_Debug.c</FilePath>
+              <FilePath>..\Debug\UART1_Debug.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1195,6 +1180,16 @@
               <FileName>adt_chain.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\System\adt_chain.h</FilePath>
+            </File>
+            <File>
+              <FileName>firmware.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\System\firmware.h</FilePath>
+            </File>
+            <File>
+              <FileName>firmware_start.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\System\firmware_start.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -4134,11 +4129,6 @@
               <FileType>1</FileType>
               <FilePath>..\GUI\GUI_Task.c</FilePath>
             </File>
-            <File>
-              <FileName>GUI_Task.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\GUI_Task.h</FilePath>
-            </File>
           </Files>
         </Group>
         <Group>
@@ -4291,6 +4281,16 @@
               <FileName>at24c02.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\BSP\at24c02.h</FilePath>
+            </File>
+            <File>
+              <FileName>key.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\key.c</FilePath>
+            </File>
+            <File>
+              <FileName>key.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\key.h</FilePath>
             </File>
           </Files>
         </Group>

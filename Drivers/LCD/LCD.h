@@ -120,6 +120,11 @@ void LCD_ShowFloat(u16 x, u16 y, float num, uint8_t decimals,
 void LCD_DrawCircle(u16 x0, u16 y0, u16 r, u16 color, uint8_t* buff);
 void LCD_DrawFillCircle(u16 x0, u16 y0, u16 r, u16 color, uint8_t* buff);
 void LCD_Line(u16 x1, u16 y1, u16 x2, u16 y2, u16 color, uint8_t* buff);
+void LCD_LineBufFlushForNes(u8* buf, u16 len);
+void LCD_NesBeginFrame(void);
+int LCD_NesWriteAsync(u8* buf, u16 len);
+void LCD_NesWaitTransfer(void);
+void LCD_NesEndFrame(void);
 
 u16 LCD_RD_DATA(void);//读取LCD数据									    
 void LCD_WriteReg(u8 LCD_Reg, u16 LCD_RegValue);

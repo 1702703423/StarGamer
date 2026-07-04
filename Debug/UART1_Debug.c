@@ -4,7 +4,9 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include "FreeRTOS.h"
+#include "task.h"
 #include "cmsis_os.h"
+#include "Player.h"
 #include "shell.h"
 #include "shell_support.h"
 
@@ -107,15 +109,15 @@ int AxfDebugInfoPushToUart(const char* string, va_list arg)
     return DEBUG_OPTION_DISABLE;
 }
 
-static const char *shell_task_state_str(osThreadState_t state)
+static const char *shell_task_state_str(eTaskState state)
 {
 	switch (state)
 	{
-	case osThreadInactive:   return "Inactive";
-	case osThreadReady:      return "Ready";
-	case osThreadRunning:    return "Running";
-	case osThreadBlocked:    return "Blocked";
-	case osThreadTerminated: return "Terminated";
+	case eRunning:   return "Running";
+	case eReady:     return "Ready";
+	case eBlocked:   return "Blocked";
+	case eSuspended: return "Suspended";
+	case eDeleted:   return "Terminated";
 	default:                 return "Unknown";
 	}
 }
@@ -124,11 +126,11 @@ void shellTaskList(void)
 {
 #define MAX_TASKS 16
 #define TASK_LIST_LINE "==================================================================\n"
-	osThreadId_t threads[MAX_TASKS];
-	uint32_t count;
+	TaskStatus_t tasks[MAX_TASKS];
+	UBaseType_t count;
 	uint32_t i;
 
-	count = osThreadEnumerate(threads, MAX_TASKS);
+	count = uxTaskGetSystemState(tasks, MAX_TASKS, NULL);
 
 	shellPrintEndLine(&shell, "\n===== RTOS Task List (%lu tasks) =====\n", count);
 	shellPrintEndLine(&shell, "%-*s %-8s %-12s %-8s %-10s\n",
@@ -136,11 +138,16 @@ void shellTaskList(void)
 
 	for (i = 0; i < count && i < MAX_TASKS; i++)
 	{
-		const char *name = osThreadGetName(threads[i]);
-		osThreadState_t state = osThreadGetState(threads[i]);
-		osPriority_t prio = osThreadGetPriority(threads[i]);
-		uint32_t stack_free = osThreadGetStackSpace(threads[i]);
+		const char *name = tasks[i].pcTaskName;
+		eTaskState state = tasks[i].eCurrentState;
+		UBaseType_t prio = tasks[i].uxCurrentPriority;
+		uint32_t stack_free = (uint32_t)tasks[i].usStackHighWaterMark * sizeof(StackType_t);
 		const char *type = "SYSTEM";
+
+		if (state == eDeleted)
+		{
+			continue;
+		}
 
 		/* Check if this thread was created via SysCreatThread â†’ USER */
 		{
@@ -148,7 +155,7 @@ void shellTaskList(void)
 			while (node)
 			{
 				SYS_Task_Control_Table_t *tct = (SYS_Task_Control_Table_t *)node->data;
-				if (tct && tct->tid == threads[i])
+				if (tct && tct->tid == (osThreadId_t)tasks[i].xHandle)
 				{
 					type = "USER";
 					break;
@@ -231,16 +238,19 @@ int shellTaskKill(int argc, char *argv[])
 		return -1;
 	}
 
-	/* Remove from SRT.task_table chain (frees chain node + TCT data) */
+	if (strcmp(target_name, "WaveDataTransmitTask") == 0) //¶ÔÒôÆµ´«ÊäÈÎÎñ×öÁËÌØÊâ´¦Àí£¬ÒòÎªËü³ÖÓĞÉù¿¨
 	{
-		int _code;
-		delete_node(SRT.task_table, tct, &_code);
+		WavePlayTaskStop(target);
+		shellPrintEndLine(&shell, "Thread '%s' terminated.\n", target_name);
+		return 0;
 	}
-	sys_free(0, tct);   /* free the tracking struct data */
 
-	/* Terminate the thread */
-	osThreadTerminate(target);
-	
+	if (SysTerminateThread(target) != SYSTEM_STATUS_OK)
+	{
+		shellPrintEndLine(&shell, "Error: failed to terminate thread '%s'.\n", target_name);
+		return -1;
+	}
+
 	shellPrintEndLine(&shell, "Thread '%s' terminated.\n", target_name);
 	return 0;
 }
@@ -378,7 +388,7 @@ int shellHexdump(int argc, char *argv[])
 
 	for (offset = 0; offset < len; offset += 16)
 	{
-		pos = snprintf(buf, sizeof(buf), "%08lX: ", addr + offset);
+		pos = snprintf(buf, sizeof(buf), "%08X: ", addr + offset);
 
 		for (i = 0; i < 16; i++)
 		{
@@ -407,11 +417,11 @@ SHELL_EXPORT_CMD(
 SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_CMD_MAIN),
 hexdump, shellHexdump, hexdump <addr> <len>);
 
-extern uint32_t cpu_idle_ticks;
+extern volatile uint32_t cpu_idle_ticks;
 
 int shellSysStats(int argc, char *argv[])
 {
-	uint32_t idle_start, idle_end, cpu_used_x10;
+	uint32_t idle_start, idle_end, idle_delta, elapsed_ticks, cpu_used_x10;
 	uint16_t ccm_used, sram_used;
 	uint32_t heap_free, heap_total;
 	TickType_t delay_ticks;
@@ -420,15 +430,17 @@ int shellSysStats(int argc, char *argv[])
 
 	/* ---- CPU usage via 200ms idle sampling ---- */
 	delay_ticks = pdMS_TO_TICKS(200);
+	if (delay_ticks == 0) delay_ticks = 1;
 	idle_start = cpu_idle_ticks;
+	elapsed_ticks = xTaskGetTickCount();
 	vTaskDelay(delay_ticks);
 	idle_end = cpu_idle_ticks;
+	elapsed_ticks = xTaskGetTickCount() - elapsed_ticks;
 
-	/* vTaskDelay includes one extra tick, so ticks passed â‰ˆ delay_ticks */
-	if (idle_end >= idle_start)
-		cpu_used_x10 = 1000 - ((idle_end - idle_start) * 1000 / delay_ticks);
-	else
-		cpu_used_x10 = 0;
+	if (elapsed_ticks == 0) elapsed_ticks = delay_ticks;
+	idle_delta = idle_end - idle_start;
+	if (idle_delta > elapsed_ticks) idle_delta = elapsed_ticks;
+	cpu_used_x10 = 1000 - (idle_delta * 1000 / elapsed_ticks);
 
 	if (cpu_used_x10 > 1000) cpu_used_x10 = 1000;
 
