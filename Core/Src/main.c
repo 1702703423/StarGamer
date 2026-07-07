@@ -835,7 +835,7 @@ static void MX_FSMC_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	test_run();
+	init();
   /* USER CODE END 5 */
 }
 

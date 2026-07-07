@@ -29,10 +29,19 @@ typedef enum WAV_RES_t  {
 #define EVENT_OVER_DMA (1U << 1)
 #define EVENT_STOP_PLAYER (1U << 2)
 #define EVENT_QUIT (1U << 3)
+#define EVENT_PAUSE_PLAYER (1U << 4)
+#define EVENT_RESUME_PLAYER (1U << 5)
 #define EVENT_DMA_EMPTY (EVENT_HALF_DMA | EVENT_OVER_DMA)
+#define EVENT_PLAYER_WAIT (EVENT_DMA_EMPTY | EVENT_STOP_PLAYER | EVENT_PAUSE_PLAYER)
+#define PLAYER_PATH_SIZE 256U
 
 uint32_t WavTaskBuffer[ 4096 ];
 static osThreadId_t WavTaskHandle;
+static FIL WavFile;
+static u8 WavFileOpened = 0U;
+static volatile Player_State_t s_player_state = PLAYER_STATE_IDLE;
+static Wave_Infomation s_player_info;
+static TCHAR s_player_path[PLAYER_PATH_SIZE];
 osStaticThreadDef_t WavTaskControlBlock;
 const osThreadAttr_t WavTaskAttr = {
   .name = "WaveDataTransmitTask",
@@ -46,6 +55,37 @@ const osThreadAttr_t WavTaskAttr = {
 __ALIGNED(4) static uint8_t wav_play_buf[WAV_PLAY_BUFF_SIZE];
 
 int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation);
+
+static u8 player_copy_path(TCHAR *dst, u32 dst_size, const TCHAR *src)
+{
+  u32 i;
+
+  if(dst == NULL || dst_size == 0U || src == NULL)
+  {
+    return 0U;
+  }
+
+  for(i = 0U; i < (dst_size - 1U); i++)
+  {
+    dst[i] = src[i];
+    if(src[i] == '\0')
+    {
+      return 1U;
+    }
+  }
+
+  dst[dst_size - 1U] = '\0';
+  return 0U;
+}
+
+static void player_close_file(FIL *file)
+{
+  if(WavFileOpened != 0U)
+  {
+    f_close(file);
+    WavFileOpened = 0U;
+  }
+}
 
 static int player_fill_dma_buffer(FIL *file, uint8_t dma_index)
 {
@@ -106,9 +146,10 @@ static void player_exit(FIL *file)
   osThreadId_t tid = WavTaskHandle;
 
   WavTaskHandle = NULL;
+  s_player_state = PLAYER_STATE_IDLE;
   audio_card_register_tx(NULL);
   audio_card_close();
-  f_close(file);
+  player_close_file(file);
 
   if(tid != NULL)
   {
@@ -118,13 +159,57 @@ static void player_exit(FIL *file)
   osThreadExit();
 }
 
+static void player_pause_wait(FIL *file)
+{
+  u32 flag;
+
+  if(audio_card_pause() != 0)
+  {
+    shellPrintEndLine(&shell,"TASK_ERROR:AUDIO_PAUSE\r\n");
+    player_exit(file);
+  }
+
+  s_player_state = PLAYER_STATE_PAUSED;
+
+  while(1)
+  {
+    flag = osThreadFlagsWait(EVENT_RESUME_PLAYER | EVENT_STOP_PLAYER, osFlagsWaitAny, osWaitForever);
+    if(flag & osFlagsError)
+    {
+      shellPrintEndLine(&shell,"PauseWaitError\r\n");
+      player_exit(file);
+    }
+
+    if(flag & EVENT_STOP_PLAYER)
+    {
+      player_exit(file);
+    }
+
+    if(flag & EVENT_RESUME_PLAYER)
+    {
+      if(audio_card_resume() != 0)
+      {
+        shellPrintEndLine(&shell,"TASK_ERROR:AUDIO_RESUME\r\n");
+        player_exit(file);
+      }
+
+      s_player_state = PLAYER_STATE_PLAYING;
+      return;
+    }
+  }
+}
+
 void WavePlayTaskStop(osThreadId_t tid)
 {
+  u8 close_file = 0U;
+
   if(tid == WavTaskHandle)
   {
     WavTaskHandle = NULL;
+    close_file = 1U;
   }
 
+  s_player_state = PLAYER_STATE_IDLE;
   audio_card_register_tx(NULL);
   audio_card_close();
 
@@ -133,21 +218,157 @@ void WavePlayTaskStop(osThreadId_t tid)
     SysUnregisterThread(tid);
     vTaskDelete((TaskHandle_t)tid);
   }
+
+  if(close_file != 0U)
+  {
+    player_close_file(&WavFile);
+  }
 }
 
-void PlayerStart(FIL* audio_file)                                                                                                                                                                    
+int PlayerStart(const TCHAR *audio_path)
 {
   Wave_Infomation WI;
-	
-	int res = WavePlayTaskStart(audio_file,&WI);
+  FRESULT fr;
+  int res;
+
+  if(audio_path == NULL)
+  {
+    shellPrintEndLine(&shell,"PlayerStart:NULL_PATH\r\n");
+    return OPERATE_FAILED;
+  }
+
+  if(WavTaskHandle != NULL)
+  {
+    shellPrintEndLine(&shell,"PlayerStart:BUSY\r\n");
+    return OPERATE_FAILED;
+  }
+
+  if(player_copy_path(s_player_path, PLAYER_PATH_SIZE, audio_path) == 0U)
+  {
+    shellPrintEndLine(&shell,"PlayerStart:PATH_TOO_LONG\r\n");
+    return OPERATE_FAILED;
+  }
+
+  player_close_file(&WavFile);
+  memset(&WI, 0, sizeof(WI));
+  memset(&s_player_info, 0, sizeof(s_player_info));
+  s_player_state = PLAYER_STATE_STARTING;
+
+  fr = f_open(&WavFile,audio_path,FA_READ);
+  if(fr != FR_OK)
+  {
+    shellPrintEndLine(&shell,"PlayerStart:f_open:%d\r\n",fr);
+    s_player_state = PLAYER_STATE_ERROR;
+    return OPERATE_FAILED;
+  }
+  WavFileOpened = 1U;
+
+	res = WavePlayTaskStart(&WavFile,&WI);
 	shellPrintEndLine(&shell,"WavePlayTaskCreatCode:%d\r\n",res);
+  if(res != WAV_OK)
+  {
+    player_close_file(&WavFile);
+    s_player_state = PLAYER_STATE_ERROR;
+    return OPERATE_FAILED;
+  }
+
   if(res == WAV_OK)
   {
+    s_player_info = WI;
 		shellPrintEndLine(&shell,"SampleRate:%d\r\n",WI.Sample_Rate);
     shellPrintEndLine(&shell,"Channels:%d\r\n",WI.Channels);
     shellPrintEndLine(&shell,"deepth:%d\r\n",WI.deepth);
     shellPrintEndLine(&shell,"WI.WAV_Second:%d\r\n",WI.WAV_Second);
   }
+
+  return SYSTEM_STATUS_OK;
+}
+
+int PlayerPause(void)
+{
+  u32 flags;
+
+  if(WavTaskHandle == NULL)
+  {
+    return OPERATE_FAILED;
+  }
+
+  if(s_player_state == PLAYER_STATE_PAUSED)
+  {
+    return SYSTEM_STATUS_OK;
+  }
+
+  flags = osThreadFlagsSet(WavTaskHandle, EVENT_PAUSE_PLAYER);
+  return (flags & osFlagsError) ? OPERATE_FAILED : SYSTEM_STATUS_OK;
+}
+
+int PlayerResume(void)
+{
+  u32 flags;
+
+  if(WavTaskHandle == NULL)
+  {
+    return OPERATE_FAILED;
+  }
+
+  if(s_player_state != PLAYER_STATE_PAUSED)
+  {
+    return SYSTEM_STATUS_OK;
+  }
+
+  flags = osThreadFlagsSet(WavTaskHandle, EVENT_RESUME_PLAYER);
+  return (flags & osFlagsError) ? OPERATE_FAILED : SYSTEM_STATUS_OK;
+}
+
+int PlayerTogglePause(void)
+{
+  if(s_player_state == PLAYER_STATE_PAUSED)
+  {
+    return PlayerResume();
+  }
+
+  return PlayerPause();
+}
+
+int PlayerStop(void)
+{
+  u32 flags;
+
+  if(WavTaskHandle == NULL)
+  {
+    s_player_state = PLAYER_STATE_IDLE;
+    return SYSTEM_STATUS_OK;
+  }
+
+  s_player_state = PLAYER_STATE_STOPPING;
+  flags = osThreadFlagsSet(WavTaskHandle, EVENT_STOP_PLAYER);
+  return (flags & osFlagsError) ? OPERATE_FAILED : SYSTEM_STATUS_OK;
+}
+
+u8 PlayerIsBusy(void)
+{
+  return (WavTaskHandle != NULL) ? 1U : 0U;
+}
+
+Player_State_t PlayerGetState(void)
+{
+  return s_player_state;
+}
+
+int PlayerGetInfo(Wave_Infomation *info)
+{
+  if(info == NULL)
+  {
+    return OPERATE_FAILED;
+  }
+
+  *info = s_player_info;
+  return SYSTEM_STATUS_OK;
+}
+
+const TCHAR *PlayerGetCurrentPath(void)
+{
+  return s_player_path;
 }
 
 void WaveDataTransmitTask(void *argument)
@@ -156,6 +377,8 @@ void WaveDataTransmitTask(void *argument)
 	FIL* file = (FIL* )argument;
   int fill_res;
   uint8_t drain_events = 0U;
+
+  (void)osThreadFlagsClear(EVENT_STOP_PLAYER | EVENT_PAUSE_PLAYER | EVENT_RESUME_PLAYER);
 
   fill_res = player_fill_dma_buffer(file, 0U);
   if(fill_res < 0)
@@ -182,14 +405,20 @@ void WaveDataTransmitTask(void *argument)
     shellPrintEndLine(&shell,"TASK_ERROR:AUDIO_START\r\n");
     player_exit(file);
   }
+  s_player_state = PLAYER_STATE_PLAYING;
 
   while(1)
   {
-    flag = osThreadFlagsWait(EVENT_DMA_EMPTY,osFlagsWaitAny,20000);
+    flag = osThreadFlagsWait(EVENT_PLAYER_WAIT,osFlagsWaitAny,20000);
     if(flag & osFlagsError)
     {
       shellPrintEndLine(&shell,"WaitEventError\r\n");
 			player_exit(file);
+    }
+
+    if(flag & EVENT_STOP_PLAYER)
+    {
+      player_exit(file);
     }
 
     if((flag & EVENT_DMA_EMPTY) == EVENT_DMA_EMPTY)
@@ -219,6 +448,11 @@ void WaveDataTransmitTask(void *argument)
         player_exit(file);
       }
     }
+
+    if(flag & EVENT_PAUSE_PLAYER)
+    {
+      player_pause_wait(file);
+    }
   }
 }
 
@@ -234,6 +468,7 @@ void audio_feeder()
   if(osThreadGetState(WavTaskHandle) == osThreadTerminated)
   {
     WavTaskHandle = NULL;
+    s_player_state = PLAYER_STATE_IDLE;
     audio_card_register_tx(NULL);
     return;
   }

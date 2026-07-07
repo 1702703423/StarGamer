@@ -38,7 +38,7 @@ static const osThreadAttr_t key_thread_attr =
 	.cb_size = sizeof(key_thread_cb),
 	.stack_mem = &key_thread_stack[0],
 	.stack_size = sizeof(key_thread_stack),
-	.priority = (osPriority_t)osPriorityLow7,
+	.priority = (osPriority_t)osPriorityNormal,
 };
 
 static StaticQueue_t key_queue_cb;

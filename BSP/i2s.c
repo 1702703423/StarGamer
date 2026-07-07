@@ -196,6 +196,36 @@ int audio_card_start(void)
 	return 0;
 }
 
+int audio_card_pause(void)
+{
+	if (!audio_card_opened || (apif.wav_buffer == NULL))
+	{
+		return -1;
+	}
+
+	if (HAL_I2S_DMAPause(&hi2s3) != HAL_OK)
+	{
+		return -2;
+	}
+
+	return 0;
+}
+
+int audio_card_resume(void)
+{
+	if (!audio_card_opened || (apif.wav_buffer == NULL))
+	{
+		return -1;
+	}
+
+	if (HAL_I2S_DMAResume(&hi2s3) != HAL_OK)
+	{
+		return -2;
+	}
+
+	return 0;
+}
+
 int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_size)
 {
 	uint32_t i2s_freq;

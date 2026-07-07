@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> 此文件为 Claude Code 提供详细参考。Reasonix 用户请参阅 [`AGENTS.md`](./AGENTS.md)，其中包含精简版的中文项目记忆。
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview

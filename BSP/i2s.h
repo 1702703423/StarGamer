@@ -25,6 +25,8 @@ int audio_card_init(int volume);
 int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size);
 int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_size);
 int audio_card_start(void);
+int audio_card_pause(void);
+int audio_card_resume(void);
 int audio_card_get_freq(void);
 int audio_card_chg_freq(int sample_rate);
 int audio_card_chg_volume(int volume);

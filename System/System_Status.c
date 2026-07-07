@@ -281,4 +281,24 @@ int SysUnregisterThread(osThreadId_t tid)
 	return (_code == SYSTEM_STATUS_OK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
 }
 
+extern osThreadId_t lvglThreadId;
+
+int lvgl_start_ui()
+{
+	if (lvglThreadId == NULL)
+		return OPERATE_FAILED;
+
+	osStatus_t status = osThreadResume(lvglThreadId);
+	return (status == osOK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
+int lvgl_stop_ui()
+{
+	if (lvglThreadId == NULL)
+		return OPERATE_FAILED;
+
+	osStatus_t status = osThreadSuspend(lvglThreadId);
+	return (status == osOK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
 

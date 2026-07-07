@@ -4129,6 +4129,56 @@
               <FileType>1</FileType>
               <FilePath>..\GUI\GUI_Task.c</FilePath>
             </File>
+            <File>
+              <FileName>GUI_Main.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Main.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Main.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Main.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Manage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Manage.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Manage.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Manage.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_FileManage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_FileManage.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_FileManage.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_FileManage.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_NES.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_NES.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_NES.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_NES.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Player.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Player.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Player.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Player.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

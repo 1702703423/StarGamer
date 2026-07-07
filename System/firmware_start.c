@@ -22,7 +22,7 @@
 #include "key.h"
 #include "lvgl.h"
 #include "lv_port_disp_template.h"
-#include "lv_demo_stress.h"
+#include "../GUI/GUI_Main.h"
 
 /* External globals */
 extern Shell shell;
@@ -48,6 +48,7 @@ static const osThreadAttr_t lvglTask_attributes = {
 	.stack_size = sizeof(lvglTaskBuffer),
 	.priority = (osPriority_t) osPriorityNormal,
 };
+osThreadId_t lvglThreadId = NULL;
 
 /* ---- LVGL timer handler task ---- */
 static void lvgl_timer_task(void *arg)
@@ -89,9 +90,9 @@ void System_init()
 
 	SRT.frame_buffer_table = creat_chain(0, &code);
 	SRT.task_table = creat_chain(0, &code);
-
+	SRT.task_table = creat_chain(0,&code);
+	
 	creat_frame_buffer(&code);/*本项目架构中默认第一缓冲区为LVGL缓冲*/
-	creat_frame_buffer(&code);//当前开发阶段第二缓冲区用于屏幕debug
 	
 }
 
@@ -187,23 +188,38 @@ int mount_fs()
 
 /* ---- Main application entry (called from StartDefaultTask) ---- */
 
-FIL file;
-
-void test_run(void)
+static void LVGL_shellLog(const char* log)
 {
-	int res;
-	System_init();
-	bsp_init();
-		/* LVGL 初始化 */
+	shellPrintEndLine(&shell,log);
+}
+
+static void lvgl_init()
+{
 	lv_init();
 	lv_port_disp_init();
 	lv_port_indev_init();
-//	osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
-	res = mount_fs();
-	Wave_Infomation WI;
-	lv_demo_stress();
-	nes_load((u8*)"0://Super Mario.NES");
+	if(SCI.Debug)
+	{
+		lv_log_register_print_cb(LVGL_shellLog);
+	}
+	lvglThreadId = osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
+}
 
+static void GUI_Init(void)
+{
+	(void)GUI_Main_Init();
+}
+
+void init(void)
+{
+	int res;
+	res = mount_fs();
+	System_init();
+	bsp_init();
+		/* LVGL 初始化 */
+	lvgl_init();
+//	nes_load((u8*)"0://SICHUAN.NES");
+	GUI_Init();
 //	LCD_Fill(1, 1, 320, 240, BLACK, p);
 //	LCD_Flush(p);lcd_test();
 
@@ -234,9 +250,6 @@ void test_run(void)
 //		shellPrintEndLine(&shell, "res:%d\n", enterFunc(0, NULL));
 //		dl_destroy_lib(&DL);
 //	}
-	
-	f_open(&file,"0:/33.wav",FA_READ);
-	PlayerStart(&file);
 
 	if (res) {
 		while (1) {

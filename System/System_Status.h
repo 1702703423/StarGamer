@@ -5,6 +5,7 @@
 
 #include "sys.h"
 #include "stdarg.h"
+#include "adt_chain.h"
 
 //paramenter
 
@@ -47,22 +48,22 @@ typedef struct System_Core_Information
 	u32 AppBinLength;
 }System_Core_Information_t;
 
+typedef struct System_Settings
+{
+	u32 volume;
+	u8 Debug;
+	u16 ScreenLight;
+}System_Settings_t;
+
 typedef struct System_API
 {
 	
 }System_API_t;
 
-typedef struct adt_chain
-{
-	uint8_t memx;
-	struct adt_chain* next;
-	void* data;
-}adt_chain_t;
-
 typedef struct Frame_Buffer_Status
 {
-	uint8_t* pointer;//֡������ָ��
-	uint8_t state;//״̬��æ/���У�
+	uint8_t* pointer;
+	uint8_t state;
 }Frame_Buffer_Status_t;
 
 typedef struct SYS_Task_Control_Table
@@ -77,6 +78,7 @@ typedef struct System_Resource_Table
 {
 	adt_chain_t* frame_buffer_table;
 	adt_chain_t* task_table;
+	adt_chain_t* page_table;
 }System_Resource_Table_t;
 
 extern System_Resource_Table_t SRT;
@@ -88,7 +90,7 @@ int AxfDebugInfoPushToUart(const char* string, va_list arg);
 osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAttr_t* attr,uint8_t ui);
 int SysUnregisterThread(osThreadId_t tid);
 int SysTerminateThread(osThreadId_t tid);
-
-#include "adt_chain.h"
+int lvgl_start_ui(void);
+int lvgl_stop_ui(void);
 
 #endif

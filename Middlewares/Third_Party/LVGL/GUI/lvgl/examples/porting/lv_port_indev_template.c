@@ -218,14 +218,13 @@ static uint32_t keypad_get_key(void)
 {
     u32 state = KEY_GetState();
 
+    if ((state & KEY_GAME_OK) != 0U) return LV_KEY_ENTER;
+    if ((state & KEY_GAME_B) != 0U) return LV_KEY_ESC;
     if ((state & KEY_GAME_UP) != 0U) return LV_KEY_UP;
     if ((state & KEY_GAME_DOWN) != 0U) return LV_KEY_DOWN;
     if ((state & KEY_GAME_LEFT) != 0U) return LV_KEY_LEFT;
     if ((state & KEY_GAME_RIGHT) != 0U) return LV_KEY_RIGHT;
-    if ((state & KEY_GAME_A) != 0U) return LV_KEY_ENTER;
-    if ((state & KEY_GAME_B) != 0U) return LV_KEY_ESC;
     if ((state & KEY_GAME_SELECT) != 0U) return LV_KEY_PREV;
-    if ((state & KEY_GAME_START) != 0U) return LV_KEY_NEXT;
 
     return 0;
 }
