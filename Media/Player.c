@@ -6,6 +6,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "i2s.h"
+#include "ccm_memory.h"
 
 extern I2S_HandleTypeDef hi2s3;
 extern SD_HandleTypeDef hsd;
@@ -35,7 +36,7 @@ typedef enum WAV_RES_t  {
 #define EVENT_PLAYER_WAIT (EVENT_DMA_EMPTY | EVENT_STOP_PLAYER | EVENT_PAUSE_PLAYER)
 #define PLAYER_PATH_SIZE 256U
 
-uint32_t WavTaskBuffer[ 4096 ];
+uint32_t WavTaskBuffer[ 2048 ] CCM_THREAD_STACK;
 static osThreadId_t WavTaskHandle;
 static FIL WavFile;
 static u8 WavFileOpened = 0U;

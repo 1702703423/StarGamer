@@ -11,6 +11,7 @@
 #include "Malloc.h"
 #include "shell.h"
 #include "shell_support.h"
+#include "ccm_memory.h"
 #include <stdarg.h>
 
 /* Types and externs from main.c */
@@ -30,7 +31,7 @@ extern int AxfDebugInfoPushToUart(const char *string, va_list arg);
 #define SHELL_THREAD_STACK_SIZE  1024
 #define SHELL_BUFFER_SIZE        1024
 char shell_buffer[SHELL_BUFFER_SIZE];
-static uint32_t shellTaskBuffer[SHELL_THREAD_STACK_SIZE];
+static uint32_t shellTaskBuffer[SHELL_THREAD_STACK_SIZE] CCM_THREAD_STACK;
 static osStaticThreadDef_t shellTaskControlBlock;
 const osThreadAttr_t shellTask_attributes = {
   .name = "shellTask",

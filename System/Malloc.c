@@ -1,7 +1,9 @@
 #include "Malloc.h"
 #include "System_Status.h"
 
-static __ALIGNED(64) uint8_t CCMRAM[CCMRAMSize] __attribute__((section(".bss.ARM.__at_0x10000000")));
+#define SYS_MEM_INVALID 0xFFU
+
+static __ALIGNED(64) uint8_t CCMRAM[CCMRAMSize] __attribute__((section(CCM_HEAP_SECTION)));
 static __ALIGNED(64) uint8_t mem3base[MEM3_MAX_SIZE] __attribute__((section(".bss.ARM.__at_0x68000000")));      /* 外部SRAM内存池 */ 
 
 /* 内存管理参数 */
@@ -10,7 +12,7 @@ const uint32_t memblksize[SRAMBANK] = {MEM2_BLOCK_SIZE, MEM3_BLOCK_SIZE};       
 const uint32_t memsize[SRAMBANK] = {MEM2_MAX_SIZE, MEM3_MAX_SIZE};                               /* 内存总大小 */
 
 /* 内存管理表 */                                                            /* 内部SRAM内存池MAP */
-static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE] __attribute__((section(".bss.ARM.__at_0x1000F000")));         /* 内部CCM内存池MAP */
+static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE] __attribute__((section(CCM_HEAP_MAP_SECTION)));         /* 内部CCM内存池MAP */
 static MT_TYPE mem3mapbase[MEM3_ALLOC_TABLE_SIZE] __attribute__((section(".bss.ARM.__at_0x680F0C00")));         /* 外部SRAM内存池MAP */
 
 /* 内存管理控制器 */
@@ -23,6 +25,48 @@ struct _m_mallco_dev mallco_dev =
     0, 0,                                    /* 内存管理未就绪 */
 };
 
+static uint8_t sys_memx_from_ptr(const void *ptr)
+{
+    uint8_t memx;
+    uint32_t addr;
+
+    if (ptr == NULL) return SYS_MEM_INVALID;
+
+    addr = (uint32_t)ptr;
+    for (memx = 0; memx < SRAMBANK; memx++)
+    {
+        uint32_t base = (uint32_t)mallco_dev.membase[memx];
+        uint32_t end = base + memsize[memx];
+
+        if (addr >= base && addr < end) return memx;
+    }
+
+    return SYS_MEM_INVALID;
+}
+
+static uint32_t sys_mem_used_size(uint8_t memx, const void *ptr)
+{
+    uint32_t addr;
+    uint32_t base;
+    uint32_t offset;
+    uint32_t index;
+    uint32_t blocks;
+
+    if (ptr == NULL || memx >= SRAMBANK) return 0U;
+
+    addr = (uint32_t)ptr;
+    base = (uint32_t)mallco_dev.membase[memx];
+    if (addr < base || addr >= (base + memsize[memx])) return 0U;
+
+    offset = addr - base;
+    index = offset / memblksize[memx];
+    if (index >= memtblsize[memx]) return 0U;
+
+    blocks = mallco_dev.memmap[memx][index];
+    if (blocks == 0U) return 0U;
+
+    return blocks * memblksize[memx];
+}
 /**
  * @brief       复制内存
  * @param       *des : 目的地址
@@ -233,18 +277,40 @@ void *sys_malloc(uint8_t memx, uint32_t size)
 void *myrealloc(uint8_t memx, void *ptr, uint32_t size)
 {
     uint32_t offset;
-    
+    uint32_t old_offset;
+    uint32_t copy_size;
+    void *new_ptr;
+
+    if (ptr == NULL) return sys_malloc(memx, size);
+
+    if (sys_memx_from_ptr(ptr) != memx) return NULL;
+
+    if (size == 0U)
+    {
+        sys_free(memx, ptr);
+        return NULL;
+    }
+
+    osKernelLock();
+
     offset = my_mem_malloc(memx, size);
-    if (offset == 0xFFFFFFFF)   /* 申请出错 */
+    if (offset == 0xFFFFFFFFU)
     {
-        return NULL;            /* 返回空(0) */
+        osKernelUnlock();
+        return NULL;
     }
-    else                        /* 申请没问题, 返回首地址 */
-    {
-        sys_mem_copy((void *)((uint32_t)mallco_dev.membase[memx] + offset), ptr, size);  /* 拷贝旧内存内容到新内存 */
-        sys_free(memx, ptr);      /* 释放旧内存 */
-        return (void *)((uint32_t)mallco_dev.membase[memx] + offset);                   /* 返回新内存首地址 */
-    }
+
+    new_ptr = (void *)((uint32_t)mallco_dev.membase[memx] + offset);
+    copy_size = sys_mem_used_size(memx, ptr);
+    if (copy_size > size) copy_size = size;
+    if (copy_size != 0U) sys_mem_copy(new_ptr, ptr, copy_size);
+
+    old_offset = (uint32_t)ptr - (uint32_t)mallco_dev.membase[memx];
+    my_mem_free(memx, old_offset);
+
+    osKernelUnlock();
+
+    return new_ptr;
 }
 
 /**
@@ -288,15 +354,35 @@ void sys_free_aligned(uint8_t memx, void *ptr)
 
 void *lv_mem_malloc(uint32_t size)
 {
-	return (void*)sys_malloc(0,size);
+    return (void *)sys_malloc(LVGL_MEM_POOL, size);
 }
 
-void lv__mem_free(void* ptr)
+void lv__mem_free(void *ptr)
 {
-	sys_free(0,ptr);
+    uint8_t memx;
+
+    if (ptr == NULL) return;
+
+    memx = sys_memx_from_ptr(ptr);
+    if (memx == SYS_MEM_INVALID) return;
+
+    sys_free(memx, ptr);
 }
 
-void *lv__mem_realloc(void* ptr,uint32_t size)
+void *lv__mem_realloc(void *ptr, uint32_t size)
 {
-	return (void*)myrealloc(0,ptr,size);
+    uint8_t memx;
+
+    if (ptr == NULL) return lv_mem_malloc(size);
+
+    if (size == 0U)
+    {
+        lv__mem_free(ptr);
+        return NULL;
+    }
+
+    memx = sys_memx_from_ptr(ptr);
+    if (memx == SYS_MEM_INVALID) return NULL;
+
+    return (void *)myrealloc(memx, ptr, size);
 }

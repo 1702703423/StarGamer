@@ -1,5 +1,6 @@
 #include "key.h"
 #include "main.h"
+#include "ccm_memory.h"
 
 #define KEY_SCAN_PERIOD_MS      5U
 #define KEY_DEBOUNCE_MS         20U
@@ -30,7 +31,7 @@ static osThreadId_t key_thread_id;
 static osMessageQueueId_t key_event_queue;
 
 static StaticTask_t key_thread_cb;
-static u32 key_thread_stack[KEY_THREAD_STACK_WORDS];
+static u32 key_thread_stack[KEY_THREAD_STACK_WORDS] CCM_THREAD_STACK;
 static const osThreadAttr_t key_thread_attr =
 {
 	.name = "KEY",

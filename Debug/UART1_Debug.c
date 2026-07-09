@@ -9,6 +9,7 @@
 #include "Player.h"
 #include "shell.h"
 #include "shell_support.h"
+#include "ccm_memory.h"
 
 extern Shell shell;
 
@@ -456,10 +457,11 @@ int shellSysStats(int argc, char *argv[])
 	shellPrintEndLine(&shell, "CPU Usage:       %lu.%lu%%\n",
 	                  cpu_used_x10 / 10, cpu_used_x10 % 10);
 	shellPrintEndLine(&shell, "\n--- SRAM ---\n");
-	shellPrintEndLine(&shell, "CCM (60KB):      %u.%u%% used (%lu/%lu KB free)\n",
+	shellPrintEndLine(&shell, "CCM heap (%luKB): %u.%u%% used (%lu/%lu KB free)\n",
+	                  (uint32_t)CCM_HEAP_SIZE_KB,
 	                  ccm_used / 10, ccm_used % 10,
-	                  (uint32_t)(60 - (60 * ccm_used / 1000)),
-	                  (uint32_t)60);
+	                  (uint32_t)(CCM_HEAP_SIZE_KB - (CCM_HEAP_SIZE_KB * ccm_used / 1000)),
+	                  (uint32_t)CCM_HEAP_SIZE_KB);
 	shellPrintEndLine(&shell, "Ext (963KB):     %u.%u%% used (%lu/%lu KB free)\n",
 	                  sram_used / 10, sram_used % 10,
 	                  (uint32_t)(963 - (963 * sram_used / 1000)),

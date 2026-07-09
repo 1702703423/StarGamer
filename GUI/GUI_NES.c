@@ -5,6 +5,7 @@
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "ccm_memory.h"
 
 #define GUI_NES_THREAD_STACK_WORDS      2048U
 #define GUI_NES_LAUNCH_DELAY_MS         80U
@@ -50,7 +51,7 @@ static const char * const s_nes_extensions[] =
 	".nes"
 };
 
-static u32 s_nes_thread_stack[GUI_NES_THREAD_STACK_WORDS];
+static u32 s_nes_thread_stack[GUI_NES_THREAD_STACK_WORDS] CCM_THREAD_STACK;
 static osStaticThreadDef_t s_nes_thread_cb;
 static const osThreadAttr_t s_nes_thread_attr =
 {

@@ -1,0 +1,18 @@
+; *************************************************************
+; Star Gamer scatter file with CCM thread-stack region.
+; *************************************************************
+
+LR_IROM1 0x08000000 0x00100000  {
+  ER_IROM1 0x08000000 0x00100000  {
+   *.o (RESET, +First)
+   *(InRoot$$Sections)
+   .ANY (+RO)
+   .ANY (+XO)
+  }
+  RW_CCM_STACK 0x10000000 0x0000A000  {
+   *(.ccm_thread_stack)
+  }
+  RW_IRAM1 0x20000000 0x00020000  {
+   .ANY (+RW +ZI)
+  }
+}

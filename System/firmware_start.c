@@ -23,6 +23,7 @@
 #include "lvgl.h"
 #include "lv_port_disp_template.h"
 #include "../GUI/GUI_Main.h"
+#include "ccm_memory.h"
 
 /* External globals */
 extern Shell shell;
@@ -36,16 +37,16 @@ extern void shell_fs_init(void);
 extern void lv_port_indev_init(void);
 
 /* ---- LVGL timer handler thread ---- */
-#define LVGL_THREAD_STACK_SIZE  2048
+#define LVGL_THREAD_STACK_SIZE  8192U
 typedef StaticTask_t osStaticThreadDef_t;
-static uint32_t lvglTaskBuffer[LVGL_THREAD_STACK_SIZE];
+static uint32_t lvglTaskBuffer[LVGL_THREAD_STACK_SIZE / sizeof(uint32_t)] CCM_THREAD_STACK;
 static osStaticThreadDef_t lvglTaskControlBlock;
 static const osThreadAttr_t lvglTask_attributes = {
 	.name = "LVGL",
 	.cb_mem = &lvglTaskControlBlock,
 	.cb_size = sizeof(lvglTaskControlBlock),
 	.stack_mem = &lvglTaskBuffer[0],
-	.stack_size = sizeof(lvglTaskBuffer),
+	.stack_size = LVGL_THREAD_STACK_SIZE,
 	.priority = (osPriority_t) osPriorityNormal,
 };
 osThreadId_t lvglThreadId = NULL;
@@ -90,7 +91,6 @@ void System_init()
 
 	SRT.frame_buffer_table = creat_chain(0, &code);
 	SRT.task_table = creat_chain(0, &code);
-	SRT.task_table = creat_chain(0,&code);
 	
 	creat_frame_buffer(&code);/*本项目架构中默认第一缓冲区为LVGL缓冲*/
 	

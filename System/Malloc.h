@@ -3,8 +3,9 @@
 
 #include "sys.h"
 #include "cmsis_os.h"
+#include "ccm_memory.h"
 
-#define CCMRAMSize (60 * 1024)
+#define CCMRAMSize CCM_HEAP_SIZE
 #define ST7789s_ScreenBufferSize (150*1024)
 
 /* 定义内存管理表类型,当外扩SDRAM的时候，必须使用uint32_t类型，否则可以定义成uint16_t，以节省内存占用 */
@@ -13,6 +14,7 @@
 /* 定义3个内存池 */
 #define SRAMCCM                 0                               /* CCM内存池(此部分SRAM仅仅CPU可以访问!!!) */
 #define SRAMEX                  1                               /* 外部内存池 */
+#define LVGL_MEM_POOL           SRAMEX                          /* Keep LVGL heap out of CCM. */
 
 #define SRAMBANK                2                               /* 定义支持的SRAM块数 */
 
@@ -29,8 +31,8 @@
 
 /* mem2内存参数设定.mem2处于CCM,用于管理CCM(特别注意,这部分SRAM,仅CPU可以访问!!) */
 #define MEM2_BLOCK_SIZE         32                              /* 内存块大小为32字节 */
-#define MEM2_MAX_SIZE           60 * 1024                       /* 最大管理内存60K */
-#define MEM2_ALLOC_TABLE_SIZE   MEM2_MAX_SIZE/MEM2_BLOCK_SIZE   /* 内存表大小 */
+#define MEM2_MAX_SIZE           CCMRAMSize                      /* CCM heap size */
+#define MEM2_ALLOC_TABLE_SIZE   (MEM2_MAX_SIZE / MEM2_BLOCK_SIZE)   /* 内存表大小 */
 
 /* 内存管理控制器 */
 struct _m_mallco_dev

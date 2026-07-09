@@ -37,6 +37,7 @@
 #include "shell.h"
 #include "shell_support.h"
 #include "firmware.h"
+#include "ccm_memory.h"
 
 System_Status_Information_t SSI;
 System_Core_Information_t SCI;
@@ -91,7 +92,7 @@ SRAM_HandleTypeDef hsram3;
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
-uint32_t defaultTaskBuffer[ 1024 ];
+uint32_t defaultTaskBuffer[ 1024 ] CCM_THREAD_STACK;
 osStaticThreadDef_t defaultTaskControlBlock;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
@@ -107,7 +108,7 @@ const osThreadAttr_t defaultTask_attributes = {
 #define DAC_SINE_TABLE_SIZE     1000
 #define DAC_THREAD_STACK_SIZE   512
 static uint32_t dac_sine_table[DAC_SINE_TABLE_SIZE];
-static uint32_t dacTaskBuffer[DAC_THREAD_STACK_SIZE];
+static uint32_t dacTaskBuffer[DAC_THREAD_STACK_SIZE] CCM_THREAD_STACK;
 static osStaticThreadDef_t dacTaskControlBlock;
 const osThreadAttr_t dacTask_attributes = {
   .name = "dacTask",
