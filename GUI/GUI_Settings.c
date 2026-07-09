@@ -1,4 +1,5 @@
 #include "GUI_Settings.h"
+#include "GUI_Font.h"
 #include "System_Status.h"
 #include "w25q64.h"
 
@@ -45,6 +46,7 @@ typedef struct
 	lv_obj_t *about_panel;
 	lv_obj_t *about_label;
 	lv_obj_t *about_close_btn;
+	lv_obj_t *font_btn;
 	lv_obj_t *about_btn;
 	lv_obj_t *first_item_btn;
 	char about_text[GUI_SETTINGS_TEXT_LEN];
@@ -68,6 +70,8 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context);
+static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context);
+static void GUI_Settings_SetListButtonText(lv_obj_t *btn, const char *text);
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text);
 static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *focus_obj);
 static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_obj_t **first_obj);
@@ -123,6 +127,7 @@ static int GUI_Settings_PageBuild(Page_Struct_t *page)
 	GUI_Settings_CreateList(&s_settings);
 	GUI_Settings_CreateAboutPanel(&s_settings);
 	GUI_Settings_SetStatus(&s_settings, "Ready");
+	GUI_Settings_UpdateFontState(&s_settings);
 
 	return SYSTEM_STATUS_OK;
 }
@@ -132,6 +137,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 	(void)page;
 	(void)user_data;
 
+	GUI_Settings_UpdateFontState(&s_settings);
 	GUI_Settings_RebuildFocus(&s_settings, s_settings.first_item_btn);
 	GUI_Settings_WaitInputRelease();
 	lv_obj_invalidate(s_settings.screen);
@@ -227,8 +233,17 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item)
 {
 	lv_obj_t *btn;
+	const char *text;
+	u8 disabled = 0U;
 
-	btn = lv_list_add_btn(context->list, item->symbol, item->text);
+	text = item->text;
+	if (item->action == GUI_SETTINGS_ACTION_FONT && GUI_Font_IsInstalled() != 0U)
+	{
+		text = "Font Installed";
+		disabled = 1U;
+	}
+
+	btn = lv_list_add_btn(context->list, item->symbol, text);
 	lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
 	lv_obj_set_style_radius(btn, 4, 0);
 	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
@@ -241,12 +256,25 @@ static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_S
 	lv_obj_set_style_outline_width(btn, 0, 0);
 	lv_obj_set_style_text_color(btn, lv_color_hex(0xEEF2F6U), 0);
 	lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_FOCUSED);
+	lv_obj_set_style_text_color(btn, lv_color_hex(0x6F7A86U), LV_STATE_DISABLED);
+	lv_obj_set_style_bg_color(btn, lv_color_hex(0x151A20U), LV_STATE_DISABLED);
 	lv_obj_add_event_cb(btn, GUI_Settings_ItemEvent, LV_EVENT_CLICKED, (void *)item);
 	lv_obj_add_event_cb(btn, GUI_Settings_ItemEvent, LV_EVENT_KEY, (void *)item);
 
-	if (context->first_item_btn == NULL)
+	if (disabled != 0U)
+	{
+		lv_obj_add_state(btn, LV_STATE_DISABLED);
+		lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+	}
+
+	if (context->first_item_btn == NULL && disabled == 0U)
 	{
 		context->first_item_btn = btn;
+	}
+
+	if (item->action == GUI_SETTINGS_ACTION_FONT)
+	{
+		context->font_btn = btn;
 	}
 
 	if (item->action == GUI_SETTINGS_ACTION_ABOUT)
@@ -453,7 +481,23 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 	switch (action)
 	{
 		case GUI_SETTINGS_ACTION_FONT:
-			GUI_Settings_SetStatus(context, "Font installer is not ready");
+			if (GUI_Font_IsInstalled() != 0U)
+			{
+				GUI_Settings_UpdateFontState(context);
+				GUI_Settings_SetStatus(context, "Font already installed");
+			}
+			else
+			{
+				GUI_Settings_WaitInputRelease();
+				if (GUI_Font_Show() == SYSTEM_STATUS_OK)
+				{
+					GUI_Settings_SetStatus(context, "Select XBF font bin");
+				}
+				else
+				{
+					GUI_Settings_SetStatus(context, "Font installer failed");
+				}
+			}
 			break;
 		case GUI_SETTINGS_ACTION_UPDATE:
 			GUI_Settings_SetStatus(context, "Update installer is not ready");
@@ -545,6 +589,58 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	lv_label_set_text(context->about_label, context->about_text);
 }
 
+static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context)
+{
+	if (context == NULL || context->font_btn == NULL)
+	{
+		return;
+	}
+
+	if (GUI_Font_IsInstalled() != 0U)
+	{
+		GUI_Settings_SetListButtonText(context->font_btn, "Font Installed");
+		lv_obj_add_state(context->font_btn, LV_STATE_DISABLED);
+		lv_obj_clear_flag(context->font_btn, LV_OBJ_FLAG_CLICKABLE);
+		GUI_Settings_SetStatus(context, "Font already installed");
+		if (context->first_item_btn == context->font_btn)
+		{
+			context->first_item_btn = NULL;
+		}
+	}
+	else
+	{
+		GUI_Settings_SetListButtonText(context->font_btn, "Install Font");
+		lv_obj_clear_state(context->font_btn, LV_STATE_DISABLED);
+		lv_obj_add_flag(context->font_btn, LV_OBJ_FLAG_CLICKABLE);
+		if (context->first_item_btn == NULL)
+		{
+			context->first_item_btn = context->font_btn;
+		}
+	}
+}
+
+static void GUI_Settings_SetListButtonText(lv_obj_t *btn, const char *text)
+{
+	u32 i;
+	u32 child_count;
+
+	if (btn == NULL || text == NULL)
+	{
+		return;
+	}
+
+	child_count = lv_obj_get_child_cnt(btn);
+	for (i = 0U; i < child_count; i++)
+	{
+		lv_obj_t *child = lv_obj_get_child(btn, (s32)i);
+		if (lv_obj_check_type(child, &lv_label_class))
+		{
+			lv_label_set_text(child, text);
+			return;
+		}
+	}
+}
+
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text)
 {
 	if (context == NULL || context->status_label == NULL)
@@ -623,7 +719,7 @@ static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *paren
 			continue;
 		}
 
-		if (lv_obj_is_group_def(child))
+		if (lv_obj_is_group_def(child) && !lv_obj_has_state(child, LV_STATE_DISABLED))
 		{
 			lv_group_add_obj(group, child);
 			if (first_obj != NULL && *first_obj == NULL)

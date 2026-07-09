@@ -149,13 +149,13 @@
  * @brief shell内存分配
  *        shell本身不需要此接口，若使用shell伴生对象，需要进行定义
  */
-#define     SHELL_MALLOC(size)          sys_malloc(0,size)
+#define     SHELL_MALLOC(size)          sys_malloc(SRAMEX,size)
 
 /**
  * @brief shell内存释放
  *        shell本身不需要此接口，若使用shell伴生对象，需要进行定义
  */
-#define     SHELL_FREE(obj)             sys_free(0,obj)
+#define     SHELL_FREE(obj)             sys_free(SRAMEX,obj)
 
 /**
  * @brief 是否显示shell信息

@@ -86,7 +86,6 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
-#define ST7789s_ScreenBufferSize (150*1024)
 #define W25Q64_CS_Pin GPIO_PIN_6
 #define W25Q64_CS_GPIO_Port GPIOE
 

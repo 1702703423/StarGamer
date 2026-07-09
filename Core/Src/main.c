@@ -42,6 +42,7 @@
 System_Status_Information_t SSI;
 System_Core_Information_t SCI;
 System_Resource_Table_t SRT;
+System_Settings_t System_Settings;
 Shell shell;
 
 extern void System_init(void);
@@ -91,31 +92,31 @@ UART_HandleTypeDef huart1;
 SRAM_HandleTypeDef hsram3;
 
 /* Definitions for defaultTask */
+#define DEFAULT_TASK_STACK_SIZE 4096U
 osThreadId_t defaultTaskHandle;
-uint32_t defaultTaskBuffer[ 1024 ] CCM_THREAD_STACK;
+static void *defaultTaskStackMem;
 osStaticThreadDef_t defaultTaskControlBlock;
-const osThreadAttr_t defaultTask_attributes = {
+osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .cb_mem = &defaultTaskControlBlock,
   .cb_size = sizeof(defaultTaskControlBlock),
-  .stack_mem = &defaultTaskBuffer[0],
-  .stack_size = sizeof(defaultTaskBuffer),
+  .stack_mem = NULL,
+  .stack_size = DEFAULT_TASK_STACK_SIZE,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
 
 /* DAC1 sine wave test thread */
 #define DAC_SINE_TABLE_SIZE     1000
-#define DAC_THREAD_STACK_SIZE   512
+#define DAC_THREAD_STACK_SIZE   2048U
 static uint32_t dac_sine_table[DAC_SINE_TABLE_SIZE];
-static uint32_t dacTaskBuffer[DAC_THREAD_STACK_SIZE] CCM_THREAD_STACK;
 static osStaticThreadDef_t dacTaskControlBlock;
-const osThreadAttr_t dacTask_attributes = {
+osThreadAttr_t dacTask_attributes = {
   .name = "dacTask",
   .cb_mem = &dacTaskControlBlock,
   .cb_size = sizeof(dacTaskControlBlock),
-  .stack_mem = &dacTaskBuffer[0],
-  .stack_size = sizeof(dacTaskBuffer),
+  .stack_mem = NULL,
+  .stack_size = DAC_THREAD_STACK_SIZE,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE END PV */
@@ -196,6 +197,13 @@ int main(void)
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
+  sys_mem_init(SRAMCCM);
+  defaultTaskStackMem = sys_thread_stack_alloc(DEFAULT_TASK_STACK_SIZE);
+  if (defaultTaskStackMem == NULL)
+  {
+    Error_Handler();
+  }
+  defaultTask_attributes.stack_mem = defaultTaskStackMem;
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
@@ -405,7 +413,7 @@ static void MX_SDIO_SD_Init(void)
   hsd.Init.ClockPowerSave = SDIO_CLOCK_POWER_SAVE_DISABLE;
   hsd.Init.BusWide = SDIO_BUS_WIDE_1B;
   hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
-  hsd.Init.ClockDiv = 4;
+  hsd.Init.ClockDiv = 7;
   /* USER CODE BEGIN SDIO_Init 2 */
 
   /* USER CODE END SDIO_Init 2 */

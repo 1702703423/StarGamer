@@ -5,9 +5,10 @@
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "ccm_memory.h"
+#include "Malloc.h"
 
 #define GUI_NES_THREAD_STACK_WORDS      2048U
+#define GUI_NES_THREAD_STACK_SIZE       (GUI_NES_THREAD_STACK_WORDS * sizeof(u32))
 #define GUI_NES_LAUNCH_DELAY_MS         80U
 #define GUI_NES_RESULT_PENDING          0xFFU
 #define GUI_NES_RESULT_STOP_FAILED      0xFEU
@@ -51,15 +52,14 @@ static const char * const s_nes_extensions[] =
 	".nes"
 };
 
-static u32 s_nes_thread_stack[GUI_NES_THREAD_STACK_WORDS] CCM_THREAD_STACK;
 static osStaticThreadDef_t s_nes_thread_cb;
-static const osThreadAttr_t s_nes_thread_attr =
+static osThreadAttr_t s_nes_thread_attr =
 {
 	.name = "NES_Run",
 	.cb_mem = &s_nes_thread_cb,
 	.cb_size = sizeof(s_nes_thread_cb),
-	.stack_mem = &s_nes_thread_stack[0],
-	.stack_size = sizeof(s_nes_thread_stack),
+	.stack_mem = NULL,
+	.stack_size = GUI_NES_THREAD_STACK_SIZE,
 	.priority = (osPriority_t)osPriorityNormal,
 };
 
@@ -159,6 +159,20 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 	context->result = GUI_NES_RESULT_PENDING;
 	context->state = GUI_NES_STATE_STARTING;
 	context->active = 1U;
+
+	if (s_nes_thread_attr.stack_mem == NULL)
+	{
+		s_nes_thread_attr.stack_mem = sys_thread_stack_alloc((u32)s_nes_thread_attr.stack_size);
+	}
+	if (s_nes_thread_attr.stack_mem == NULL)
+	{
+		context->result = GUI_NES_RESULT_THREAD_FAILED;
+		context->state = GUI_NES_STATE_ERROR;
+		context->active = 0U;
+		GUI_FileManage_SetLocked(manager, 0U);
+		GUI_FileManage_SetStatus(manager, GUI_NES_ResultText(context->result));
+		return OUT_OF_HEAP_MEMORY;
+	}
 
 	context->thread_id = osThreadNew(GUI_NES_RunTask, context, &s_nes_thread_attr);
 	if (context->thread_id == NULL)

@@ -23,7 +23,6 @@
 #include "lvgl.h"
 #include "lv_port_disp_template.h"
 #include "../GUI/GUI_Main.h"
-#include "ccm_memory.h"
 
 /* External globals */
 extern Shell shell;
@@ -39,13 +38,12 @@ extern void lv_port_indev_init(void);
 /* ---- LVGL timer handler thread ---- */
 #define LVGL_THREAD_STACK_SIZE  8192U
 typedef StaticTask_t osStaticThreadDef_t;
-static uint32_t lvglTaskBuffer[LVGL_THREAD_STACK_SIZE / sizeof(uint32_t)] CCM_THREAD_STACK;
 static osStaticThreadDef_t lvglTaskControlBlock;
-static const osThreadAttr_t lvglTask_attributes = {
+static osThreadAttr_t lvglTask_attributes = {
 	.name = "LVGL",
 	.cb_mem = &lvglTaskControlBlock,
 	.cb_size = sizeof(lvglTaskControlBlock),
-	.stack_mem = &lvglTaskBuffer[0],
+	.stack_mem = NULL,
 	.stack_size = LVGL_THREAD_STACK_SIZE,
 	.priority = (osPriority_t) osPriorityNormal,
 };
@@ -72,8 +70,11 @@ void System_init()
 	int code;
 	
 	//内存池初始化
-	sys_mem_init(0);
-	sys_mem_init(1);
+	if (mallco_dev.memrdy[SRAMCCM] == 0U)
+	{
+		sys_mem_init(SRAMCCM);
+	}
+	sys_mem_init(SRAMEX);
 	
 	//开发阶段，调试模式常开
 	SCI.Debug = 1;
@@ -85,12 +86,23 @@ void System_init()
 		shell_lock_create();
 		shellInit(&shell, shell_buffer, SHELL_BUFFER_SIZE);
 		shell_uart_rx_start();
-		osThreadNew(shellTask, &shell, &shellTask_attributes);
-		shell_fs_init();
+		if (shellTask_attributes.stack_mem == NULL)
+		{
+			shellTask_attributes.stack_mem = sys_thread_stack_alloc((u32)shellTask_attributes.stack_size);
+		}
+		if (shellTask_attributes.stack_mem == NULL)
+		{
+			SCI.Debug = 0U;
+		}
+		else
+		{
+			osThreadNew(shellTask, &shell, &shellTask_attributes);
+			shell_fs_init();
+		}
 	}
 
-	SRT.frame_buffer_table = creat_chain(0, &code);
-	SRT.task_table = creat_chain(0, &code);
+	SRT.frame_buffer_table = creat_chain(SRAMEX, &code);
+	SRT.task_table = creat_chain(SRAMEX, &code);
 	
 	creat_frame_buffer(&code);/*本项目架构中默认第一缓冲区为LVGL缓冲*/
 	
@@ -793,6 +805,13 @@ static void bsp_init()
 	{
 		shellPrintEndLine(&shell,"W25Q64Failed\r\n");
 	}
+	if(System_Settings_Init() == SYSTEM_STATUS_OK)
+	{
+		shellPrintEndLine(&shell,"SystemSettingsInitSuccess\r\n");
+	}else
+	{
+		shellPrintEndLine(&shell,"SystemSettingsInitFailed\r\n");
+	}
 }
 
 /* ---- Mount FATFS ---- */
@@ -821,9 +840,20 @@ static void lvgl_init()
 	lv_init();
 	lv_port_disp_init();
 	lv_port_indev_init();
+	#if LV_USE_LOG == 1
 	if(SCI.Debug)
 	{
 		lv_log_register_print_cb(LVGL_shellLog);
+	}
+	#endif
+	if (lvglTask_attributes.stack_mem == NULL)
+	{
+		lvglTask_attributes.stack_mem = sys_thread_stack_alloc((u32)lvglTask_attributes.stack_size);
+	}
+	if (lvglTask_attributes.stack_mem == NULL)
+	{
+		shellPrintEndLine(&shell, "LVGLTaskStackAllocFailed\r\n");
+		return;
 	}
 	lvglThreadId = osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
 }

@@ -5,6 +5,7 @@
 #ifndef __SHELL_SUPPORT_H__
 #define __SHELL_SUPPORT_H__
 
+#include "cmsis_os.h"
 #include "shell.h"
 
 /* Buffer size (must match shell_support.c) */
@@ -14,7 +15,7 @@
 extern volatile uint32_t cpu_idle_ticks;
 
 /* Shell thread attributes (exported for System_init) */
-extern const osThreadAttr_t shellTask_attributes;
+extern osThreadAttr_t shellTask_attributes;
 
 /* Core functions */
 void System_init(void);

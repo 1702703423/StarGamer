@@ -2,288 +2,310 @@
 #include "System_Status.h"
 
 #define SYS_MEM_INVALID 0xFFU
+#define SYS_ALIGN8(size) (((size) + 7U) & ~7U)
 
-static __ALIGNED(64) uint8_t CCMRAM[CCMRAMSize] __attribute__((section(CCM_HEAP_SECTION)));
-static __ALIGNED(64) uint8_t mem3base[MEM3_MAX_SIZE] __attribute__((section(".bss.ARM.__at_0x68000000")));      /* 外部SRAM内存池 */ 
+static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE];
+#define mem3mapbase ((MT_TYPE *)MEM3_MAP_BASE)
 
-/* 内存管理参数 */
-const uint32_t memtblsize[SRAMBANK] = {MEM2_ALLOC_TABLE_SIZE, MEM3_ALLOC_TABLE_SIZE};    /* 内存表大小 */
-const uint32_t memblksize[SRAMBANK] = {MEM2_BLOCK_SIZE, MEM3_BLOCK_SIZE};                      /* 内存分块大小 */
-const uint32_t memsize[SRAMBANK] = {MEM2_MAX_SIZE, MEM3_MAX_SIZE};                               /* 内存总大小 */
+const u32 memtblsize[SRAMBANK] = {MEM2_ALLOC_TABLE_SIZE, MEM3_ALLOC_TABLE_SIZE};
+const u32 memblksize[SRAMBANK] = {MEM2_BLOCK_SIZE, MEM3_BLOCK_SIZE};
+const u32 memsize[SRAMBANK] = {MEM2_MAX_SIZE, MEM3_MAX_SIZE};
 
-/* 内存管理表 */                                                            /* 内部SRAM内存池MAP */
-static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE] __attribute__((section(CCM_HEAP_MAP_SECTION)));         /* 内部CCM内存池MAP */
-static MT_TYPE mem3mapbase[MEM3_ALLOC_TABLE_SIZE] __attribute__((section(".bss.ARM.__at_0x680F0C00")));         /* 外部SRAM内存池MAP */
-
-/* 内存管理控制器 */
 struct _m_mallco_dev mallco_dev =
 {
-    sys_mem_init,                                /* 内存初始化 */
-    sys_mem_perused,                             /* 内存使用率 */
-    CCMRAM, mem3base,               /* 内存池 */
-    mem2mapbase, mem3mapbase,      /* 内存管理状态表 */
-    0, 0,                                    /* 内存管理未就绪 */
+    sys_mem_init,
+    sys_mem_perused,
+    {(u8 *)CCM_HEAP_BASE, (u8 *)SRAMEX_BASE},
+    {mem2mapbase, mem3mapbase},
+    {0U, 0U},
 };
 
-static uint8_t sys_memx_from_ptr(const void *ptr)
+static u8 sys_mem_lock(void)
 {
-    uint8_t memx;
-    uint32_t addr;
-
-    if (ptr == NULL) return SYS_MEM_INVALID;
-
-    addr = (uint32_t)ptr;
-    for (memx = 0; memx < SRAMBANK; memx++)
+    if (osKernelGetState() == osKernelRunning)
     {
-        uint32_t base = (uint32_t)mallco_dev.membase[memx];
-        uint32_t end = base + memsize[memx];
+        if (osKernelLock() >= 0)
+        {
+            return 1U;
+        }
+    }
 
-        if (addr >= base && addr < end) return memx;
+    return 0U;
+}
+
+static void sys_mem_unlock(u8 locked)
+{
+    if (locked != 0U)
+    {
+        (void)osKernelUnlock();
+    }
+}
+
+static u8 sys_memx_from_ptr(const void *ptr)
+{
+    u8 memx;
+    u32 addr;
+
+    if (ptr == NULL)
+    {
+        return SYS_MEM_INVALID;
+    }
+
+    addr = (u32)ptr;
+    for (memx = 0U; memx < SRAMBANK; memx++)
+    {
+        u32 base = (u32)mallco_dev.membase[memx];
+        u32 end = base + memsize[memx];
+
+        if (addr >= base && addr < end)
+        {
+            return memx;
+        }
     }
 
     return SYS_MEM_INVALID;
 }
 
-static uint32_t sys_mem_used_size(uint8_t memx, const void *ptr)
+static u32 sys_mem_used_size(u8 memx, const void *ptr)
 {
-    uint32_t addr;
-    uint32_t base;
-    uint32_t offset;
-    uint32_t index;
-    uint32_t blocks;
+    u32 addr;
+    u32 base;
+    u32 offset;
+    u32 index;
+    u32 blocks;
 
-    if (ptr == NULL || memx >= SRAMBANK) return 0U;
+    if (ptr == NULL || memx >= SRAMBANK)
+    {
+        return 0U;
+    }
 
-    addr = (uint32_t)ptr;
-    base = (uint32_t)mallco_dev.membase[memx];
-    if (addr < base || addr >= (base + memsize[memx])) return 0U;
+    addr = (u32)ptr;
+    base = (u32)mallco_dev.membase[memx];
+    if (addr < base || addr >= (base + memsize[memx]))
+    {
+        return 0U;
+    }
 
     offset = addr - base;
     index = offset / memblksize[memx];
-    if (index >= memtblsize[memx]) return 0U;
+    if (index >= memtblsize[memx])
+    {
+        return 0U;
+    }
 
     blocks = mallco_dev.memmap[memx][index];
-    if (blocks == 0U) return 0U;
+    if (blocks == 0U)
+    {
+        return 0U;
+    }
 
     return blocks * memblksize[memx];
 }
-/**
- * @brief       复制内存
- * @param       *des : 目的地址
- * @param       *src : 源地址
- * @param       n    : 需要复制的内存长度(字节为单位)
- * @retval      无
- */
-void sys_mem_copy(void *des, void *src, uint32_t n)
+
+void sys_mem_copy(void *des, void *src, u32 n)
 {
-    uint8_t *xdes = des;
-    uint8_t *xsrc = src;
+    u8 *xdes = des;
+    u8 *xsrc = src;
 
-    while (n--) *xdes++ = *xsrc++;
-}
-
-/**
- * @brief       设置内存值
- * @param       *s    : 内存首地址
- * @param       c     : 要设置的值
- * @param       count : 需要设置的内存大小(字节为单位)
- * @retval      无
- */
-void sys_mem_set(void *s, uint8_t c, uint32_t count)
-{
-    uint8_t *xs = s;
-
-    while (count--) *xs++ = c;
-}
-
-/**
- * @brief       内存管理初始化
- * @param       memx : 所属内存块
- * @retval      无
- */
-void sys_mem_init(uint8_t memx)
-{
-	osKernelLock();
-    uint8_t mttsize = sizeof(MT_TYPE);  /* 获取memmap数组的类型长度(uint16_t /uint32_t)*/
-    sys_mem_set(mallco_dev.memmap[memx], 0, memtblsize[memx] * mttsize); /* 内存状态表数据清零 */
-    mallco_dev.memrdy[memx] = 1;        /* 内存管理初始化OK */
-	osKernelUnlock();
-}
-
-/**
- * @brief       获取内存使用率
- * @param       memx : 所属内存块
- * @retval      使用率(扩大了10倍,0~1000,代表0.0%~100.0%)
- */
-uint16_t sys_mem_perused(uint8_t memx)
-{
-    uint32_t used = 0;
-    uint32_t i;
-
-    for (i = 0; i < memtblsize[memx]; i++)
+    while (n--)
     {
-        if (mallco_dev.memmap[memx][i]) used++;
+        *xdes++ = *xsrc++;
+    }
+}
+
+void sys_mem_set(void *s, u8 c, u32 count)
+{
+    u8 *xs = s;
+
+    while (count--)
+    {
+        *xs++ = c;
+    }
+}
+
+void sys_mem_init(u8 memx)
+{
+    u8 locked;
+    u32 mttsize;
+
+    if (memx >= SRAMBANK)
+    {
+        return;
     }
 
-    return (used * 1000) / (memtblsize[memx]);
+    locked = sys_mem_lock();
+    mttsize = sizeof(MT_TYPE);
+    sys_mem_set(mallco_dev.memmap[memx], 0U, memtblsize[memx] * mttsize);
+    mallco_dev.memrdy[memx] = 1U;
+    sys_mem_unlock(locked);
 }
 
-/**
- * @brief       内存分配(内部调用)
- * @param       memx : 所属内存块
- * @param       size : 要分配的内存大小(字节)
- * @retval      内存偏移地址
- *   @arg       0 ~ 0xFFFFFFFE : 有效的内存偏移地址
- *   @arg       0xFFFFFFFF     : 无效的内存偏移地址
- */
-static uint32_t my_mem_malloc(uint8_t memx, uint32_t size)
+u16 sys_mem_perused(u8 memx)
 {
-    signed long offset = 0;
-    uint32_t nmemb;         /* 需要的内存块数 */
-    uint32_t cmemb = 0;     /* 连续空内存块数 */
-    uint32_t i;
+    u32 used = 0U;
+    u32 i;
 
-    if (!mallco_dev.memrdy[memx])
+    if (memx >= SRAMBANK || memtblsize[memx] == 0U)
     {
-        mallco_dev.init(memx);          /* 未初始化,先执行初始化 */
+        return 1000U;
     }
-    
-    if (size == 0) return 0xFFFFFFFF;   /* 不需要分配 */
 
-    nmemb = size / memblksize[memx];    /* 获取需要分配的连续内存块数 */
-
-    if (size % memblksize[memx]) nmemb++;
-
-    for (offset = memtblsize[memx] - 1; offset >= 0; offset--)  /* 搜索整个内存控制区 */
+    for (i = 0U; i < memtblsize[memx]; i++)
     {
-        if (!mallco_dev.memmap[memx][offset])
+        if (mallco_dev.memmap[memx][i] != 0U)
         {
-            cmemb++;                    /* 连续空内存块数增加 */
-        }
-        else 
-        {
-            cmemb = 0;                  /* 连续内存块清零 */
-        }
-        
-        if (cmemb == nmemb)             /* 找到了连续nmemb个空内存块 */
-        {
-            for (i = 0; i < nmemb; i++) /* 标注内存块非空 */
-            {
-                mallco_dev.memmap[memx][offset + i] = nmemb;
-            }
-
-            return (offset * memblksize[memx]); /* 返回偏移地址 */
+            used++;
         }
     }
 
-    return 0xFFFFFFFF;                  /* 未找到符合分配条件的内存块 */
+    return (u16)((used * 1000U) / memtblsize[memx]);
 }
 
-/**
- * @brief       释放内存(内部调用)
- * @param       memx   : 所属内存块
- * @param       offset : 内存地址偏移
- * @retval      释放结果
- *   @arg       0, 释放成功;
- *   @arg       1, 释放失败;
- *   @arg       2, 超区域了(失败);
- */
-static uint8_t my_mem_free(uint8_t memx, uint32_t offset)
+static u32 my_mem_malloc(u8 memx, u32 size)
 {
-    int i;
+    signed long offset;
+    u32 nmemb;
+    u32 cmemb = 0U;
+    u32 i;
 
-    if (!mallco_dev.memrdy[memx])   /* 未初始化,先执行初始化 */
+    if (memx >= SRAMBANK)
+    {
+        return 0xFFFFFFFFU;
+    }
+
+    if (mallco_dev.memrdy[memx] == 0U)
     {
         mallco_dev.init(memx);
-        return 1;                   /* 未初始化 */
     }
 
-    if (offset < memsize[memx])     /* 偏移在内存池内. */
+    if (size == 0U)
     {
-        int index = offset / memblksize[memx];      /* 偏移所在内存块号码 */
-        int nmemb = mallco_dev.memmap[memx][index]; /* 内存块数量 */
+        return 0xFFFFFFFFU;
+    }
 
-        for (i = 0; i < nmemb; i++)                 /* 内存块清零 */
+    nmemb = size / memblksize[memx];
+    if ((size % memblksize[memx]) != 0U)
+    {
+        nmemb++;
+    }
+
+    for (offset = (signed long)memtblsize[memx] - 1L; offset >= 0L; offset--)
+    {
+        if (mallco_dev.memmap[memx][offset] == 0U)
         {
-            mallco_dev.memmap[memx][index + i] = 0;
+            cmemb++;
+        }
+        else
+        {
+            cmemb = 0U;
         }
 
-        return 0;
+        if (cmemb == nmemb)
+        {
+            for (i = 0U; i < nmemb; i++)
+            {
+                mallco_dev.memmap[memx][offset + (signed long)i] = (MT_TYPE)nmemb;
+            }
+
+            return (u32)offset * memblksize[memx];
+        }
     }
-    else
+
+    return 0xFFFFFFFFU;
+}
+
+static u8 my_mem_free(u8 memx, u32 offset)
+{
+    u32 i;
+    u32 index;
+    u32 nmemb;
+
+    if (memx >= SRAMBANK)
     {
-        return 2;   /* 偏移超区了 */
+        return 2U;
     }
+
+    if (mallco_dev.memrdy[memx] == 0U)
+    {
+        mallco_dev.init(memx);
+        return 1U;
+    }
+
+    if (offset >= memsize[memx])
+    {
+        return 2U;
+    }
+
+    index = offset / memblksize[memx];
+    nmemb = mallco_dev.memmap[memx][index];
+    if (nmemb == 0U)
+    {
+        return 1U;
+    }
+
+    for (i = 0U; i < nmemb && (index + i) < memtblsize[memx]; i++)
+    {
+        mallco_dev.memmap[memx][index + i] = 0U;
+    }
+
+    return 0U;
 }
 
-/**
- * @brief       释放内存(外部调用)
- * @param       memx : 所属内存块
- * @param       ptr  : 内存首地址
- * @retval      无
- */
-void sys_free(uint8_t memx, void *ptr)
+void sys_free(u8 memx, void *ptr)
 {
-		osKernelLock();
-	
-    uint32_t offset;
+    u8 locked;
+    u32 offset;
 
-    if (ptr == NULL) 
-		{
-			osKernelUnlock();
-			return;
-		}    /* 地址为0. */
+    if (ptr == NULL || memx >= SRAMBANK)
+    {
+        return;
+    }
 
-    offset = (uint32_t)ptr - (uint32_t)mallco_dev.membase[memx];
-    my_mem_free(memx, offset);  /* 释放内存 */
-	
-		osKernelUnlock();
+    locked = sys_mem_lock();
+    offset = (u32)ptr - (u32)mallco_dev.membase[memx];
+    (void)my_mem_free(memx, offset);
+    sys_mem_unlock(locked);
 }
 
-/**
- * @brief       分配内存(外部调用)
- * @param       memx : 所属内存块
- * @param       size : 要分配的内存大小(字节)
- * @retval      分配到的内存首地址.
- */
-void *sys_malloc(uint8_t memx, uint32_t size)
+void *sys_malloc(u8 memx, u32 size)
 {
-		osKernelLock();
-	
-    uint32_t offset;
-    
+    u8 locked;
+    u32 offset;
+    void *ptr = NULL;
+
+    if (memx >= SRAMBANK)
+    {
+        return NULL;
+    }
+
+    locked = sys_mem_lock();
     offset = my_mem_malloc(memx, size);
-    if (offset == 0xFFFFFFFF)   /* 申请出错 */
+    if (offset != 0xFFFFFFFFU)
     {
-				osKernelUnlock();
-        return NULL;            /* 返回空(0) */
+        ptr = (void *)((u32)mallco_dev.membase[memx] + offset);
     }
-    else                        /* 申请没问题, 返回首地址 */
-    {
-				osKernelUnlock();
-        return (void *)((uint32_t)mallco_dev.membase[memx] + offset);
-    }
-		
-		osKernelUnlock();
+    sys_mem_unlock(locked);
+
+    return ptr;
 }
 
-/**
- * @brief       重新分配内存(外部调用)
- * @param       memx : 所属内存块
- * @param       *ptr : 旧内存首地址
- * @param       size : 要分配的内存大小(字节)
- * @retval      新分配到的内存首地址.
- */
-void *myrealloc(uint8_t memx, void *ptr, uint32_t size)
+void *myrealloc(u8 memx, void *ptr, u32 size)
 {
-    uint32_t offset;
-    uint32_t old_offset;
-    uint32_t copy_size;
+    u8 locked;
+    u32 offset;
+    u32 old_offset;
+    u32 copy_size;
     void *new_ptr;
 
-    if (ptr == NULL) return sys_malloc(memx, size);
+    if (ptr == NULL)
+    {
+        return sys_malloc(memx, size);
+    }
 
-    if (sys_memx_from_ptr(ptr) != memx) return NULL;
+    if (sys_memx_from_ptr(ptr) != memx)
+    {
+        return NULL;
+    }
 
     if (size == 0U)
     {
@@ -291,89 +313,133 @@ void *myrealloc(uint8_t memx, void *ptr, uint32_t size)
         return NULL;
     }
 
-    osKernelLock();
-
+    locked = sys_mem_lock();
     offset = my_mem_malloc(memx, size);
     if (offset == 0xFFFFFFFFU)
     {
-        osKernelUnlock();
+        sys_mem_unlock(locked);
         return NULL;
     }
 
-    new_ptr = (void *)((uint32_t)mallco_dev.membase[memx] + offset);
+    new_ptr = (void *)((u32)mallco_dev.membase[memx] + offset);
     copy_size = sys_mem_used_size(memx, ptr);
-    if (copy_size > size) copy_size = size;
-    if (copy_size != 0U) sys_mem_copy(new_ptr, ptr, copy_size);
+    if (copy_size > size)
+    {
+        copy_size = size;
+    }
+    if (copy_size != 0U)
+    {
+        sys_mem_copy(new_ptr, ptr, copy_size);
+    }
 
-    old_offset = (uint32_t)ptr - (uint32_t)mallco_dev.membase[memx];
-    my_mem_free(memx, old_offset);
-
-    osKernelUnlock();
+    old_offset = (u32)ptr - (u32)mallco_dev.membase[memx];
+    (void)my_mem_free(memx, old_offset);
+    sys_mem_unlock(locked);
 
     return new_ptr;
 }
 
-/**
- * @brief       分配对齐内存(外部调用)
- * @param       memx      : 所属内存块
- * @param       size      : 要分配的内存大小(字节)
- * @param       alignment : 对齐字节数(必须是2的幂，且 >= 4)
- * @retval      对齐后的内存首地址, NULL表示失败
- */
-void *sys_malloc_aligned(uint8_t memx, uint32_t size, uint32_t alignment)
+void *sys_realloc(u8 memx, void *ptr, u32 size)
+{
+    return myrealloc(memx, ptr, size);
+}
+void *sys_malloc_aligned(u8 memx, u32 size, u32 alignment)
 {
     void *raw;
-    uint32_t raw_addr;
-    uint32_t aligned_addr;
-    if (alignment < 4) alignment = 4;               /* 最小4字节对齐，保证能存放原始指针 */
-    if (alignment & (alignment - 1)) return NULL;    /* 非2的幂，返回失败 */
-    /* 多分配 alignment + sizeof(void*) 字节，确保能对齐且能存指针 */
+    u32 raw_addr;
+    u32 aligned_addr;
+
+    if (alignment < 4U)
+    {
+        alignment = 4U;
+    }
+    if ((alignment & (alignment - 1U)) != 0U)
+    {
+        return NULL;
+    }
+
     raw = sys_malloc(memx, size + alignment + sizeof(void *));
-    if (raw == NULL) return NULL;
-    raw_addr = (uint32_t)raw;
-    /* 在 raw 之后留出存指针的空间，再向上对齐 */
-    aligned_addr = (raw_addr + sizeof(void *) + alignment - 1) & ~(alignment - 1);
-    /* 在对齐地址的前4字节存放原始指针，释放时取回 */
+    if (raw == NULL)
+    {
+        return NULL;
+    }
+
+    raw_addr = (u32)raw;
+    aligned_addr = (raw_addr + sizeof(void *) + alignment - 1U) & ~(alignment - 1U);
     *((void **)(aligned_addr - sizeof(void *))) = raw;
+
     return (void *)aligned_addr;
 }
-/**
- * @brief       释放对齐内存(外部调用)
- * @param       memx : 所属内存块
- * @param       ptr  : 对齐内存首地址(必须由sys_malloc_aligned返回)
- * @retval      无
- */
-void sys_free_aligned(uint8_t memx, void *ptr)
+
+void sys_free_aligned(u8 memx, void *ptr)
 {
     void *raw;
-    if (ptr == NULL) return;
-    /* 从对齐地址前4字节取回原始指针 */
-    raw = *((void **)((uint32_t)ptr - sizeof(void *)));
+
+    if (ptr == NULL)
+    {
+        return;
+    }
+
+    raw = *((void **)((u32)ptr - sizeof(void *)));
     sys_free(memx, raw);
 }
 
-void *lv_mem_malloc(uint32_t size)
+void *sys_thread_stack_alloc(u32 stack_size)
 {
-    return (void *)sys_malloc(LVGL_MEM_POOL, size);
+    void *stack;
+    u32 alloc_size;
+
+    if (stack_size == 0U)
+    {
+        return NULL;
+    }
+
+    alloc_size = SYS_ALIGN8(stack_size);
+    stack = sys_malloc_aligned(SRAMCCM, alloc_size, 8U);
+    if (stack != NULL)
+    {
+        sys_mem_set(stack, 0U, alloc_size);
+    }
+
+    return stack;
+}
+
+void sys_thread_stack_free(void *ptr)
+{
+    sys_free_aligned(SRAMCCM, ptr);
+}
+
+void *lv_mem_malloc(u32 size)
+{
+    return sys_malloc(LVGL_MEM_POOL, size);
 }
 
 void lv__mem_free(void *ptr)
 {
-    uint8_t memx;
+    u8 memx;
 
-    if (ptr == NULL) return;
+    if (ptr == NULL)
+    {
+        return;
+    }
 
     memx = sys_memx_from_ptr(ptr);
-    if (memx == SYS_MEM_INVALID) return;
+    if (memx == SYS_MEM_INVALID)
+    {
+        return;
+    }
 
     sys_free(memx, ptr);
 }
 
-void *lv__mem_realloc(void *ptr, uint32_t size)
+void *lv__mem_realloc(void *ptr, u32 size)
 {
-    uint8_t memx;
+    u8 memx;
 
-    if (ptr == NULL) return lv_mem_malloc(size);
+    if (ptr == NULL)
+    {
+        return lv_mem_malloc(size);
+    }
 
     if (size == 0U)
     {
@@ -382,7 +448,10 @@ void *lv__mem_realloc(void *ptr, uint32_t size)
     }
 
     memx = sys_memx_from_ptr(ptr);
-    if (memx == SYS_MEM_INVALID) return NULL;
+    if (memx == SYS_MEM_INVALID)
+    {
+        return NULL;
+    }
 
-    return (void *)myrealloc(memx, ptr, size);
+    return myrealloc(memx, ptr, size);
 }

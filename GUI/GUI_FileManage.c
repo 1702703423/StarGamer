@@ -33,6 +33,7 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager);
 static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item);
 static int GUI_FM_OpenItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item);
 static void GUI_FM_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_obj_t **first_obj);
+static void GUI_FM_RemoveChildrenFromGroup(lv_obj_t *parent);
 static void GUI_FM_CloseDir(GUI_FileManage_t *manager);
 static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager);
 static u8 GUI_FM_PathJoin(char *dst, u32 dst_size, const char *dir, const char *name);
@@ -766,14 +767,16 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 	u8 i;
 	lv_group_t *group;
 	lv_obj_t *first_obj = NULL;
+	u8 page_active;
 
 	if (manager == NULL || manager->list == NULL)
 	{
 		return;
 	}
 
+	page_active = (Page_GetCurrent() == manager->page->id) ? 1U : 0U;
 	group = lv_group_get_default();
-	if (group != NULL && Page_GetCurrent() == manager->page->id)
+	if (group != NULL && page_active != 0U)
 	{
 		lv_group_remove_all_objs(group);
 		lv_group_set_editing(group, false);
@@ -781,6 +784,7 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 	}
 
 	lv_label_set_text(manager->path_label, manager->current_path);
+	GUI_FM_RemoveChildrenFromGroup(manager->list);
 	lv_obj_clean(manager->list);
 
 	for (i = 0U; i < manager->item_count; i++)
@@ -794,7 +798,7 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 		(void)lv_list_add_text(manager->list, text);
 	}
 
-	if (group != NULL && Page_GetCurrent() == manager->page->id)
+	if (group != NULL && page_active != 0U)
 	{
 		GUI_FM_AddFocusableChildren(group, manager->screen, &first_obj);
 		if (first_obj != NULL)
@@ -894,6 +898,29 @@ static void GUI_FM_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_
 		}
 
 		GUI_FM_AddFocusableChildren(group, child, first_obj);
+	}
+}
+
+static void GUI_FM_RemoveChildrenFromGroup(lv_obj_t *parent)
+{
+	u32 i;
+	u32 child_count;
+
+	if (parent == NULL)
+	{
+		return;
+	}
+
+	child_count = lv_obj_get_child_cnt(parent);
+	for (i = 0U; i < child_count; i++)
+	{
+		lv_obj_t *child = lv_obj_get_child(parent, (s32)i);
+
+		GUI_FM_RemoveChildrenFromGroup(child);
+		if (lv_obj_get_group(child) != NULL)
+		{
+			lv_group_remove_obj(child);
+		}
 	}
 }
 

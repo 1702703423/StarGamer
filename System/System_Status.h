@@ -7,11 +7,8 @@
 #include "stdarg.h"
 #include "adt_chain.h"
 
-//paramenter
-
-#define SRAM_ADDR_BEGIN 	(uint32_t)0x68000000
-#define SRAM_ADDR_HALF		(uint32_t)0x68080000
-#define SRAM_ADDR_END			(uint32_t)0x680FFFFF
+#define SYSTEM_FONT_FLASH_ADDR   (0UL)
+#define SYSTEM_FONT_FLASH_SIZE   (2UL * 1024UL * 1024UL)
 
 //system error code start-------------------
 
@@ -34,7 +31,7 @@
 typedef struct System_Status_Information
 {
 	u8 fs_mount_status;
-	u8 SysFatalError;
+
 }System_Status_Information_t;
 
 typedef struct System_Core_Information
@@ -60,6 +57,14 @@ typedef struct System_Settings
 	u32 volume;
 	u8 Debug;
 	u16 ScreenLight;
+	u8 FontInstalled;
+	u8 FontBpp;
+	u8 FontLineHeight;
+	u8 FontBaseLine;
+	u32 FontFlashAddress;
+	u32 FontSize;
+	u16 FontMinUnicode;
+	u16 FontMaxUnicode;
 }System_Settings_t;
 
 typedef struct Frame_Buffer_Status
@@ -86,6 +91,7 @@ typedef struct System_Resource_Table
 extern System_Resource_Table_t SRT;
 extern System_Status_Information_t SSI;
 extern System_Core_Information_t SCI;
+extern System_Settings_t System_Settings;
 
 uint8_t* creat_frame_buffer(int* code);
 int AxfDebugInfoPushToUart(const char* string, va_list arg);
@@ -94,5 +100,10 @@ int SysUnregisterThread(osThreadId_t tid);
 int SysTerminateThread(osThreadId_t tid);
 int lvgl_start_ui(void);
 int lvgl_stop_ui(void);
+void System_Settings_SetDefaults(System_Settings_t* settings);
+int System_Settings_Init(void);
+int System_Settings_Load(void);
+int System_Settings_Save(void);
+u8 System_Settings_FontInstalled(void);
 
 #endif

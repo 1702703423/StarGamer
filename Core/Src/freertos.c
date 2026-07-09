@@ -24,7 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "ccm_memory.h"
+#include "Malloc.h"
 
 /* USER CODE END Includes */
 
@@ -46,9 +46,9 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 static StaticTask_t idleTaskControlBlock;
-static StackType_t idleTaskStack[configMINIMAL_STACK_SIZE] CCM_THREAD_STACK;
+static StackType_t *idleTaskStack;
 static StaticTask_t timerTaskControlBlock;
-static StackType_t timerTaskStack[configTIMER_TASK_STACK_DEPTH] CCM_THREAD_STACK;
+static StackType_t *timerTaskStack;
 
 /* USER CODE END Variables */
 
@@ -72,8 +72,14 @@ void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
                                    StackType_t **ppxIdleTaskStackBuffer,
                                    uint32_t *pulIdleTaskStackSize)
 {
+   if (idleTaskStack == NULL)
+   {
+      idleTaskStack = (StackType_t *)sys_thread_stack_alloc((u32)configMINIMAL_STACK_SIZE * sizeof(StackType_t));
+      configASSERT(idleTaskStack != NULL);
+   }
+
    *ppxIdleTaskTCBBuffer = &idleTaskControlBlock;
-   *ppxIdleTaskStackBuffer = &idleTaskStack[0];
+   *ppxIdleTaskStackBuffer = idleTaskStack;
    *pulIdleTaskStackSize = (uint32_t)configMINIMAL_STACK_SIZE;
 }
 
@@ -81,8 +87,14 @@ void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
                                     StackType_t **ppxTimerTaskStackBuffer,
                                     uint32_t *pulTimerTaskStackSize)
 {
+   if (timerTaskStack == NULL)
+   {
+      timerTaskStack = (StackType_t *)sys_thread_stack_alloc((u32)configTIMER_TASK_STACK_DEPTH * sizeof(StackType_t));
+      configASSERT(timerTaskStack != NULL);
+   }
+
    *ppxTimerTaskTCBBuffer = &timerTaskControlBlock;
-   *ppxTimerTaskStackBuffer = &timerTaskStack[0];
+   *ppxTimerTaskStackBuffer = timerTaskStack;
    *pulTimerTaskStackSize = (uint32_t)configTIMER_TASK_STACK_DEPTH;
 }
 /* USER CODE END 4 */

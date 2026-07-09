@@ -4,7 +4,11 @@
 #include "Malloc.h"
 #include "libjpeg.h"
 #include "jerror.h"
+#include "shell_support.h"
 #include "src/draw/lv_img_cache.h"
+#include "cmsis_os2.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include <setjmp.h>
 #include <stdio.h>
@@ -18,6 +22,22 @@
 #define GUI_IMAGE_CLOSE_W            34
 #define GUI_IMAGE_CLOSE_H            26
 #define GUI_IMAGE_STATUS_LEN         64U
+#define GUI_IMAGE_DECODE_STACK_SIZE  8192U
+
+#ifndef GUI_IMAGE_JPEG_LOG_ENABLE
+#define GUI_IMAGE_JPEG_LOG_ENABLE    1U
+#endif
+
+#ifndef GUI_IMAGE_JPEG_LOG_SCANLINE_STEP
+#define GUI_IMAGE_JPEG_LOG_SCANLINE_STEP 32U
+#endif
+
+#if GUI_IMAGE_JPEG_LOG_ENABLE
+extern Shell shell;
+#define GUI_IMAGE_JPEG_LOG(fmt, ...) shellPrintEndLine(&shell, "[IMGJPG] " fmt "\r\n", __VA_ARGS__)
+#else
+#define GUI_IMAGE_JPEG_LOG(fmt, ...) ((void)0)
+#endif
 
 typedef enum
 {
@@ -52,15 +72,24 @@ typedef struct
 	lv_obj_t *image;
 	lv_obj_t *close_btn;
 	lv_obj_t *close_icon;
+	lv_timer_t *timer;
 	lv_img_dsc_t image_dsc;
 	u8 *image_data;
 	u32 image_data_size;
 	u16 image_w;
 	u16 image_h;
 	char current_name[GUI_FILEMANAGE_NAME_SIZE];
+	char decode_path[GUI_FILEMANAGE_PATH_SIZE];
 	char status_text[GUI_IMAGE_STATUS_LEN];
+	GUI_ImageDecoded_t pending_decoded;
+	osThreadId_t decode_thread;
 	u8 viewer_visible;
+	volatile u8 decoding;
+	volatile u8 decode_ready;
+	volatile u8 decode_result;
 } GUI_ImageContext_t;
+
+typedef StaticTask_t osStaticThreadDef_t;
 
 static int GUI_Image_PageBuild(Page_Struct_t *page);
 static int GUI_Image_PageLoaded(Page_Struct_t *page, void *user_data);
@@ -68,6 +97,8 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 static int GUI_Image_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Image_CreateViewer(GUI_ImageContext_t *context);
 static void GUI_Image_CloseEvent(lv_event_t *event);
+static void GUI_Image_Timer(lv_timer_t *timer);
+static void GUI_Image_DecodeThread(void *argument);
 static void GUI_Image_ShowViewer(GUI_ImageContext_t *context);
 static void GUI_Image_HideViewer(GUI_ImageContext_t *context);
 static void GUI_Image_RebuildViewerFocus(GUI_ImageContext_t *context);
@@ -83,6 +114,16 @@ static const char *GUI_Image_ResultText(GUI_ImageDecodeResult_t result);
 static u8 GUI_Image_CopyText(char *dst, u32 dst_size, const char *src);
 
 static GUI_ImageContext_t s_image;
+static osStaticThreadDef_t s_image_decode_thread_cb;
+static osThreadAttr_t s_image_decode_thread_attr =
+{
+	.name = "ImageDecode",
+	.cb_mem = &s_image_decode_thread_cb,
+	.cb_size = sizeof(s_image_decode_thread_cb),
+	.stack_mem = NULL,
+	.stack_size = GUI_IMAGE_DECODE_STACK_SIZE,
+	.priority = (osPriority_t)osPriorityBelowNormal,
+};
 static const char * const s_image_extensions[] =
 {
 	".jpg",
@@ -147,6 +188,12 @@ static int GUI_Image_PageBuild(Page_Struct_t *page)
 	}
 
 	GUI_Image_CreateViewer(&s_image);
+	s_image.timer = lv_timer_create(GUI_Image_Timer, 50U, &s_image);
+	if (s_image.timer == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
 	return SYSTEM_STATUS_OK;
 }
 
@@ -162,44 +209,80 @@ static int GUI_Image_PageLoaded(Page_Struct_t *page, void *user_data)
 		return SYSTEM_STATUS_OK;
 	}
 
+	if (s_image.decoding != 0U)
+	{
+		GUI_FileManage_SetLocked(&s_image.file_manage, 1U);
+		GUI_FileManage_SetStatus(&s_image.file_manage, "Decoding JPG");
+	}
+
 	return GUI_FileManage_PageLoaded(&s_image.file_manage);
 }
 
 static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data)
 {
 	GUI_ImageContext_t *context = (GUI_ImageContext_t *)user_data;
-	GUI_ImageDecoded_t decoded;
-	GUI_ImageDecodeResult_t result;
+	osThreadId_t tid;
 
 	if (context == NULL || manager == NULL || item == NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("open arg fail ctx=%p mgr=%p item=%p",
+		                   (void *)context,
+		                   (void *)manager,
+		                   (void *)item);
 		return OPERATE_FAILED;
 	}
 
-	memset(&decoded, 0, sizeof(decoded));
+	if (context->decoding != 0U)
+	{
+		GUI_IMAGE_JPEG_LOG("open busy path=%s", item->path);
+		GUI_FileManage_SetStatus(manager, "Decoding JPG");
+		return OPERATE_FAILED;
+	}
+
+	if (GUI_Image_CopyText(context->decode_path, GUI_FILEMANAGE_PATH_SIZE, item->path) == 0U ||
+	    GUI_Image_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name) == 0U)
+	{
+		GUI_IMAGE_JPEG_LOG("open path too long name=%s", item->name);
+		GUI_FileManage_SetStatus(manager, "Path too long");
+		return OPERATE_FAILED;
+	}
+
+	GUI_IMAGE_JPEG_LOG("open request name=%s", context->current_name);
+	GUI_IMAGE_JPEG_LOG("open path=%s", context->decode_path);
+
+	if (s_image_decode_thread_attr.stack_mem == NULL)
+	{
+		s_image_decode_thread_attr.stack_mem = sys_thread_stack_alloc((u32)s_image_decode_thread_attr.stack_size);
+		GUI_IMAGE_JPEG_LOG("stack alloc ptr=%p size=%lu",
+		                   (void *)s_image_decode_thread_attr.stack_mem,
+		                   (unsigned long)s_image_decode_thread_attr.stack_size);
+	}
+	if (s_image_decode_thread_attr.stack_mem == NULL)
+	{
+		GUI_IMAGE_JPEG_LOG("stack alloc fail size=%lu", (unsigned long)s_image_decode_thread_attr.stack_size);
+		GUI_FileManage_SetStatus(manager, "JPG stack memory error");
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	GUI_Image_FreeDecoded(&context->pending_decoded);
+	context->decode_ready = 0U;
+	context->decode_result = (u8)GUI_IMAGE_DECODE_FORMAT;
+	context->decoding = 1U;
 	GUI_FileManage_SetLocked(manager, 1U);
 	GUI_FileManage_SetStatus(manager, "Decoding JPG");
 
-	result = GUI_Image_DecodeJpeg(item->path, &decoded);
-	if (result != GUI_IMAGE_DECODE_OK)
+	tid = osThreadNew(GUI_Image_DecodeThread, context, &s_image_decode_thread_attr);
+	if (tid == NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("thread create fail path=%s", context->decode_path);
+		context->decoding = 0U;
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, GUI_Image_ResultText(result));
-		GUI_Image_FreeDecoded(&decoded);
-		return (result == GUI_IMAGE_DECODE_MEMORY) ? OUT_OF_HEAP_MEMORY : OPERATE_FAILED;
+		GUI_FileManage_SetStatus(manager, "JPG thread failed");
+		return OUT_OF_HEAP_MEMORY;
 	}
 
-	GUI_Image_AdoptDecoded(context, &decoded);
-	(void)GUI_Image_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name);
-	(void)snprintf(context->status_text, sizeof(context->status_text),
-	               "%s  %ux%u",
-	               context->current_name,
-	               (unsigned int)context->image_w,
-	               (unsigned int)context->image_h);
-
-	GUI_FileManage_SetLocked(manager, 0U);
-	GUI_FileManage_SetStatus(manager, context->status_text);
-	GUI_Image_ShowViewer(context);
+	context->decode_thread = tid;
+	GUI_IMAGE_JPEG_LOG("thread created tid=%p", (void *)tid);
 
 	return SYSTEM_STATUS_OK;
 }
@@ -209,6 +292,12 @@ static int GUI_Image_Back(GUI_FileManage_t *manager, void *user_data)
 	GUI_ImageContext_t *context = (GUI_ImageContext_t *)user_data;
 
 	(void)manager;
+
+	if (context != NULL && context->decoding != 0U)
+	{
+		GUI_FileManage_SetStatus(&context->file_manage, "Decoding JPG");
+		return OPERATE_FAILED;
+	}
 
 	if (context != NULL && context->viewer_visible != 0U)
 	{
@@ -293,6 +382,96 @@ static void GUI_Image_CloseEvent(lv_event_t *event)
 	}
 }
 
+static void GUI_Image_Timer(lv_timer_t *timer)
+{
+	GUI_ImageContext_t *context = (GUI_ImageContext_t *)timer->user_data;
+	GUI_ImageDecodeResult_t result;
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	if (context->decode_ready == 0U)
+	{
+		return;
+	}
+
+	result = (GUI_ImageDecodeResult_t)context->decode_result;
+	context->decode_ready = 0U;
+	context->decoding = 0U;
+	context->decode_thread = NULL;
+	GUI_FileManage_SetLocked(&context->file_manage, 0U);
+	GUI_IMAGE_JPEG_LOG("timer result=%u data=%p",
+	                   (unsigned int)result,
+	                   (void *)context->pending_decoded.data);
+
+	if (result == GUI_IMAGE_DECODE_OK && context->pending_decoded.data != NULL)
+	{
+		GUI_Image_AdoptDecoded(context, &context->pending_decoded);
+		GUI_IMAGE_JPEG_LOG("adopt %ux%u bytes=%lu",
+		                   (unsigned int)context->image_w,
+		                   (unsigned int)context->image_h,
+		                   (unsigned long)context->image_data_size);
+		(void)snprintf(context->status_text, sizeof(context->status_text),
+		               "%s  %ux%u",
+		               context->current_name,
+		               (unsigned int)context->image_w,
+		               (unsigned int)context->image_h);
+		GUI_FileManage_SetStatus(&context->file_manage, context->status_text);
+		if (Page_GetCurrent() == GUI_PAGE_IMAGE)
+		{
+			GUI_Image_ShowViewer(context);
+		}
+	}
+	else
+	{
+		GUI_Image_FreeDecoded(&context->pending_decoded);
+		GUI_IMAGE_JPEG_LOG("decode failed result=%u text=%s",
+		                   (unsigned int)result,
+		                   GUI_Image_ResultText(result));
+		GUI_FileManage_SetStatus(&context->file_manage, GUI_Image_ResultText(result));
+		if (Page_GetCurrent() == GUI_PAGE_IMAGE)
+		{
+			(void)GUI_FileManage_PageLoaded(&context->file_manage);
+			lv_obj_invalidate(context->file_manage.screen);
+		}
+	}
+}
+
+static void GUI_Image_DecodeThread(void *argument)
+{
+	GUI_ImageContext_t *context = (GUI_ImageContext_t *)argument;
+	GUI_ImageDecoded_t decoded;
+	GUI_ImageDecodeResult_t result;
+
+	if (context == NULL)
+	{
+		osThreadExit();
+		return;
+	}
+
+	memset(&decoded, 0, sizeof(decoded));
+	GUI_IMAGE_JPEG_LOG("thread enter path=%s", context->decode_path);
+	result = GUI_Image_DecodeJpeg(context->decode_path, &decoded);
+	if (result == GUI_IMAGE_DECODE_OK)
+	{
+		context->pending_decoded = decoded;
+		memset(&decoded, 0, sizeof(decoded));
+	}
+	else
+	{
+		GUI_Image_FreeDecoded(&decoded);
+	}
+
+	context->decode_result = (u8)result;
+	context->decode_ready = 1U;
+	GUI_IMAGE_JPEG_LOG("thread exit result=%u stack_free=%lu",
+	                   (unsigned int)result,
+	                   (unsigned long)uxTaskGetStackHighWaterMark(NULL));
+	osThreadExit();
+}
+
 static void GUI_Image_ShowViewer(GUI_ImageContext_t *context)
 {
 	if (context == NULL || context->viewer == NULL || context->image == NULL)
@@ -365,7 +544,7 @@ static void GUI_Image_WaitInputRelease(void)
 
 static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageDecoded_t *decoded)
 {
-	FIL file;
+	FIL *file = NULL;
 	FRESULT fr;
 	struct jpeg_decompress_struct cinfo;
 	GUI_ImageJpegError_t jerr;
@@ -375,6 +554,7 @@ static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageD
 	u32 row_stride;
 	u32 data_size;
 	u32 y;
+	u32 lines_read;
 	u16 width;
 	u16 height;
 	volatile u8 file_opened = 0U;
@@ -383,20 +563,36 @@ static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageD
 
 	if (path == NULL || decoded == NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("decode arg fail path=%p decoded=%p",
+		                   (void *)path,
+		                   (void *)decoded);
 		return GUI_IMAGE_DECODE_FILE;
 	}
 
+	GUI_IMAGE_JPEG_LOG("decode begin path=%s", path);
+
 	memset(decoded, 0, sizeof(*decoded));
-	memset(&file, 0, sizeof(file));
 	memset(&cinfo, 0, sizeof(cinfo));
 	memset(&jerr, 0, sizeof(jerr));
 
-	fr = f_open(&file, (const TCHAR *)path, FA_READ);
+	/* FIL contains a sector cache used as an SDIO DMA target; keep it out of CCM. */
+	file = (FIL *)sys_malloc(SRAMEX, sizeof(FIL));
+	if (file == NULL)
+	{
+		GUI_IMAGE_JPEG_LOG("file alloc fail bytes=%lu", (unsigned long)sizeof(FIL));
+		return GUI_IMAGE_DECODE_MEMORY;
+	}
+	memset(file, 0, sizeof(*file));
+
+	fr = f_open(file, (const TCHAR *)path, FA_READ);
 	if (fr != FR_OK)
 	{
-		return GUI_IMAGE_DECODE_FILE;
+		GUI_IMAGE_JPEG_LOG("f_open fail fr=%u path=%s", (unsigned int)fr, path);
+		result = GUI_IMAGE_DECODE_FILE;
+		goto cleanup;
 	}
 	file_opened = 1U;
+	GUI_IMAGE_JPEG_LOG("f_open ok size=%lu", (unsigned long)f_size(file));
 
 	cinfo.err = jpeg_std_error(&jerr.pub);
 	jerr.pub.error_exit = GUI_Image_JpegErrorExit;
@@ -405,22 +601,37 @@ static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageD
 	if (setjmp(jerr.jump_buffer) != 0)
 	{
 		result = (jerr.msg_code == (int)JERR_OUT_OF_MEMORY) ? GUI_IMAGE_DECODE_MEMORY : GUI_IMAGE_DECODE_FORMAT;
+		GUI_IMAGE_JPEG_LOG("longjmp code=%d scan=%lu msg=%s",
+		                   jerr.msg_code,
+		                   (unsigned long)cinfo.output_scanline,
+		                   jerr.message);
 		goto cleanup;
 	}
 
+	GUI_IMAGE_JPEG_LOG("jpeg_create begin path=%s", path);
 	jpeg_create_decompress(&cinfo);
 	jpeg_created = 1U;
-	jpeg_stdio_src(&cinfo, &file);
+	jpeg_stdio_src(&cinfo, file);
+	GUI_IMAGE_JPEG_LOG("jpeg_src ready pos=%lu", (unsigned long)f_tell(file));
 
 	if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK)
 	{
+		GUI_IMAGE_JPEG_LOG("read_header fail pos=%lu", (unsigned long)f_tell(file));
 		result = GUI_IMAGE_DECODE_FORMAT;
 		goto cleanup;
 	}
+	GUI_IMAGE_JPEG_LOG("header %lux%lu comp=%d cs=%d",
+	                   (unsigned long)cinfo.image_width,
+	                   (unsigned long)cinfo.image_height,
+	                   cinfo.num_components,
+	                   (int)cinfo.jpeg_color_space);
 
 	if (cinfo.image_width == 0U || cinfo.image_height == 0U ||
 	    cinfo.image_width > GUI_IMAGE_MAX_W || cinfo.image_height > GUI_IMAGE_MAX_H)
 	{
+		GUI_IMAGE_JPEG_LOG("header size reject %lux%lu",
+		                   (unsigned long)cinfo.image_width,
+		                   (unsigned long)cinfo.image_height);
 		result = GUI_IMAGE_DECODE_TOO_LARGE;
 		goto cleanup;
 	}
@@ -431,14 +642,23 @@ static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageD
 
 	if (jpeg_start_decompress(&cinfo) == FALSE)
 	{
+		GUI_IMAGE_JPEG_LOG("start_decompress fail pos=%lu", (unsigned long)f_tell(file));
 		result = GUI_IMAGE_DECODE_FORMAT;
 		goto cleanup;
 	}
+	GUI_IMAGE_JPEG_LOG("start out=%lux%lu comp=%d",
+	                   (unsigned long)cinfo.output_width,
+	                   (unsigned long)cinfo.output_height,
+	                   cinfo.output_components);
 
 	if (cinfo.output_width == 0U || cinfo.output_height == 0U ||
 	    cinfo.output_width > GUI_IMAGE_MAX_W || cinfo.output_height > GUI_IMAGE_MAX_H ||
 	    cinfo.output_components != 3)
 	{
+		GUI_IMAGE_JPEG_LOG("output reject %lux%lu comp=%d",
+		                   (unsigned long)cinfo.output_width,
+		                   (unsigned long)cinfo.output_height,
+		                   cinfo.output_components);
 		result = GUI_IMAGE_DECODE_TOO_LARGE;
 		goto cleanup;
 	}
@@ -447,38 +667,62 @@ static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageD
 	height = (u16)cinfo.output_height;
 	row_stride = (u32)width * (u32)cinfo.output_components;
 	data_size = (u32)width * (u32)height * (u32)sizeof(lv_color_t);
+	GUI_IMAGE_JPEG_LOG("buffer need stride=%lu bytes=%lu",
+	                   (unsigned long)row_stride,
+	                   (unsigned long)data_size);
 
 	image_data = (u8 *)sys_malloc(SRAMEX, data_size);
 	if (image_data == NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("image alloc fail bytes=%lu", (unsigned long)data_size);
 		result = GUI_IMAGE_DECODE_MEMORY;
 		goto cleanup;
 	}
+	GUI_IMAGE_JPEG_LOG("image alloc ptr=%p", (void *)image_data);
 
 	row_buffer = (u8 *)sys_malloc(SRAMEX, row_stride);
 	if (row_buffer == NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("row alloc fail bytes=%lu", (unsigned long)row_stride);
 		result = GUI_IMAGE_DECODE_MEMORY;
 		goto cleanup;
 	}
+	GUI_IMAGE_JPEG_LOG("row alloc ptr=%p", (void *)row_buffer);
 	row_pointer[0] = (JSAMPROW)row_buffer;
 
 	while (cinfo.output_scanline < cinfo.output_height)
 	{
 		y = (u32)cinfo.output_scanline;
-		if (jpeg_read_scanlines(&cinfo, row_pointer, 1U) != 1U)
+		lines_read = (u32)jpeg_read_scanlines(&cinfo, row_pointer, 1U);
+		if (lines_read != 1U)
 		{
+			GUI_IMAGE_JPEG_LOG("scanline fail y=%lu got=%lu",
+			                   (unsigned long)y,
+			                   (unsigned long)lines_read);
 			result = GUI_IMAGE_DECODE_FORMAT;
 			goto cleanup;
 		}
 		GUI_Image_ConvertRow(&((lv_color_t *)image_data)[y * (u32)width], (const u8 *)row_buffer, width);
+		if (cinfo.output_scanline == 1U ||
+		    cinfo.output_scanline == cinfo.output_height ||
+		    (GUI_IMAGE_JPEG_LOG_SCANLINE_STEP != 0U &&
+		     ((u32)cinfo.output_scanline % GUI_IMAGE_JPEG_LOG_SCANLINE_STEP) == 0U))
+		{
+			GUI_IMAGE_JPEG_LOG("scanline %lu/%lu",
+			                   (unsigned long)cinfo.output_scanline,
+			                   (unsigned long)cinfo.output_height);
+		}
 	}
 
 	if (jpeg_finish_decompress(&cinfo) == FALSE)
 	{
+		GUI_IMAGE_JPEG_LOG("finish fail scan=%lu/%lu",
+		                   (unsigned long)cinfo.output_scanline,
+		                   (unsigned long)cinfo.output_height);
 		result = GUI_IMAGE_DECODE_FORMAT;
 		goto cleanup;
 	}
+	GUI_IMAGE_JPEG_LOG("finish ok pos=%lu", (unsigned long)f_tell(file));
 
 	decoded->data = image_data;
 	decoded->data_size = data_size;
@@ -492,23 +736,45 @@ static GUI_ImageDecodeResult_t GUI_Image_DecodeJpeg(const char *path, GUI_ImageD
 	decoded->dsc.data = image_data;
 	image_data = NULL;
 	result = GUI_IMAGE_DECODE_OK;
+	GUI_IMAGE_JPEG_LOG("decode ok %ux%u bytes=%lu",
+	                   (unsigned int)width,
+	                   (unsigned int)height,
+	                   (unsigned long)data_size);
 
 cleanup:
+	if (file_opened != 0U)
+	{
+		GUI_IMAGE_JPEG_LOG("cleanup result=%u pos=%lu/%lu",
+		                   (unsigned int)result,
+		                   (unsigned long)f_tell(file),
+		                   (unsigned long)f_size(file));
+	}
+	else
+	{
+		GUI_IMAGE_JPEG_LOG("cleanup result=%u nofile=%u", (unsigned int)result, (unsigned int)file_opened);
+	}
 	if (row_buffer != NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("free row ptr=%p", (void *)row_buffer);
 		sys_free(SRAMEX, (void *)row_buffer);
 	}
 	if (image_data != NULL)
 	{
+		GUI_IMAGE_JPEG_LOG("free image ptr=%p", (void *)image_data);
 		sys_free(SRAMEX, (void *)image_data);
 	}
 	if (jpeg_created != 0U)
 	{
+		GUI_IMAGE_JPEG_LOG("jpeg_destroy created=%u", (unsigned int)jpeg_created);
 		jpeg_destroy_decompress(&cinfo);
 	}
 	if (file_opened != 0U)
 	{
-		(void)f_close(&file);
+		(void)f_close(file);
+	}
+	if (file != NULL)
+	{
+		sys_free(SRAMEX, file);
 	}
 
 	return result;
@@ -596,6 +862,9 @@ static void GUI_Image_JpegErrorExit(j_common_ptr cinfo)
 		{
 			(*cinfo->err->format_message)(cinfo, err->message);
 		}
+		GUI_IMAGE_JPEG_LOG("error_exit code=%d msg=%s",
+		                   err->msg_code,
+		                   err->message);
 		longjmp(err->jump_buffer, 1);
 	}
 
@@ -606,7 +875,27 @@ static void GUI_Image_JpegErrorExit(j_common_ptr cinfo)
 
 static void GUI_Image_JpegOutputMessage(j_common_ptr cinfo)
 {
+#if GUI_IMAGE_JPEG_LOG_ENABLE
+	GUI_ImageJpegError_t *err;
+
+	if (cinfo == NULL || cinfo->err == NULL)
+	{
+		return;
+	}
+
+	err = (GUI_ImageJpegError_t *)cinfo->err;
+	err->msg_code = cinfo->err->msg_code;
+	err->message[0] = '\0';
+	if (cinfo->err->format_message != NULL)
+	{
+		(*cinfo->err->format_message)(cinfo, err->message);
+	}
+	GUI_IMAGE_JPEG_LOG("message code=%d msg=%s",
+	                   err->msg_code,
+	                   err->message);
+#else
 	(void)cinfo;
+#endif
 }
 
 static const char *GUI_Image_ResultText(GUI_ImageDecodeResult_t result)

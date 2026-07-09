@@ -1,9 +1,34 @@
 #include "System_Status.h"
+#include "LCD.h"
+#include "main.h"
 #include "sys.h"
+#include "at24c02.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "shell.h"
 #include "shell_support.h"
+#include <string.h>
+
+#define SYSTEM_SETTINGS_EEPROM_ADDR       0U
+#define SYSTEM_SETTINGS_MAGIC             0x53544753UL
+#define SYSTEM_SETTINGS_VERSION           1U
+#define SYSTEM_SETTINGS_DEFAULT_VOLUME    70UL
+#define SYSTEM_SETTINGS_DEFAULT_LIGHT     100U
+#define SYSTEM_SETTINGS_DEFAULT_FONT_LINE 21U
+
+typedef struct System_Settings_Record
+{
+	u32 magic;
+	u16 version;
+	u16 size;
+	System_Settings_t settings;
+	u32 checksum;
+}System_Settings_Record_t;
+
+typedef char System_Settings_RecordSizeCheck[(sizeof(System_Settings_Record_t) <= AT24C02_SIZE) ? 1 : -1];
+
+static u32 System_Settings_Checksum(const u8* data, u16 length);
+static void System_Settings_Normalize(System_Settings_t* settings);
 
 extern SRAM_HandleTypeDef hsram3;
 extern SD_HandleTypeDef hsd;
@@ -39,20 +64,22 @@ uint8_t* creat_frame_buffer(int* code)
 	
 	int _code;
 	
-	uint8_t* ST7789s_ScreenBuffer = (uint8_t*)sys_malloc(1,ST7789s_ScreenBufferSize); //����֡�����ڴ�
+	uint8_t* ST7789s_ScreenBuffer = (uint8_t*)sys_malloc(SRAMEX,ST7789s_ScreenBufferSize); //����֡�����ڴ�
 	
 	if(ST7789s_ScreenBuffer == NULL)
 	{
 		*code = OUT_OF_HEAP_MEMORY;
+		osKernelUnlock();
 		return NULL;
 	}
 	
-	Frame_Buffer_Status_t* FBST_data = (Frame_Buffer_Status_t*)sys_malloc(0,sizeof(Frame_Buffer_Status_t)); //����֡����������ڴ�?
+	Frame_Buffer_Status_t* FBST_data = (Frame_Buffer_Status_t*)sys_malloc(SRAMEX,sizeof(Frame_Buffer_Status_t)); //����֡����������ڴ�?
 	
 	if(FBST_data == NULL)
 	{
-		sys_free(1,(void*)ST7789s_ScreenBuffer);
+		sys_free(SRAMEX,(void*)ST7789s_ScreenBuffer);
 		*code = OUT_OF_HEAP_MEMORY;
+		osKernelUnlock();
 		return NULL;
 	}
 	
@@ -61,9 +88,10 @@ uint8_t* creat_frame_buffer(int* code)
 	
 	if(insert_head_chain(SRT.frame_buffer_table,FBST_data,&_code) == NULL)
 	{
-		sys_free(1,(void*)ST7789s_ScreenBuffer);
-		sys_free(0,(void*)FBST_data);
+		sys_free(SRAMEX,(void*)ST7789s_ScreenBuffer);
+		sys_free(SRAMEX,(void*)FBST_data);
 		*code = OPERATE_FAILED;
+		osKernelUnlock();
 		return NULL;
 	};//����֡���������?
 	
@@ -121,8 +149,8 @@ uint8_t* destroy_frame_buffer(uint8_t* pointer, int* code)
 		return NULL;
 	}
 
-	sys_free(1, fb->pointer);	//�ͷ��ڴ�
-	sys_free(0, fb);			
+	sys_free(SRAMEX, fb->pointer);	//�ͷ��ڴ�
+	sys_free(SRAMEX, fb);
 	
 	osKernelUnlock();
 
@@ -149,7 +177,7 @@ osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAt
 		return NULL;
 	}
 	
-	SYS_Task_Control_Table_t* SYS_TCT = (SYS_Task_Control_Table_t*)sys_malloc(0,sizeof(SYS_Task_Control_Table_t));
+	SYS_Task_Control_Table_t* SYS_TCT = (SYS_Task_Control_Table_t*)sys_malloc(SRAMEX,sizeof(SYS_Task_Control_Table_t));
 
 	if(SYS_TCT == NULL)
 	{
@@ -165,7 +193,7 @@ osThreadId_t SysCreateThread(osThreadFunc_t func,void* argument,const osThreadAt
 	if(insert_head_chain(SRT.task_table,SYS_TCT,&_code) == NULL)
 	{
 		osThreadTerminate(tid);
-		sys_free(0,(void*)SYS_TCT);
+		sys_free(SRAMEX,(void*)SYS_TCT);
 		osKernelUnlock();
 		return NULL;
 	}
@@ -230,7 +258,7 @@ int SysTerminateThread(osThreadId_t tid)
 	vTaskDelete(task);
 	
 	// �ͷ� SYS_Task_Control_Table �ڵ�
-	sys_free(0, (void*)found);
+	sys_free(SRAMEX, (void*)found);
 	
 	osKernelUnlock();
 	
@@ -273,7 +301,7 @@ int SysUnregisterThread(osThreadId_t tid)
 	delete_node(SRT.task_table, found, &_code);
 	if (_code == SYSTEM_STATUS_OK)
 	{
-		sys_free(0, (void*)found);
+		sys_free(SRAMEX, (void*)found);
 	}
 
 	osKernelUnlock();
@@ -299,6 +327,154 @@ int lvgl_stop_ui()
 
 	osStatus_t status = osThreadSuspend(lvglThreadId);
 	return (status == osOK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
+void System_Settings_SetDefaults(System_Settings_t* settings)
+{
+	if (settings == NULL)
+	{
+		return;
+	}
+
+	memset(settings, 0, sizeof(System_Settings_t));
+	settings->volume = SYSTEM_SETTINGS_DEFAULT_VOLUME;
+	settings->Debug = 1U;
+	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
+	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
+	settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
+}
+
+int System_Settings_Init(void)
+{
+	AT24C02_StatusTypeDef at_status;
+	int code;
+
+	System_Settings_SetDefaults(&System_Settings);
+
+	at_status = AT24C02_Init();
+	if (at_status != AT24C02_OK)
+	{
+		return OPERATE_FAILED;
+	}
+
+	code = System_Settings_Load();
+	if (code == SYSTEM_STATUS_OK)
+	{
+		return SYSTEM_STATUS_OK;
+	}
+
+	System_Settings_SetDefaults(&System_Settings);
+	return System_Settings_Save();
+}
+
+int System_Settings_Load(void)
+{
+	System_Settings_Record_t record;
+	u32 checksum;
+	AT24C02_StatusTypeDef status;
+
+	memset(&record, 0, sizeof(record));
+	status = AT24C02_Read(SYSTEM_SETTINGS_EEPROM_ADDR, (u8*)&record, (u16)sizeof(record));
+	if (status != AT24C02_OK)
+	{
+		return OPERATE_FAILED;
+	}
+
+	checksum = System_Settings_Checksum((const u8*)&record, (u16)(sizeof(record) - sizeof(record.checksum)));
+	if (record.magic != SYSTEM_SETTINGS_MAGIC ||
+	    record.version != SYSTEM_SETTINGS_VERSION ||
+	    record.size != (u16)sizeof(System_Settings_t) ||
+	    record.checksum != checksum)
+	{
+		return OPERATE_FAILED;
+	}
+
+	System_Settings = record.settings;
+	System_Settings_Normalize(&System_Settings);
+	return SYSTEM_STATUS_OK;
+}
+
+int System_Settings_Save(void)
+{
+	System_Settings_Record_t record;
+	AT24C02_StatusTypeDef status;
+
+	System_Settings_Normalize(&System_Settings);
+
+	memset(&record, 0, sizeof(record));
+	record.magic = SYSTEM_SETTINGS_MAGIC;
+	record.version = SYSTEM_SETTINGS_VERSION;
+	record.size = (u16)sizeof(System_Settings_t);
+	record.settings = System_Settings;
+	record.checksum = System_Settings_Checksum((const u8*)&record, (u16)(sizeof(record) - sizeof(record.checksum)));
+
+	status = AT24C02_Write(SYSTEM_SETTINGS_EEPROM_ADDR, (const u8*)&record, (u16)sizeof(record));
+	return (status == AT24C02_OK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
+u8 System_Settings_FontInstalled(void)
+{
+	return (System_Settings.FontInstalled != 0U &&
+	        System_Settings.FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&
+	        System_Settings.FontSize > 0U &&
+	        System_Settings.FontSize <= SYSTEM_FONT_FLASH_SIZE &&
+	        System_Settings.FontMinUnicode <= System_Settings.FontMaxUnicode &&
+	        (System_Settings.FontBpp == 1U || System_Settings.FontBpp == 2U ||
+	         System_Settings.FontBpp == 4U || System_Settings.FontBpp == 8U)) ? 1U : 0U;
+}
+
+static u32 System_Settings_Checksum(const u8* data, u16 length)
+{
+	u16 i;
+	u32 hash = 2166136261UL;
+
+	if (data == NULL)
+	{
+		return 0U;
+	}
+
+	for (i = 0U; i < length; i++)
+	{
+		hash ^= data[i];
+		hash *= 16777619UL;
+	}
+
+	return hash;
+}
+
+static void System_Settings_Normalize(System_Settings_t* settings)
+{
+	u8 valid_font;
+
+	if (settings == NULL)
+	{
+		return;
+	}
+
+	settings->Debug = (settings->Debug != 0U) ? 1U : 0U;
+	valid_font = (settings->FontInstalled != 0U &&
+	              settings->FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&
+	              settings->FontSize > 0U &&
+	              settings->FontSize <= SYSTEM_FONT_FLASH_SIZE &&
+	              settings->FontMinUnicode <= settings->FontMaxUnicode &&
+	              (settings->FontBpp == 1U || settings->FontBpp == 2U ||
+	               settings->FontBpp == 4U || settings->FontBpp == 8U)) ? 1U : 0U;
+
+	if (valid_font == 0U)
+	{
+		settings->FontInstalled = 0U;
+		settings->FontBpp = 0U;
+		settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
+		settings->FontBaseLine = 0U;
+		settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
+		settings->FontSize = 0U;
+		settings->FontMinUnicode = 0U;
+		settings->FontMaxUnicode = 0U;
+	}
+	else if (settings->FontLineHeight == 0U)
+	{
+		settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
+	}
 }
 
 

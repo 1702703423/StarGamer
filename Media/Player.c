@@ -6,7 +6,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "i2s.h"
-#include "ccm_memory.h"
 
 extern I2S_HandleTypeDef hi2s3;
 extern SD_HandleTypeDef hsd;
@@ -36,7 +35,7 @@ typedef enum WAV_RES_t  {
 #define EVENT_PLAYER_WAIT (EVENT_DMA_EMPTY | EVENT_STOP_PLAYER | EVENT_PAUSE_PLAYER)
 #define PLAYER_PATH_SIZE 256U
 
-uint32_t WavTaskBuffer[ 2048 ] CCM_THREAD_STACK;
+#define WAV_THREAD_STACK_SIZE (2048U * sizeof(u32))
 static osThreadId_t WavTaskHandle;
 static FIL WavFile;
 static u8 WavFileOpened = 0U;
@@ -44,12 +43,12 @@ static volatile Player_State_t s_player_state = PLAYER_STATE_IDLE;
 static Wave_Infomation s_player_info;
 static TCHAR s_player_path[PLAYER_PATH_SIZE];
 osStaticThreadDef_t WavTaskControlBlock;
-const osThreadAttr_t WavTaskAttr = {
+osThreadAttr_t WavTaskAttr = {
   .name = "WaveDataTransmitTask",
   .cb_mem = &WavTaskControlBlock,
   .cb_size = sizeof(WavTaskControlBlock),
-  .stack_mem = &WavTaskBuffer[0],
-  .stack_size = sizeof(WavTaskBuffer),
+  .stack_mem = NULL,
+  .stack_size = WAV_THREAD_STACK_SIZE,
   .priority = (osPriority_t) osPriorityHigh2,
 };
 #define WAV_PLAY_BUFF_SIZE 8192U
@@ -606,6 +605,16 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
     return ER_WAV_NOT_SUPPORT;
   }
 	audio_card_register_tx(audio_feeder);
+	if (WavTaskAttr.stack_mem == NULL)
+	{
+		WavTaskAttr.stack_mem = sys_thread_stack_alloc((u32)WavTaskAttr.stack_size);
+	}
+	if (WavTaskAttr.stack_mem == NULL)
+	{
+		audio_card_register_tx(NULL);
+		audio_card_close();
+		return ER_WAV_FILE;
+	}
 	WavTaskHandle = SysCreateThread(WaveDataTransmitTask,file,&WavTaskAttr,0);
   if(WavTaskHandle == NULL)
   {

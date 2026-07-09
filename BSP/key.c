@@ -1,12 +1,13 @@
 #include "key.h"
 #include "main.h"
-#include "ccm_memory.h"
+#include "Malloc.h"
 
 #define KEY_SCAN_PERIOD_MS      5U
 #define KEY_DEBOUNCE_MS         20U
 #define KEY_DEBOUNCE_COUNT      (KEY_DEBOUNCE_MS / KEY_SCAN_PERIOD_MS)
 #define KEY_QUEUE_DEPTH         32U
 #define KEY_THREAD_STACK_WORDS  256U
+#define KEY_THREAD_STACK_SIZE   (KEY_THREAD_STACK_WORDS * sizeof(u32))
 
 typedef struct
 {
@@ -31,14 +32,13 @@ static osThreadId_t key_thread_id;
 static osMessageQueueId_t key_event_queue;
 
 static StaticTask_t key_thread_cb;
-static u32 key_thread_stack[KEY_THREAD_STACK_WORDS] CCM_THREAD_STACK;
-static const osThreadAttr_t key_thread_attr =
+static osThreadAttr_t key_thread_attr =
 {
 	.name = "KEY",
 	.cb_mem = &key_thread_cb,
 	.cb_size = sizeof(key_thread_cb),
-	.stack_mem = &key_thread_stack[0],
-	.stack_size = sizeof(key_thread_stack),
+	.stack_mem = NULL,
+	.stack_size = KEY_THREAD_STACK_SIZE,
 	.priority = (osPriority_t)osPriorityNormal,
 };
 
@@ -170,6 +170,15 @@ int KEY_Init(void)
 		{
 			return KEY_ERROR;
 		}
+	}
+
+	if (key_thread_attr.stack_mem == NULL)
+	{
+		key_thread_attr.stack_mem = sys_thread_stack_alloc((u32)key_thread_attr.stack_size);
+	}
+	if (key_thread_attr.stack_mem == NULL)
+	{
+		return KEY_ERROR;
 	}
 
 	key_thread_id = osThreadNew(key_scan_task, NULL, &key_thread_attr);

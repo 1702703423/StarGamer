@@ -162,7 +162,7 @@ int Page_Manager_Init(void)
 
 	if (SRT.page_table == NULL)
 	{
-		SRT.page_table = creat_chain(0, &code);
+		SRT.page_table = creat_chain(SRAMEX, &code);
 		if (SRT.page_table == NULL || code != SYSTEM_STATUS_OK)
 		{
 			return (code == OUT_OF_HEAP_MEMORY) ? OUT_OF_HEAP_MEMORY : OPERATE_FAILED;

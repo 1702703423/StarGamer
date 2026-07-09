@@ -24,6 +24,7 @@ extern _lcd_dev lcddev;
 
 #define LCD_W 240
 #define LCD_H 320
+#define ST7789s_ScreenBufferSize (150U * 1024U)
 
 extern u16  POINT_COLOR;//默认红色    
 extern u16  BACK_COLOR; //背景颜色.默认为白色

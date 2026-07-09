@@ -10,6 +10,7 @@
 #include "shell.h"
 #include "shell_support.h"
 #include "ccm_memory.h"
+#include "Malloc.h"
 
 extern Shell shell;
 
@@ -462,10 +463,11 @@ int shellSysStats(int argc, char *argv[])
 	                  ccm_used / 10, ccm_used % 10,
 	                  (uint32_t)(CCM_HEAP_SIZE_KB - (CCM_HEAP_SIZE_KB * ccm_used / 1000)),
 	                  (uint32_t)CCM_HEAP_SIZE_KB);
-	shellPrintEndLine(&shell, "Ext (963KB):     %u.%u%% used (%lu/%lu KB free)\n",
+	shellPrintEndLine(&shell, "Ext (%luKB):     %u.%u%% used (%lu/%lu KB free)\n",
+	                  (uint32_t)(MEM3_MAX_SIZE / 1024U),
 	                  sram_used / 10, sram_used % 10,
-	                  (uint32_t)(963 - (963 * sram_used / 1000)),
-	                  (uint32_t)963);
+	                  (uint32_t)((MEM3_MAX_SIZE / 1024U) - ((MEM3_MAX_SIZE / 1024U) * sram_used / 1000U)),
+	                  (uint32_t)(MEM3_MAX_SIZE / 1024U));
 	shellPrintEndLine(&shell, "\n--- FreeRTOS Heap ---\n");
 	shellPrintEndLine(&shell, "Heap:            %lu/%lu bytes free (%lu%% used)\n",
 	                  heap_free, heap_total,
