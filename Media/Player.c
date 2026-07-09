@@ -599,7 +599,7 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
     Wave_Infomation->WAV_Second = 0;
   }
 	
-	audio_card_init(50);
+	audio_card_init(audio_card_get_volume());
   if(audio_card_open_prepare(Wave_Infomation->Sample_Rate,Wave_Infomation->deepth,Wave_Infomation->Channels,WAV_PLAY_BUFF_SIZE) != 0)
   {
     return ER_WAV_NOT_SUPPORT;

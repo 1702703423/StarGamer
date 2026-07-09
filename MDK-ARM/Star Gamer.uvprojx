@@ -4179,6 +4179,26 @@
               <FileType>5</FileType>
               <FilePath>..\GUI\GUI_Player.h</FilePath>
             </File>
+            <File>
+              <FileName>GUI_Settings.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Settings.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Settings.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Settings.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Image.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Image.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Image.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Image.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

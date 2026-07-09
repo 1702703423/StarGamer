@@ -3,5 +3,5 @@
 osThreadAttr_t GUI_Handler = {
 	.name = "GUI_Handler",
 	.priority = osPriorityAboveNormal,
-	.stack_size = 2048
+	.stack_size = 6144
 };

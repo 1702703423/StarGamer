@@ -21,10 +21,10 @@
 /* Includes ------------------------------------------------------------------*/
 
 /*FatFS is chosen for File storage*/
+#include <stddef.h>
 #include "ff.h"
-
-/*FreeRtos Api*/
-#include "cmsis_os.h"
+#include "sys.h"
+#include "Malloc.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -34,14 +34,14 @@
 /* Private functions ---------------------------------------------------------*/
 
 /*This defines the memory allocation methods.*/
-#define JMALLOC   pvPortMalloc
-#define JFREE     vPortFree
+#define JMALLOC(size)        sys_malloc(SRAMEX, (u32)(size))
+#define JFREE(ptr)           sys_free(SRAMEX, (ptr))
 
 /*This defines the File data manager type.*/
 #define JFILE            FIL
 
-size_t read_file (FIL  *file, uint8_t *buf, uint32_t sizeofbuf);
-size_t write_file (FIL  *file, uint8_t *buf, uint32_t sizeofbuf) ;
+size_t read_file (FIL  *file, u8 *buf, u32 sizeofbuf);
+size_t write_file (FIL  *file, u8 *buf, u32 sizeofbuf) ;
 
 #define JFREAD(file,buf,sizeofbuf)  \
 read_file (file,buf,sizeofbuf)

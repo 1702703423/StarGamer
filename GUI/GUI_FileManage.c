@@ -21,13 +21,19 @@ static void GUI_FM_BackEvent(lv_event_t *event);
 static void GUI_FM_RefreshEvent(lv_event_t *event);
 static void GUI_FM_ItemEvent(lv_event_t *event);
 static u8 GUI_FM_HandleCommonKey(GUI_FileManage_t *manager, u32 key);
+static void GUI_FM_WaitInputRelease(void);
+static int GUI_FM_ScheduleAction(GUI_FileManage_t *manager, GUI_FileManagePending_t action, const char *path);
+static void GUI_FM_AsyncAction(void *user_data);
+static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager);
 static int GUI_FM_ReadDir(GUI_FileManage_t *manager);
 static int GUI_FM_AddParent(GUI_FileManage_t *manager);
+static int GUI_FM_AddPageNav(GUI_FileManage_t *manager, GUI_FileManageItemType_t type, const char *name);
 static int GUI_FM_AddInfo(GUI_FileManage_t *manager, const FILINFO *info);
 static void GUI_FM_RebuildList(GUI_FileManage_t *manager);
 static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item);
 static int GUI_FM_OpenItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item);
 static void GUI_FM_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_obj_t **first_obj);
+static void GUI_FM_CloseDir(GUI_FileManage_t *manager);
 static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager);
 static u8 GUI_FM_PathJoin(char *dst, u32 dst_size, const char *dir, const char *name);
 static u8 GUI_FM_CopyText(char *dst, u32 dst_size, const char *src);
@@ -82,6 +88,7 @@ int GUI_FileManage_OpenPath(GUI_FileManage_t *manager, const char *path)
 		return OPERATE_FAILED;
 	}
 
+	GUI_FM_CloseDir(manager);
 	return GUI_FileManage_Refresh(manager);
 }
 
@@ -98,6 +105,7 @@ int GUI_FileManage_OpenParent(GUI_FileManage_t *manager)
 
 	if (GUI_FM_IsRootPath(manager) != 0U)
 	{
+		GUI_FM_CloseDir(manager);
 		if (manager->config.back != NULL)
 		{
 			return manager->config.back(manager, manager->config.user_data);
@@ -126,6 +134,7 @@ int GUI_FileManage_OpenParent(GUI_FileManage_t *manager)
 		}
 	}
 
+	GUI_FM_CloseDir(manager);
 	return GUI_FileManage_Refresh(manager);
 }
 
@@ -138,6 +147,7 @@ int GUI_FileManage_Refresh(GUI_FileManage_t *manager)
 		return OPERATE_FAILED;
 	}
 
+	GUI_FM_CloseDir(manager);
 	code = GUI_FM_ReadDir(manager);
 	GUI_FM_RebuildList(manager);
 
@@ -311,11 +321,12 @@ static void GUI_FM_BackEvent(lv_event_t *event)
 
 	if (code == LV_EVENT_CLICKED)
 	{
-		(void)GUI_FileManage_OpenParent(manager);
+		(void)GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
 	}
 	else if (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_ESC)
 	{
-		(void)GUI_FileManage_OpenParent(manager);
+		GUI_FM_WaitInputRelease();
+		(void)GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
 	}
 	else if (code == LV_EVENT_KEY)
 	{
@@ -330,11 +341,16 @@ static void GUI_FM_RefreshEvent(lv_event_t *event)
 
 	if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_ENTER))
 	{
-		(void)GUI_FileManage_Refresh(manager);
+		if (code == LV_EVENT_KEY)
+		{
+			GUI_FM_WaitInputRelease();
+		}
+		(void)GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_REFRESH, NULL);
 	}
 	else if (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_ESC)
 	{
-		(void)GUI_FileManage_OpenParent(manager);
+		GUI_FM_WaitInputRelease();
+		(void)GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
 	}
 	else if (code == LV_EVENT_KEY)
 	{
@@ -346,27 +362,69 @@ static void GUI_FM_ItemEvent(lv_event_t *event)
 {
 	lv_event_code_t code = lv_event_get_code(event);
 	GUI_FileManageItem_t *item = (GUI_FileManageItem_t *)lv_event_get_user_data(event);
+	u32 key = 0U;
 
 	if (item == NULL || item->manager == NULL)
 	{
 		return;
 	}
 
-	if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_ENTER))
+	if (code == LV_EVENT_KEY)
 	{
-		(void)GUI_FM_OpenItem(item->manager, item);
+		key = lv_event_get_key(event);
 	}
-	else if (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_RIGHT)
+
+	if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY && key == LV_KEY_ENTER))
 	{
-		(void)GUI_FM_OpenItem(item->manager, item);
+		if (code == LV_EVENT_KEY)
+		{
+			GUI_FM_WaitInputRelease();
+		}
+		if (item->type == GUI_FILEMANAGE_ITEM_PARENT)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
+		}
+		else if (item->type == GUI_FILEMANAGE_ITEM_NEXT)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_NEXT, NULL);
+		}
+		else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PATH, item->path);
+		}
+		else
+		{
+			(void)GUI_FM_OpenItem(item->manager, item);
+		}
 	}
-	else if (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_ESC)
+	else if (code == LV_EVENT_KEY && key == LV_KEY_RIGHT)
 	{
-		(void)GUI_FileManage_OpenParent(item->manager);
+		GUI_FM_WaitInputRelease();
+		if (item->type == GUI_FILEMANAGE_ITEM_PARENT)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
+		}
+		else if (item->type == GUI_FILEMANAGE_ITEM_NEXT)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_NEXT, NULL);
+		}
+		else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PATH, item->path);
+		}
+		else
+		{
+			(void)GUI_FM_OpenItem(item->manager, item);
+		}
+	}
+	else if (code == LV_EVENT_KEY && key == LV_KEY_ESC)
+	{
+		GUI_FM_WaitInputRelease();
+		(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
 	}
 	else if (code == LV_EVENT_KEY)
 	{
-		(void)GUI_FM_HandleCommonKey(item->manager, lv_event_get_key(event));
+		(void)GUI_FM_HandleCommonKey(item->manager, key);
 	}
 }
 
@@ -381,7 +439,8 @@ static u8 GUI_FM_HandleCommonKey(GUI_FileManage_t *manager, u32 key)
 
 	if (key == LV_KEY_ESC || key == LV_KEY_LEFT)
 	{
-		(void)GUI_FileManage_OpenParent(manager);
+		GUI_FM_WaitInputRelease();
+		(void)GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_PARENT, NULL);
 		return 1U;
 	}
 
@@ -406,12 +465,113 @@ static u8 GUI_FM_HandleCommonKey(GUI_FileManage_t *manager, u32 key)
 	return 0U;
 }
 
+static void GUI_FM_WaitInputRelease(void)
+{
+	lv_indev_t *indev;
+
+	indev = lv_indev_get_act();
+	if (indev != NULL)
+	{
+		lv_indev_wait_release(indev);
+	}
+}
+
+static int GUI_FM_ScheduleAction(GUI_FileManage_t *manager, GUI_FileManagePending_t action, const char *path)
+{
+	lv_res_t res;
+
+	if (manager == NULL || manager->locked != 0U || action == GUI_FILEMANAGE_PENDING_NONE)
+	{
+		return OPERATE_FAILED;
+	}
+
+	if (action == GUI_FILEMANAGE_PENDING_PATH)
+	{
+		if (GUI_FM_CopyText(manager->pending_path, GUI_FILEMANAGE_PATH_SIZE, path) == 0U)
+		{
+			GUI_FileManage_SetStatus(manager, "Path too long");
+			return OPERATE_FAILED;
+		}
+	}
+	else
+	{
+		manager->pending_path[0] = '\0';
+	}
+
+	manager->pending_action = (u8)action;
+	if (manager->pending_scheduled != 0U)
+	{
+		return SYSTEM_STATUS_OK;
+	}
+
+	res = lv_async_call(GUI_FM_AsyncAction, manager);
+	if (res != LV_RES_OK)
+	{
+		manager->pending_action = (u8)GUI_FILEMANAGE_PENDING_NONE;
+		manager->pending_path[0] = '\0';
+		return OPERATE_FAILED;
+	}
+
+	manager->pending_scheduled = 1U;
+	return SYSTEM_STATUS_OK;
+}
+
+static void GUI_FM_AsyncAction(void *user_data)
+{
+	GUI_FileManage_t *manager = (GUI_FileManage_t *)user_data;
+	u8 action;
+
+	if (manager == NULL)
+	{
+		return;
+	}
+
+	action = manager->pending_action;
+	manager->pending_action = (u8)GUI_FILEMANAGE_PENDING_NONE;
+	manager->pending_scheduled = 0U;
+
+	if (action == (u8)GUI_FILEMANAGE_PENDING_REFRESH)
+	{
+		(void)GUI_FileManage_Refresh(manager);
+	}
+	else if (action == (u8)GUI_FILEMANAGE_PENDING_PARENT)
+	{
+		(void)GUI_FileManage_OpenParent(manager);
+	}
+	else if (action == (u8)GUI_FILEMANAGE_PENDING_PATH)
+	{
+		(void)GUI_FileManage_OpenPath(manager, manager->pending_path);
+	}
+	else if (action == (u8)GUI_FILEMANAGE_PENDING_NEXT)
+	{
+		(void)GUI_FM_OpenNextPage(manager);
+	}
+}
+
+static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager)
+{
+	int code;
+
+	if (manager == NULL || manager->locked != 0U || manager->has_more == 0U)
+	{
+		return OPERATE_FAILED;
+	}
+
+	code = GUI_FM_ReadDir(manager);
+	GUI_FM_RebuildList(manager);
+
+	return code;
+}
+
 static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 {
-	DIR dir;
 	FILINFO info;
 	FRESULT fr;
 	int code = SYSTEM_STATUS_OK;
+	u32 scanned = 0U;
+	u32 scan_limit = GUI_FILEMANAGE_SCAN_LIMIT;
+	u8 first_page = 0U;
+	u8 real_item_limit;
 
 	if (manager == NULL)
 	{
@@ -419,18 +579,51 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 	}
 
 	manager->item_count = 0U;
-	fr = f_opendir(&dir, manager->current_path);
-	if (fr != FR_OK)
+	manager->has_more = 0U;
+	if (manager->dir_open == 0U || strcmp(manager->dir_path, manager->current_path) != 0)
 	{
-		GUI_FileManage_SetStatus(manager, "Open directory failed");
-		return OPERATE_FAILED;
+		GUI_FM_CloseDir(manager);
+
+		fr = f_opendir(&manager->dir, manager->current_path);
+		if (fr != FR_OK)
+		{
+			GUI_FileManage_SetStatus(manager, "Open directory failed");
+			return OPERATE_FAILED;
+		}
+
+		if (GUI_FM_CopyText(manager->dir_path, GUI_FILEMANAGE_PATH_SIZE, manager->current_path) == 0U)
+		{
+			(void)f_closedir(&manager->dir);
+			manager->dir_path[0] = '\0';
+			return OPERATE_FAILED;
+		}
+
+		manager->dir_open = 1U;
+		manager->dir_eof = 0U;
+		first_page = 1U;
 	}
 
-	code = GUI_FM_AddParent(manager);
-	while (code == SYSTEM_STATUS_OK && manager->item_count < GUI_FILEMANAGE_MAX_ITEMS)
+	if (scan_limit == 0U)
+	{
+		scan_limit = 1U;
+	}
+
+	if (first_page != 0U)
+	{
+		code = GUI_FM_AddParent(manager);
+	}
+
+	real_item_limit = GUI_FILEMANAGE_MAX_ITEMS;
+	if (real_item_limit > manager->item_count)
+	{
+		real_item_limit--;
+	}
+
+	while (code == SYSTEM_STATUS_OK && manager->dir_eof == 0U &&
+	       manager->item_count < real_item_limit && scanned < scan_limit)
 	{
 		memset(&info, 0, sizeof(info));
-		fr = f_readdir(&dir, &info);
+		fr = f_readdir(&manager->dir, &info);
 		if (fr != FR_OK)
 		{
 			code = OPERATE_FAILED;
@@ -440,13 +633,26 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 
 		if (info.fname[0] == '\0')
 		{
+			manager->dir_eof = 1U;
 			break;
 		}
+
+		scanned++;
 
 		code = GUI_FM_AddInfo(manager, &info);
 	}
 
-	(void)f_closedir(&dir);
+	if (code == SYSTEM_STATUS_OK && manager->dir_eof == 0U)
+	{
+		manager->has_more = 1U;
+		code = GUI_FM_AddPageNav(manager, GUI_FILEMANAGE_ITEM_NEXT, "More...");
+	}
+
+	if (code != SYSTEM_STATUS_OK || manager->dir_eof != 0U)
+	{
+		GUI_FM_CloseDir(manager);
+	}
+
 	if (code == SYSTEM_STATUS_OK)
 	{
 		GUI_FM_SetDefaultStatus(manager);
@@ -474,6 +680,30 @@ static int GUI_FM_AddParent(GUI_FileManage_t *manager)
 	item->manager = manager;
 	item->type = GUI_FILEMANAGE_ITEM_PARENT;
 	(void)GUI_FM_CopyText(item->name, GUI_FILEMANAGE_NAME_SIZE, "..");
+	manager->item_count++;
+
+	return SYSTEM_STATUS_OK;
+}
+
+static int GUI_FM_AddPageNav(GUI_FileManage_t *manager, GUI_FileManageItemType_t type, const char *name)
+{
+	GUI_FileManageItem_t *item;
+
+	if (manager == NULL || name == NULL)
+	{
+		return OPERATE_FAILED;
+	}
+
+	if (manager->item_count >= GUI_FILEMANAGE_MAX_ITEMS)
+	{
+		return SYSTEM_STATUS_OK;
+	}
+
+	item = &manager->items[manager->item_count];
+	memset(item, 0, sizeof(GUI_FileManageItem_t));
+	item->manager = manager;
+	item->type = type;
+	(void)GUI_FM_CopyText(item->name, GUI_FILEMANAGE_NAME_SIZE, name);
 	manager->item_count++;
 
 	return SYSTEM_STATUS_OK;
@@ -542,6 +772,14 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 		return;
 	}
 
+	group = lv_group_get_default();
+	if (group != NULL && Page_GetCurrent() == manager->page->id)
+	{
+		lv_group_remove_all_objs(group);
+		lv_group_set_editing(group, false);
+		lv_group_set_wrap(group, true);
+	}
+
 	lv_label_set_text(manager->path_label, manager->current_path);
 	lv_obj_clean(manager->list);
 
@@ -556,12 +794,8 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 		(void)lv_list_add_text(manager->list, text);
 	}
 
-	group = lv_group_get_default();
 	if (group != NULL && Page_GetCurrent() == manager->page->id)
 	{
-		lv_group_remove_all_objs(group);
-		lv_group_set_editing(group, false);
-		lv_group_set_wrap(group, true);
 		GUI_FM_AddFocusableChildren(group, manager->screen, &first_obj);
 		if (first_obj != NULL)
 		{
@@ -582,6 +816,10 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 	else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 	{
 		icon = LV_SYMBOL_DIRECTORY;
+	}
+	else if (item->type == GUI_FILEMANAGE_ITEM_NEXT)
+	{
+		icon = LV_SYMBOL_NEXT;
 	}
 	else
 	{
@@ -622,6 +860,7 @@ static int GUI_FM_OpenItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item
 		return GUI_FileManage_OpenPath(manager, item->path);
 	}
 
+	GUI_FM_CloseDir(manager);
 	if (manager->config.open != NULL)
 	{
 		return manager->config.open(manager, item, manager->config.user_data);
@@ -656,6 +895,20 @@ static void GUI_FM_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_
 
 		GUI_FM_AddFocusableChildren(group, child, first_obj);
 	}
+}
+
+static void GUI_FM_CloseDir(GUI_FileManage_t *manager)
+{
+	if (manager == NULL || manager->dir_open == 0U)
+	{
+		return;
+	}
+
+	(void)f_closedir(&manager->dir);
+	manager->dir_open = 0U;
+	manager->dir_eof = 0U;
+	manager->has_more = 0U;
+	manager->dir_path[0] = '\0';
 }
 
 static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager)

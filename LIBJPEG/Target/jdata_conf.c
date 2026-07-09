@@ -30,17 +30,31 @@
 /* Private function prototypes -----------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
 
-size_t read_file (FIL  *file, uint8_t *buf, uint32_t sizeofbuf)
+size_t read_file (FIL  *file, u8 *buf, u32 sizeofbuf)
 {
-static size_t BytesReadfile ;
-f_read (file, buf , sizeofbuf, &BytesReadfile);
-return BytesReadfile;
+	UINT bytes_read = 0U;
+	if (file == NULL || buf == NULL)
+	{
+		return 0U;
+	}
+	if (f_read(file, buf, (UINT)sizeofbuf, &bytes_read) != FR_OK)
+	{
+		return 0U;
+	}
+	return (size_t)bytes_read;
 }
 
-size_t write_file (FIL  *file, uint8_t *buf, uint32_t sizeofbuf)
+size_t write_file (FIL  *file, u8 *buf, u32 sizeofbuf)
 {
-static size_t BytesWritefile;
-f_write (file, buf , sizeofbuf, &BytesWritefile);
-return BytesWritefile;
+	UINT bytes_written = 0U;
+	if (file == NULL || buf == NULL)
+	{
+		return 0U;
+	}
+	if (f_write(file, buf, (UINT)sizeofbuf, &bytes_written) != FR_OK)
+	{
+		return 0U;
+	}
+	return (size_t)bytes_written;
 }
 

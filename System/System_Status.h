@@ -40,13 +40,20 @@ typedef struct System_Status_Information
 typedef struct System_Core_Information
 {
 	u8 SetPasswd;
-	u8 BackUpSystem;
+	u8 isSystemBackup;
 	u8 AvilableUpdateReady;
 	u8 NeedRecovery;
 	u8 Debug;
-	u8 RecordErrorInfo;
 	u32 AppBinLength;
 }System_Core_Information_t;
+
+typedef struct IAP_Info
+{
+	u8 NeedBackUpSystem;
+	u8 AvilableUpdateReady;
+	u8 NeedRecovery;
+	u32 AppBinLength;
+}IAP_Info_t;
 
 typedef struct System_Settings
 {
@@ -54,11 +61,6 @@ typedef struct System_Settings
 	u8 Debug;
 	u16 ScreenLight;
 }System_Settings_t;
-
-typedef struct System_API
-{
-	
-}System_API_t;
 
 typedef struct Frame_Buffer_Status
 {

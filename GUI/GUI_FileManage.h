@@ -20,14 +20,28 @@ extern "C" {
 #define GUI_FILEMANAGE_MAX_ITEMS        32U
 #endif
 
+#ifndef GUI_FILEMANAGE_SCAN_LIMIT
+#define GUI_FILEMANAGE_SCAN_LIMIT       (GUI_FILEMANAGE_MAX_ITEMS * 4U)
+#endif
+
 typedef struct GUI_FileManage GUI_FileManage_t;
 
 typedef enum
 {
 	GUI_FILEMANAGE_ITEM_PARENT = 0,
 	GUI_FILEMANAGE_ITEM_DIR,
-	GUI_FILEMANAGE_ITEM_FILE
+	GUI_FILEMANAGE_ITEM_FILE,
+	GUI_FILEMANAGE_ITEM_NEXT
 } GUI_FileManageItemType_t;
+
+typedef enum
+{
+	GUI_FILEMANAGE_PENDING_NONE = 0,
+	GUI_FILEMANAGE_PENDING_REFRESH,
+	GUI_FILEMANAGE_PENDING_PARENT,
+	GUI_FILEMANAGE_PENDING_PATH,
+	GUI_FILEMANAGE_PENDING_NEXT
+} GUI_FileManagePending_t;
 
 typedef struct
 {
@@ -70,9 +84,17 @@ struct GUI_FileManage
 	lv_obj_t *back_btn;
 	lv_obj_t *refresh_btn;
 	GUI_FileManageItem_t items[GUI_FILEMANAGE_MAX_ITEMS];
+	DIR dir;
 	char root_path[GUI_FILEMANAGE_PATH_SIZE];
 	char current_path[GUI_FILEMANAGE_PATH_SIZE];
+	char pending_path[GUI_FILEMANAGE_PATH_SIZE];
+	char dir_path[GUI_FILEMANAGE_PATH_SIZE];
+	u8 pending_action;
+	u8 pending_scheduled;
 	u8 item_count;
+	u8 dir_open;
+	u8 dir_eof;
+	u8 has_more;
 	u8 locked;
 };
 

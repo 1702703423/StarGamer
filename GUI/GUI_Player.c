@@ -1,18 +1,20 @@
 #include "GUI_Player.h"
 #include "GUI_FileManage.h"
 #include "Player.h"
+#include "i2s.h"
 #include "System_Status.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #define GUI_PLAYER_ACCENT              0x1E88E5U
-#define GUI_PLAYER_LIST_H              96
+#define GUI_PLAYER_LIST_H              82
 #define GUI_PLAYER_BAR_X               10
-#define GUI_PLAYER_BAR_Y               164
+#define GUI_PLAYER_BAR_Y               148
 #define GUI_PLAYER_BAR_W               300
-#define GUI_PLAYER_BAR_H               48
+#define GUI_PLAYER_BAR_H               64
 #define GUI_PLAYER_CTRL_SIZE           34
+#define GUI_PLAYER_VOLUME_MAX          100
 #define GUI_PLAYER_STATUS_Y            218
 #define GUI_PLAYER_TIMER_MS            250U
 
@@ -28,8 +30,12 @@ typedef struct
 	lv_obj_t *play_icon;
 	lv_obj_t *stop_btn;
 	lv_obj_t *stop_icon;
+	lv_obj_t *volume_icon;
+	lv_obj_t *volume_slider;
+	lv_obj_t *volume_label;
 	lv_timer_t *poll_timer;
 	Player_State_t last_state;
+	u8 volume;
 } GUI_Player_Context_t;
 
 static int GUI_Player_PageBuild(Page_Struct_t *page);
@@ -40,11 +46,16 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context);
 static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb);
 static void GUI_Player_PlayEvent(lv_event_t *event);
 static void GUI_Player_StopEvent(lv_event_t *event);
+static void GUI_Player_VolumeEvent(lv_event_t *event);
 static u8 GUI_Player_HandleKey(u32 key);
 static void GUI_Player_PollTimer(lv_timer_t *timer);
 static int GUI_Player_EnsureTimer(void);
 static void GUI_Player_UpdateView(GUI_Player_Context_t *context);
+static void GUI_Player_SetVolume(GUI_Player_Context_t *context, int volume);
+static void GUI_Player_UpdateVolumeView(GUI_Player_Context_t *context, int volume);
+static int GUI_Player_LimitVolume(int volume);
 static const char *GUI_Player_StateText(Player_State_t state);
+static void GUI_Player_SetLabelTextIfChanged(lv_obj_t *label, const char *text);
 static u8 GUI_Player_CopyText(char *dst, u32 dst_size, const char *src);
 static const char *GUI_Player_FileName(const char *path);
 
@@ -128,6 +139,7 @@ static int GUI_Player_PageBuild(Page_Struct_t *page)
 	}
 
 	s_player.last_state = PLAYER_STATE_IDLE;
+	s_player.volume = (u8)GUI_Player_LimitVolume(audio_card_get_volume());
 	GUI_Player_CreateControls(&s_player);
 	GUI_Player_UpdateView(&s_player);
 
@@ -174,6 +186,7 @@ static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageI
 		GUI_Player_UpdateView(context);
 		return code;
 	}
+	(void)audio_card_chg_volume(context->volume);
 
 	GUI_FileManage_SetStatus(manager, "Playing");
 	GUI_Player_UpdateView(context);
@@ -207,13 +220,13 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_obj_set_style_pad_all(context->bar, 0, 0);
 
 	context->track_label = lv_label_create(context->bar);
-	lv_label_set_long_mode(context->track_label, LV_LABEL_LONG_DOT);
+	lv_label_set_long_mode(context->track_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
 	lv_obj_set_width(context->track_label, 180);
 	lv_obj_set_pos(context->track_label, 10, 7);
 	lv_obj_set_style_text_color(context->track_label, lv_color_hex(0xF5F7FAU), 0);
 
 	context->state_label = lv_label_create(context->bar);
-	lv_label_set_long_mode(context->state_label, LV_LABEL_LONG_DOT);
+	lv_label_set_long_mode(context->state_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
 	lv_obj_set_width(context->state_label, 180);
 	lv_obj_set_pos(context->state_label, 10, 27);
 	lv_obj_set_style_text_color(context->state_label, lv_color_hex(0x95A3B0U), 0);
@@ -222,6 +235,37 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	context->play_icon = lv_obj_get_child(context->play_btn, 0);
 	context->stop_btn = GUI_Player_CreateButton(context->bar, LV_SYMBOL_STOP, 252, GUI_Player_StopEvent);
 	context->stop_icon = lv_obj_get_child(context->stop_btn, 0);
+
+	context->volume_icon = lv_label_create(context->bar);
+	lv_label_set_text(context->volume_icon, LV_SYMBOL_VOLUME_MID);
+	lv_obj_set_pos(context->volume_icon, 12, 42);
+	lv_obj_set_style_text_color(context->volume_icon, lv_color_hex(0xAEB7C2U), 0);
+
+	context->volume_slider = lv_slider_create(context->bar);
+	lv_obj_clear_flag(context->volume_slider, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_size(context->volume_slider, 176, 8);
+	lv_obj_set_pos(context->volume_slider, 42, 49);
+	lv_slider_set_range(context->volume_slider, 0, GUI_PLAYER_VOLUME_MAX);
+	lv_obj_set_style_radius(context->volume_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+	lv_obj_set_style_radius(context->volume_slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(context->volume_slider, lv_color_hex(0x2B3642U), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(context->volume_slider, lv_color_hex(GUI_PLAYER_ACCENT), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(context->volume_slider, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+	lv_obj_set_style_width(context->volume_slider, 14, LV_PART_KNOB);
+	lv_obj_set_style_height(context->volume_slider, 14, LV_PART_KNOB);
+	lv_obj_set_style_outline_width(context->volume_slider, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_pad(context->volume_slider, 5, LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_color(context->volume_slider, lv_color_hex(GUI_PLAYER_ACCENT), LV_STATE_FOCUSED);
+	lv_obj_add_event_cb(context->volume_slider, GUI_Player_VolumeEvent, LV_EVENT_VALUE_CHANGED, context);
+	lv_obj_add_event_cb(context->volume_slider, GUI_Player_VolumeEvent, LV_EVENT_KEY, context);
+
+	context->volume_label = lv_label_create(context->bar);
+	lv_label_set_long_mode(context->volume_label, LV_LABEL_LONG_DOT);
+	lv_obj_set_width(context->volume_label, 56);
+	lv_obj_set_pos(context->volume_label, 232, 41);
+	lv_obj_set_style_text_align(context->volume_label, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_set_style_text_color(context->volume_label, lv_color_hex(0xF5F7FAU), 0);
+	GUI_Player_UpdateVolumeView(context, context->volume);
 }
 
 static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb)
@@ -297,10 +341,50 @@ static void GUI_Player_PlayEvent(lv_event_t *event)
 	}
 	else if (context->current_path[0] != '\0' && PlayerIsBusy() == 0U)
 	{
-		(void)PlayerStart((const TCHAR *)context->current_path);
+		if (PlayerStart((const TCHAR *)context->current_path) == SYSTEM_STATUS_OK)
+		{
+			(void)audio_card_chg_volume(context->volume);
+		}
 	}
 
 	GUI_Player_UpdateView(context);
+}
+
+static void GUI_Player_VolumeEvent(lv_event_t *event)
+{
+	GUI_Player_Context_t *context = (GUI_Player_Context_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	if (code == LV_EVENT_VALUE_CHANGED)
+	{
+		GUI_Player_SetVolume(context, (int)lv_slider_get_value(context->volume_slider));
+		return;
+	}
+
+	if (code != LV_EVENT_KEY)
+	{
+		return;
+	}
+
+	key = lv_event_get_key(event);
+	if (key == LV_KEY_ESC)
+	{
+		(void)Page_Back();
+	}
+	else if (key == LV_KEY_UP || key == LV_KEY_PREV)
+	{
+		(void)GUI_Player_HandleKey(key);
+	}
+	else if (key == LV_KEY_DOWN || key == LV_KEY_NEXT)
+	{
+		(void)GUI_Player_HandleKey(key);
+	}
 }
 
 static void GUI_Player_StopEvent(lv_event_t *event)
@@ -405,7 +489,7 @@ static void GUI_Player_UpdateView(GUI_Player_Context_t *context)
 
 	if (context->track_label != NULL)
 	{
-		lv_label_set_text(context->track_label, (track != NULL && track[0] != '\0') ? track : "No track");
+		GUI_Player_SetLabelTextIfChanged(context->track_label, (track != NULL && track[0] != '\0') ? track : "No track");
 	}
 
 	if (context->state_label != NULL)
@@ -417,11 +501,11 @@ static void GUI_Player_UpdateView(GUI_Player_Context_t *context)
 			               (unsigned long)info.Sample_Rate,
 			               info.Channels,
 			               info.deepth);
-			lv_label_set_text(context->state_label, text);
+			GUI_Player_SetLabelTextIfChanged(context->state_label, text);
 		}
 		else
 		{
-			lv_label_set_text(context->state_label, GUI_Player_StateText(state));
+			GUI_Player_SetLabelTextIfChanged(context->state_label, GUI_Player_StateText(state));
 		}
 	}
 
@@ -454,11 +538,81 @@ static void GUI_Player_UpdateView(GUI_Player_Context_t *context)
 		}
 	}
 
+	GUI_Player_UpdateVolumeView(context, audio_card_get_volume());
+
 	if (context->file_manage.status_label != NULL && state != context->last_state)
 	{
 		GUI_FileManage_SetStatus(&context->file_manage, GUI_Player_StateText(state));
 		context->last_state = state;
 	}
+}
+
+static void GUI_Player_SetVolume(GUI_Player_Context_t *context, int volume)
+{
+	if (context == NULL)
+	{
+		return;
+	}
+
+	volume = GUI_Player_LimitVolume(volume);
+	context->volume = (u8)volume;
+	(void)audio_card_chg_volume(volume);
+	GUI_Player_UpdateVolumeView(context, volume);
+}
+
+static void GUI_Player_UpdateVolumeView(GUI_Player_Context_t *context, int volume)
+{
+	char text[8];
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	volume = GUI_Player_LimitVolume(volume);
+	context->volume = (u8)volume;
+
+	if (context->volume_slider != NULL && lv_slider_get_value(context->volume_slider) != volume)
+	{
+		lv_slider_set_value(context->volume_slider, volume, LV_ANIM_OFF);
+	}
+
+	if (context->volume_icon != NULL)
+	{
+		if (volume == 0)
+		{
+			lv_label_set_text(context->volume_icon, LV_SYMBOL_MUTE);
+		}
+		else if (volume >= 75)
+		{
+			lv_label_set_text(context->volume_icon, LV_SYMBOL_VOLUME_MAX);
+		}
+		else
+		{
+			lv_label_set_text(context->volume_icon, LV_SYMBOL_VOLUME_MID);
+		}
+	}
+
+	if (context->volume_label != NULL)
+	{
+		(void)snprintf(text, sizeof(text), "%d%%", volume);
+		lv_label_set_text(context->volume_label, text);
+	}
+}
+
+static int GUI_Player_LimitVolume(int volume)
+{
+	if (volume < 0)
+	{
+		return 0;
+	}
+
+	if (volume > GUI_PLAYER_VOLUME_MAX)
+	{
+		return GUI_PLAYER_VOLUME_MAX;
+	}
+
+	return volume;
 }
 
 static const char *GUI_Player_StateText(Player_State_t state)
@@ -478,6 +632,27 @@ static const char *GUI_Player_StateText(Player_State_t state)
 		case PLAYER_STATE_IDLE:
 		default:
 			return "Stopped";
+	}
+}
+
+static void GUI_Player_SetLabelTextIfChanged(lv_obj_t *label, const char *text)
+{
+	const char *old_text;
+
+	if (label == NULL)
+	{
+		return;
+	}
+
+	if (text == NULL)
+	{
+		text = "";
+	}
+
+	old_text = lv_label_get_text(label);
+	if (old_text == NULL || strcmp(old_text, text) != 0)
+	{
+		lv_label_set_text(label, text);
 	}
 }
 

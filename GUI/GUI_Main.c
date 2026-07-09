@@ -1,19 +1,22 @@
 #include "GUI_Main.h"
 #include "GUI_NES.h"
 #include "GUI_Player.h"
+#include "GUI_Image.h"
+#include "GUI_Settings.h"
 
-#define GUI_MENU_ITEM_W 92
+#define GUI_MENU_ITEM_W 72
 #define GUI_MENU_ITEM_H 78
-#define GUI_MENU_START_X 12
+#define GUI_MENU_START_X 8
 #define GUI_MENU_START_Y 48
-#define GUI_MENU_GAP_X 10
+#define GUI_MENU_GAP_X 6
 #define GUI_MENU_GAP_Y 8
-#define GUI_MENU_COLS 3
+#define GUI_MENU_COLS 4
 
 typedef struct
 {
 	Page_ID_t page_id;
 	const char *name;
+	const char *label;
 	const char *symbol;
 	u32 color;
 } GUI_MenuItem_t;
@@ -30,12 +33,14 @@ static void GUI_BackButtonEvent(lv_event_t *event);
 
 static const GUI_MenuItem_t s_menu_items[] =
 {
-	{GUI_PAGE_NES, "NES", LV_SYMBOL_PLAY, 0xE84E40U},
-	{GUI_PAGE_ARDUBOY, "Arduboy", LV_SYMBOL_KEYBOARD, 0x43A047U},
-	{GUI_PAGE_MUSIC, "Music", LV_SYMBOL_AUDIO, 0x1E88E5U},
-	{GUI_PAGE_IMAGE, "Image", LV_SYMBOL_IMAGE, 0x8E24AAU},
-	{GUI_PAGE_TEXT, "Text", LV_SYMBOL_FILE, 0x546E7AU},
-	{GUI_PAGE_SETTINGS, "Settings", LV_SYMBOL_SETTINGS, 0xF9A825U},
+	{GUI_PAGE_NES, "NES", "NES", LV_SYMBOL_PLAY, 0xE84E40U},
+	{GUI_PAGE_ARDUBOY, "Arduboy", "Arduboy", LV_SYMBOL_KEYBOARD, 0x43A047U},
+	{GUI_PAGE_MUSIC, "Music", "Music", LV_SYMBOL_AUDIO, 0x1E88E5U},
+	{GUI_PAGE_VIDEO, "Video Player", "Video", LV_SYMBOL_VIDEO, 0xD81B60U},
+	{GUI_PAGE_IMAGE, "Image", "Image", LV_SYMBOL_IMAGE, 0x8E24AAU},
+	{GUI_PAGE_TEXT, "Text", "Text", LV_SYMBOL_FILE, 0x546E7AU},
+	{GUI_PAGE_AXF_LOADER, "AXF Loader", "AXF", LV_SYMBOL_UPLOAD, 0x00897BU},
+	{GUI_PAGE_SETTINGS, "Settings", "Settings", LV_SYMBOL_SETTINGS, 0xF9A825U},
 };
 
 #define GUI_MENU_ITEM_COUNT ((u8)(sizeof(s_menu_items) / sizeof(s_menu_items[0])))
@@ -149,7 +154,7 @@ static void GUI_CreateMenuButton(lv_obj_t *screen, const GUI_MenuItem_t *item, u
 	lv_obj_align(badge, LV_ALIGN_TOP_MID, 0, 8);
 
 	name = lv_label_create(btn);
-	lv_label_set_text(name, item->name);
+	lv_label_set_text(name, item->label);
 	lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
 	lv_obj_set_width(name, GUI_MENU_ITEM_W - 8);
 	lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
@@ -424,9 +429,24 @@ int GUI_Main_Init(void)
 		return code;
 	}
 
+	code = GUI_Image_Register();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		return code;
+	}
+
+	code = GUI_Settings_Register();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		return code;
+	}
+
 	for (i = 0U; i < GUI_MENU_ITEM_COUNT; i++)
 	{
-		if (s_menu_items[i].page_id == GUI_PAGE_NES || s_menu_items[i].page_id == GUI_PAGE_MUSIC)
+		if (s_menu_items[i].page_id == GUI_PAGE_NES ||
+		    s_menu_items[i].page_id == GUI_PAGE_MUSIC ||
+		    s_menu_items[i].page_id == GUI_PAGE_IMAGE ||
+		    s_menu_items[i].page_id == GUI_PAGE_SETTINGS)
 		{
 			continue;
 		}

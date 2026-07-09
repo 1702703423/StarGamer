@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "sys.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +47,7 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
+void HardFault_Handler_C(u32 *stack_pointer, u32 lr_value, u32 msp_value, u32 psp_value);
 
 /* USER CODE END PFP */
 
@@ -92,28 +94,22 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Hard fault interrupt.
   */
+__attribute__((naked))
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-	printf("======================================\r\n");
-	printf("HardFault!!\r\n");
-	
 	__asm volatile(
         "tst lr, #4 \n"
         "ite eq \n"
         "mrseq r0, msp \n"
         "mrsne r0, psp \n"
         "mov r1, lr \n"
-        "mov r2, #0 \n"
+        "mrs r2, msp \n"
+        "mrs r3, psp \n"
         "b HardFault_Handler_C \n"
     );
 
   /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-	}
-    /* USER CODE END W1_HardFault_IRQn 0 */
 }
 
 
