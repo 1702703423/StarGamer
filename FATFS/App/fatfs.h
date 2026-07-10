@@ -28,6 +28,16 @@
 #include "sd_diskio.h" /* defines SD_Driver as external */
 
 /* USER CODE BEGIN Includes */
+#ifndef FATFS_LOG_ENABLE
+#define FATFS_LOG_ENABLE 1U
+#endif
+
+#if FATFS_LOG_ENABLE
+void FATFS_LogPrint(const char *fmt, ...);
+#define FATFS_LOG(...) FATFS_LogPrint(__VA_ARGS__)
+#else
+#define FATFS_LOG(...) ((void)0)
+#endif
 
 /* USER CODE END Includes */
 

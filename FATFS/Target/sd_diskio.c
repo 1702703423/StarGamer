@@ -22,6 +22,8 @@
 
 /* USER CODE BEGIN firstSection */
 /* can be used to modify / undefine following code or add new definitions */
+#include "fatfs.h"
+#include "sys.h"
 /* USER CODE END firstSection*/
 
 /* Includes ------------------------------------------------------------------*/
@@ -131,6 +133,72 @@ const Diskio_drvTypeDef  SD_Driver =
 
 /* USER CODE BEGIN beforeFunctionSection */
 /* can be used to modify / undefine following code or add new code */
+#if FATFS_LOG_ENABLE
+static int SD_CheckStatusWithTimeout(u32 timeout);
+
+static u8 FATFS_SD_InitLogged(void)
+{
+  u8 ret;
+
+  FATFS_LOG("sd init begin");
+  ret = BSP_SD_Init();
+  if (ret != MSD_OK)
+  {
+    FATFS_LOG("sd init fail ret=%u", (unsigned int)ret);
+  }
+  return ret;
+}
+
+static u8 FATFS_SD_ReadBlocksDmaLogged(u32 *pData, u32 ReadAddr, u32 NumOfBlocks)
+{
+  u8 ret;
+
+  ret = BSP_SD_ReadBlocks_DMA(pData, ReadAddr, NumOfBlocks);
+  if (ret != MSD_OK)
+  {
+    FATFS_LOG("sd read dma start fail addr=%lu blocks=%lu buff=%p ret=%u",
+              (unsigned long)ReadAddr,
+              (unsigned long)NumOfBlocks,
+              (void *)pData,
+              (unsigned int)ret);
+  }
+  return ret;
+}
+
+static u8 FATFS_SD_WriteBlocksDmaLogged(u32 *pData, u32 WriteAddr, u32 NumOfBlocks)
+{
+  u8 ret;
+
+  ret = BSP_SD_WriteBlocks_DMA(pData, WriteAddr, NumOfBlocks);
+  if (ret != MSD_OK)
+  {
+    FATFS_LOG("sd write dma start fail addr=%lu blocks=%lu buff=%p ret=%u",
+              (unsigned long)WriteAddr,
+              (unsigned long)NumOfBlocks,
+              (void *)pData,
+              (unsigned int)ret);
+  }
+  return ret;
+}
+
+static int FATFS_SD_CheckStatusWithTimeoutLogged(u32 timeout)
+{
+  int ret;
+
+  ret = SD_CheckStatusWithTimeout(timeout);
+  if (ret < 0)
+  {
+    FATFS_LOG("sd ready timeout timeout=%lu", (unsigned long)timeout);
+  }
+  return ret;
+}
+
+#define BSP_SD_Init() FATFS_SD_InitLogged()
+#define BSP_SD_ReadBlocks_DMA(pData, ReadAddr, NumOfBlocks) \
+  FATFS_SD_ReadBlocksDmaLogged((pData), (ReadAddr), (NumOfBlocks))
+#define BSP_SD_WriteBlocks_DMA(pData, WriteAddr, NumOfBlocks) \
+  FATFS_SD_WriteBlocksDmaLogged((pData), (WriteAddr), (NumOfBlocks))
+#endif
 /* USER CODE END beforeFunctionSection */
 
 /* Private functions ---------------------------------------------------------*/
@@ -237,6 +305,9 @@ DSTATUS SD_status(BYTE lun)
 
 /* USER CODE BEGIN beforeReadSection */
 /* can be used to modify previous code / undefine following code / add new code */
+#if FATFS_LOG_ENABLE
+#define SD_CheckStatusWithTimeout(timeout) FATFS_SD_CheckStatusWithTimeoutLogged((timeout))
+#endif
 /* USER CODE END beforeReadSection */
 /**
   * @brief  Reads Sector(s)

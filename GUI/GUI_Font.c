@@ -164,6 +164,42 @@ int GUI_Font_Show(void)
 	return Page_Show_Anim(GUI_PAGE_FONT, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
 }
 
+int GUI_Font_Uninstall(void)
+{
+	System_Settings_t previous_settings;
+
+	if (s_font.installing != 0U || s_font.thread_active != 0U)
+	{
+		return OPERATE_FAILED;
+	}
+
+	if (GUI_Font_IsInstalled() == 0U)
+	{
+		return SYSTEM_STATUS_OK;
+	}
+
+	previous_settings = System_Settings;
+	System_Settings.FontInstalled = 0U;
+	System_Settings.FontBpp = 0U;
+	System_Settings.FontLineHeight = GUI_FONT_DEFAULT_LINE_HEIGHT;
+	System_Settings.FontBaseLine = GUI_FONT_DEFAULT_BASE_LINE;
+	System_Settings.FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
+	System_Settings.FontSize = 0U;
+	System_Settings.FontMinUnicode = 0U;
+	System_Settings.FontMaxUnicode = 0U;
+
+	if (System_Settings_Save() != SYSTEM_STATUS_OK)
+	{
+		System_Settings = previous_settings;
+		return OPERATE_FAILED;
+	}
+
+	/* A later install erases the reserved region; avoid an extra NOR erase cycle here. */
+	s_xbf_font.line_height = GUI_FONT_DEFAULT_LINE_HEIGHT;
+	s_xbf_font.base_line = GUI_FONT_DEFAULT_BASE_LINE;
+	return SYSTEM_STATUS_OK;
+}
+
 u8 GUI_Font_IsInstalled(void)
 {
 	return System_Settings_FontInstalled();
@@ -395,8 +431,14 @@ static void GUI_Font_Timer(lv_timer_t *timer)
 	}
 	else if (stage == (u8)GUI_FONT_STAGE_DONE)
 	{
+		u8 refresh_list = context->installing;
+
 		context->installing = 0U;
 		GUI_FileManage_SetLocked(&context->file_manager, 0U);
+		if (refresh_list != 0U)
+		{
+			(void)GUI_FileManage_Refresh(&context->file_manager);
+		}
 		GUI_FileManage_SetStatus(&context->file_manager, "Font installed");
 	}
 	else if (context->installing != 0U)

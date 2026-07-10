@@ -1,4 +1,5 @@
 #include "GUI_FileManage.h"
+#include "GUI_Font.h"
 
 #define GUI_FM_SCREEN_W             320
 #define GUI_FM_SCREEN_H             240
@@ -12,6 +13,8 @@
 #define GUI_FM_ROW_H                30
 #define GUI_FM_DEFAULT_ACCENT       0xE84E40U
 #define GUI_FM_STATUS_LEN           48U
+#define GUI_FM_NAME_UTF8_SIZE       (((GUI_FILEMANAGE_NAME_SIZE - 1U) * 3U / 2U) + 2U)
+#define GUI_FM_PATH_UTF8_SIZE       (((GUI_FILEMANAGE_PATH_SIZE - 1U) * 3U / 2U) + 2U)
 
 static void GUI_FM_ApplyScreenBase(lv_obj_t *screen);
 static void GUI_FM_CreateHeader(GUI_FileManage_t *manager);
@@ -38,6 +41,8 @@ static void GUI_FM_CloseDir(GUI_FileManage_t *manager);
 static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager);
 static u8 GUI_FM_PathJoin(char *dst, u32 dst_size, const char *dir, const char *name);
 static u8 GUI_FM_CopyText(char *dst, u32 dst_size, const char *src);
+static u8 GUI_FM_OemToUtf8(char *dst, u32 dst_size, const char *src);
+static void GUI_FM_ApplyTextFont(lv_obj_t *obj);
 static u8 GUI_FM_ExtensionAccepted(GUI_FileManage_t *manager, const FILINFO *info);
 static int GUI_FM_StrCaseCmp(const char *a, const char *b);
 static const char *GUI_FM_GetName(const FILINFO *info);
@@ -768,6 +773,7 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 	lv_group_t *group;
 	lv_obj_t *first_obj = NULL;
 	u8 page_active;
+	char display_path[GUI_FM_PATH_UTF8_SIZE];
 
 	if (manager == NULL || manager->list == NULL)
 	{
@@ -783,7 +789,15 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 		lv_group_set_wrap(group, true);
 	}
 
-	lv_label_set_text(manager->path_label, manager->current_path);
+	if (GUI_FM_OemToUtf8(display_path, sizeof(display_path), manager->current_path) != 0U)
+	{
+		lv_label_set_text(manager->path_label, display_path);
+	}
+	else
+	{
+		lv_label_set_text(manager->path_label, "Path encoding error");
+	}
+	GUI_FM_ApplyTextFont(manager->path_label);
 	GUI_FM_RemoveChildrenFromGroup(manager->list);
 	lv_obj_clean(manager->list);
 
@@ -812,6 +826,7 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 {
 	const char *icon;
 	lv_obj_t *btn;
+	char display_name[GUI_FM_NAME_UTF8_SIZE];
 
 	if (item->type == GUI_FILEMANAGE_ITEM_PARENT)
 	{
@@ -830,7 +845,12 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 		icon = LV_SYMBOL_FILE;
 	}
 
-	btn = lv_list_add_btn(manager->list, icon, item->name);
+	if (GUI_FM_OemToUtf8(display_name, sizeof(display_name), item->name) == 0U)
+	{
+		(void)GUI_FM_CopyText(display_name, sizeof(display_name), "Name encoding error");
+	}
+
+	btn = lv_list_add_btn(manager->list, icon, display_name);
 	lv_obj_set_height(btn, GUI_FM_ROW_H);
 	lv_obj_set_style_radius(btn, 4, 0);
 	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
@@ -843,6 +863,7 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 	lv_obj_set_style_outline_width(btn, 0, 0);
 	lv_obj_set_style_text_color(btn, lv_color_hex(0xEEF2F6U), 0);
 	lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_FOCUSED);
+	GUI_FM_ApplyTextFont(btn);
 	lv_obj_add_event_cb(btn, GUI_FM_ItemEvent, LV_EVENT_CLICKED, item);
 	lv_obj_add_event_cb(btn, GUI_FM_ItemEvent, LV_EVENT_KEY, item);
 }
@@ -996,6 +1017,106 @@ static u8 GUI_FM_CopyText(char *dst, u32 dst_size, const char *src)
 
 	memcpy(dst, src, len + 1U);
 	return 1U;
+}
+
+static u8 GUI_FM_OemToUtf8(char *dst, u32 dst_size, const char *src)
+{
+	const u8 *input;
+	u32 output_index;
+	u32 output_size;
+	u16 oem;
+	u16 unicode;
+	u8 lead;
+	u8 trail;
+
+	if (dst == NULL || dst_size == 0U || src == NULL)
+	{
+		return 0U;
+	}
+
+	input = (const u8 *)src;
+	output_index = 0U;
+	while (*input != 0U)
+	{
+		lead = *input;
+		if (lead < 0x80U)
+		{
+			unicode = (u16)lead;
+			input++;
+		}
+		else
+		{
+			trail = input[1];
+			if (lead >= 0x81U && lead <= 0xFEU &&
+			    trail >= 0x40U && trail <= 0xFEU && trail != 0x7FU)
+			{
+				oem = (u16)(((u16)lead << 8U) | (u16)trail);
+				unicode = (u16)ff_convert((WCHAR)oem, 1U);
+				input += 2;
+			}
+			else
+			{
+				unicode = 0U;
+				input++;
+			}
+
+			if (unicode == 0U)
+			{
+				unicode = (u16)'?';
+			}
+		}
+
+		if (unicode < 0x80U)
+		{
+			output_size = 1U;
+		}
+		else if (unicode < 0x800U)
+		{
+			output_size = 2U;
+		}
+		else
+		{
+			output_size = 3U;
+		}
+
+		if ((output_index + output_size) >= dst_size)
+		{
+			dst[0] = '\0';
+			return 0U;
+		}
+
+		if (output_size == 1U)
+		{
+			dst[output_index++] = (char)unicode;
+		}
+		else if (output_size == 2U)
+		{
+			dst[output_index++] = (char)(0xC0U | (unicode >> 6U));
+			dst[output_index++] = (char)(0x80U | (unicode & 0x3FU));
+		}
+		else
+		{
+			dst[output_index++] = (char)(0xE0U | (unicode >> 12U));
+			dst[output_index++] = (char)(0x80U | ((unicode >> 6U) & 0x3FU));
+			dst[output_index++] = (char)(0x80U | (unicode & 0x3FU));
+		}
+	}
+
+	dst[output_index] = '\0';
+	return 1U;
+}
+
+static void GUI_FM_ApplyTextFont(lv_obj_t *obj)
+{
+	const lv_font_t *font;
+
+	if (obj == NULL)
+	{
+		return;
+	}
+
+	font = GUI_Font_GetXbfFont();
+	lv_obj_set_style_text_font(obj, (font != NULL) ? font : LV_FONT_DEFAULT, 0);
 }
 
 static u8 GUI_FM_ExtensionAccepted(GUI_FileManage_t *manager, const FILINFO *info)

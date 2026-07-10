@@ -9,6 +9,7 @@ extern "C" {
 
 int GUI_Font_Register(void);
 int GUI_Font_Show(void);
+int GUI_Font_Uninstall(void);
 u8 GUI_Font_IsInstalled(void);
 const lv_font_t* GUI_Font_GetXbfFont(void);
 

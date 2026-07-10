@@ -24,6 +24,13 @@ FATFS SDFatFS;    /* File system object for SD logical drive */
 FIL SDFile;       /* File object for SD */
 
 /* USER CODE BEGIN Variables */
+#if FATFS_LOG_ENABLE
+#include <stdarg.h>
+#include <stdio.h>
+#include "shell_support.h"
+
+extern Shell shell;
+#endif
 
 /* USER CODE END Variables */
 
@@ -50,5 +57,48 @@ DWORD get_fattime(void)
 }
 
 /* USER CODE BEGIN Application */
+#if FATFS_LOG_ENABLE
+#ifndef FATFS_LOG_BUFFER_SIZE
+#define FATFS_LOG_BUFFER_SIZE 160U
+#endif
+
+void FATFS_LogPrint(const char *fmt, ...)
+{
+  char msg[FATFS_LOG_BUFFER_SIZE];
+  va_list args;
+  int len;
+
+  if (fmt == NULL)
+  {
+    return;
+  }
+
+  va_start(args, fmt);
+  len = vsnprintf(msg, sizeof(msg), fmt, args);
+  va_end(args);
+
+  if (len < 0)
+  {
+    return;
+  }
+  if (len >= (int)sizeof(msg))
+  {
+    len = (int)sizeof(msg) - 1;
+  }
+
+  if (shell.write == NULL || shell.parser.buffer == NULL)
+  {
+    return;
+  }
+#if SHELL_USING_LOCK == 1
+  if (shell.lock == NULL || shell.unlock == NULL)
+  {
+    return;
+  }
+#endif
+
+  shellPrintEndLine(&shell, "[FATFS] %s\r\n", msg);
+}
+#endif
 
 /* USER CODE END Application */

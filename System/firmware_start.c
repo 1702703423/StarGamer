@@ -819,10 +819,14 @@ int mount_fs()
 {
 	FRESULT fr;
 
+	FATFS_LOG("mount begin path=%s retSD=%u", "0:", (unsigned int)retSD);
 	fr = f_mount(&SDFatFS, "0:", 1);
 
 	if (fr == FR_OK) {
 		SSI.fs_mount_status = 1;
+		FATFS_LOG("mount ok path=%s", "0:");
+	} else {
+		FATFS_LOG("mount fail path=%s fr=%u", "0:", (unsigned int)fr);
 	}
 
 	return SSI.fs_mount_status;
@@ -846,6 +850,15 @@ static void lvgl_init()
 		lv_log_register_print_cb(LVGL_shellLog);
 	}
 	#endif
+}
+
+static void lvgl_start_task()
+{
+	if (lvglThreadId != NULL)
+	{
+		return;
+	}
+
 	if (lvglTask_attributes.stack_mem == NULL)
 	{
 		lvglTask_attributes.stack_mem = sys_thread_stack_alloc((u32)lvglTask_attributes.stack_size);
@@ -873,6 +886,7 @@ void init(void)
 	lvgl_init();
 //	nes_load((u8*)"0://SICHUAN.NES");
 	GUI_Init();
+	lvgl_start_task();
 //	LCD_Fill(1, 1, 320, 240, BLACK, p);
 //	LCD_Flush(p);lcd_test();
 

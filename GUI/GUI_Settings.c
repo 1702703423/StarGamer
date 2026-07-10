@@ -13,7 +13,7 @@
 #define GUI_SETTINGS_LIST_X          10
 #define GUI_SETTINGS_LIST_Y          54
 #define GUI_SETTINGS_LIST_W          300
-#define GUI_SETTINGS_LIST_H          116
+#define GUI_SETTINGS_LIST_H          150
 #define GUI_SETTINGS_ROW_H           34
 #define GUI_SETTINGS_STATUS_Y        214
 #define GUI_SETTINGS_ABOUT_X         10
@@ -24,7 +24,8 @@
 
 typedef enum
 {
-	GUI_SETTINGS_ACTION_FONT = 0,
+	GUI_SETTINGS_ACTION_FONT_INSTALL = 0,
+	GUI_SETTINGS_ACTION_FONT_UNINSTALL,
 	GUI_SETTINGS_ACTION_UPDATE,
 	GUI_SETTINGS_ACTION_ABOUT
 } GUI_SettingsAction_t;
@@ -46,7 +47,8 @@ typedef struct
 	lv_obj_t *about_panel;
 	lv_obj_t *about_label;
 	lv_obj_t *about_close_btn;
-	lv_obj_t *font_btn;
+	lv_obj_t *font_install_btn;
+	lv_obj_t *font_uninstall_btn;
 	lv_obj_t *about_btn;
 	lv_obj_t *first_item_btn;
 	char about_text[GUI_SETTINGS_TEXT_LEN];
@@ -71,7 +73,7 @@ static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context);
-static void GUI_Settings_SetListButtonText(lv_obj_t *btn, const char *text);
+static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled);
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text);
 static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *focus_obj);
 static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_obj_t **first_obj);
@@ -80,7 +82,8 @@ static GUI_SettingsContext_t s_settings;
 
 static const GUI_SettingsItem_t s_setting_items[] =
 {
-	{GUI_SETTINGS_ACTION_FONT, LV_SYMBOL_FILE, "Install Font"},
+	{GUI_SETTINGS_ACTION_FONT_INSTALL, LV_SYMBOL_FILE, "Install Font"},
+	{GUI_SETTINGS_ACTION_FONT_UNINSTALL, LV_SYMBOL_TRASH, "Uninstall Font"},
 	{GUI_SETTINGS_ACTION_UPDATE, LV_SYMBOL_DOWNLOAD, "Install Update"},
 	{GUI_SETTINGS_ACTION_ABOUT, LV_SYMBOL_SETTINGS, "About"}
 };
@@ -233,17 +236,15 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item)
 {
 	lv_obj_t *btn;
-	const char *text;
 	u8 disabled = 0U;
 
-	text = item->text;
-	if (item->action == GUI_SETTINGS_ACTION_FONT && GUI_Font_IsInstalled() != 0U)
+	if ((item->action == GUI_SETTINGS_ACTION_FONT_INSTALL && GUI_Font_IsInstalled() != 0U) ||
+	    (item->action == GUI_SETTINGS_ACTION_FONT_UNINSTALL && GUI_Font_IsInstalled() == 0U))
 	{
-		text = "Font Installed";
 		disabled = 1U;
 	}
 
-	btn = lv_list_add_btn(context->list, item->symbol, text);
+	btn = lv_list_add_btn(context->list, item->symbol, item->text);
 	lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
 	lv_obj_set_style_radius(btn, 4, 0);
 	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
@@ -272,9 +273,13 @@ static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_S
 		context->first_item_btn = btn;
 	}
 
-	if (item->action == GUI_SETTINGS_ACTION_FONT)
+	if (item->action == GUI_SETTINGS_ACTION_FONT_INSTALL)
 	{
-		context->font_btn = btn;
+		context->font_install_btn = btn;
+	}
+	else if (item->action == GUI_SETTINGS_ACTION_FONT_UNINSTALL)
+	{
+		context->font_uninstall_btn = btn;
 	}
 
 	if (item->action == GUI_SETTINGS_ACTION_ABOUT)
@@ -480,7 +485,7 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 
 	switch (action)
 	{
-		case GUI_SETTINGS_ACTION_FONT:
+		case GUI_SETTINGS_ACTION_FONT_INSTALL:
 			if (GUI_Font_IsInstalled() != 0U)
 			{
 				GUI_Settings_UpdateFontState(context);
@@ -497,6 +502,21 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 				{
 					GUI_Settings_SetStatus(context, "Font installer failed");
 				}
+			}
+			break;
+		case GUI_SETTINGS_ACTION_FONT_UNINSTALL:
+			GUI_Settings_WaitInputRelease();
+			if (GUI_Font_Uninstall() == SYSTEM_STATUS_OK)
+			{
+				GUI_Settings_UpdateFontState(context);
+				GUI_Settings_SetStatus(context, "Font uninstalled");
+				GUI_Settings_RebuildFocus(context, context->font_install_btn);
+			}
+			else
+			{
+				GUI_Settings_UpdateFontState(context);
+				GUI_Settings_SetStatus(context, "Font uninstall failed");
+				GUI_Settings_RebuildFocus(context, context->font_uninstall_btn);
 			}
 			break;
 		case GUI_SETTINGS_ACTION_UPDATE:
@@ -591,53 +611,42 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 
 static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context)
 {
-	if (context == NULL || context->font_btn == NULL)
+	if (context == NULL || context->font_install_btn == NULL || context->font_uninstall_btn == NULL)
 	{
 		return;
 	}
 
 	if (GUI_Font_IsInstalled() != 0U)
 	{
-		GUI_Settings_SetListButtonText(context->font_btn, "Font Installed");
-		lv_obj_add_state(context->font_btn, LV_STATE_DISABLED);
-		lv_obj_clear_flag(context->font_btn, LV_OBJ_FLAG_CLICKABLE);
+		GUI_Settings_SetListButtonEnabled(context->font_install_btn, 0U);
+		GUI_Settings_SetListButtonEnabled(context->font_uninstall_btn, 1U);
 		GUI_Settings_SetStatus(context, "Font already installed");
-		if (context->first_item_btn == context->font_btn)
-		{
-			context->first_item_btn = NULL;
-		}
+		context->first_item_btn = context->font_uninstall_btn;
 	}
 	else
 	{
-		GUI_Settings_SetListButtonText(context->font_btn, "Install Font");
-		lv_obj_clear_state(context->font_btn, LV_STATE_DISABLED);
-		lv_obj_add_flag(context->font_btn, LV_OBJ_FLAG_CLICKABLE);
-		if (context->first_item_btn == NULL)
-		{
-			context->first_item_btn = context->font_btn;
-		}
+		GUI_Settings_SetListButtonEnabled(context->font_install_btn, 1U);
+		GUI_Settings_SetListButtonEnabled(context->font_uninstall_btn, 0U);
+		context->first_item_btn = context->font_install_btn;
 	}
 }
 
-static void GUI_Settings_SetListButtonText(lv_obj_t *btn, const char *text)
+static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled)
 {
-	u32 i;
-	u32 child_count;
-
-	if (btn == NULL || text == NULL)
+	if (btn == NULL)
 	{
 		return;
 	}
 
-	child_count = lv_obj_get_child_cnt(btn);
-	for (i = 0U; i < child_count; i++)
+	if (enabled != 0U)
 	{
-		lv_obj_t *child = lv_obj_get_child(btn, (s32)i);
-		if (lv_obj_check_type(child, &lv_label_class))
-		{
-			lv_label_set_text(child, text);
-			return;
-		}
+		lv_obj_clear_state(btn, LV_STATE_DISABLED);
+		lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+	}
+	else
+	{
+		lv_obj_add_state(btn, LV_STATE_DISABLED);
+		lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
 	}
 }
 
