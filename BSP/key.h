@@ -46,6 +46,7 @@ typedef enum
 #define KEY_GAME_A              KEY_MASK_6      /* PE3  */
 #define KEY_GAME_B              KEY_MASK_8      /* PG14 */
 #define KEY_GAME_SELECT         KEY_MASK_7      /* PB7  */
+#define KEY_GAME_EXIT           KEY_MASK_7      /* PB7  */
 #define KEY_GAME_START          KEY_MASK_5      /* PE2  */
 
 #define KEY_NES_UP              KEY_MASK_1      /* PB1  */

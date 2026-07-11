@@ -340,7 +340,7 @@
               <MiscControls>-Wno-deprecated-non-prototype</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Drivers/LCD;../ELFLoader/common;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;..\ELF Loader</IncludePath>
+              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Drivers/LCD;../ELFLoader/common;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;..\ELF Loader;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1205,6 +1205,36 @@
               <FileName>Player.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Media\Player.h</FilePath>
+            </File>
+            <File>
+              <FileName>Arduboy_Games.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Arduboy\Arduboy_Games.c</FilePath>
+            </File>
+            <File>
+              <FileName>Arduboy_Games.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Arduboy\Arduboy_Games.h</FilePath>
+            </File>
+            <File>
+              <FileName>Arduboy_Port.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Arduboy\Arduboy_Port.c</FilePath>
+            </File>
+            <File>
+              <FileName>Arduboy_Port.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Arduboy\Arduboy_Port.h</FilePath>
+            </File>
+            <File>
+              <FileName>Arduboy_Runtime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Arduboy\Arduboy_Runtime.c</FilePath>
+            </File>
+            <File>
+              <FileName>Arduboy_Runtime.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Arduboy\Arduboy_Runtime.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -4208,6 +4238,76 @@
               <FileName>GUI_Font.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\GUI\GUI_Font.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Text.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Text.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Text.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Text.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Start.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Start.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Start.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Start.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Arduboy.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Arduboy.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Arduboy.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Arduboy.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Middlewares/Arduboy</GroupName>
+          <Files>
+            <File>
+              <FileName>arduboy_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\src\arduboy_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>arduboy_core.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\src\arduboy_core.h</FilePath>
+            </File>
+            <File>
+              <FileName>arduboy.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\src\arduboy.c</FilePath>
+            </File>
+            <File>
+              <FileName>arduboy.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\src\arduboy.h</FilePath>
+            </File>
+            <File>
+              <FileName>ArduboyButtons.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\Buttons\ArduboyButtons.c</FilePath>
+            </File>
+            <File>
+              <FileName>Dino.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\Dino\Dino.c</FilePath>
+            </File>
+            <File>
+              <FileName>FlappyBall.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\Arduboy\FlappyBall\FlappyBall.c</FilePath>
             </File>
           </Files>
         </Group>

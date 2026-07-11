@@ -1,7 +1,9 @@
 #include "GUI_Main.h"
 #include "GUI_NES.h"
+#include "GUI_Arduboy.h"
 #include "GUI_Player.h"
 #include "GUI_Image.h"
+#include "GUI_Text.h"
 #include "GUI_Settings.h"
 
 #define GUI_MENU_ITEM_W 72
@@ -423,6 +425,12 @@ int GUI_Main_Init(void)
 		return code;
 	}
 
+	code = GUI_Arduboy_Register();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		return code;
+	}
+
 	code = GUI_Player_Register();
 	if (code != SYSTEM_STATUS_OK)
 	{
@@ -430,6 +438,12 @@ int GUI_Main_Init(void)
 	}
 
 	code = GUI_Image_Register();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		return code;
+	}
+
+	code = GUI_Text_Register();
 	if (code != SYSTEM_STATUS_OK)
 	{
 		return code;
@@ -444,8 +458,10 @@ int GUI_Main_Init(void)
 	for (i = 0U; i < GUI_MENU_ITEM_COUNT; i++)
 	{
 		if (s_menu_items[i].page_id == GUI_PAGE_NES ||
+		    s_menu_items[i].page_id == GUI_PAGE_ARDUBOY ||
 		    s_menu_items[i].page_id == GUI_PAGE_MUSIC ||
 		    s_menu_items[i].page_id == GUI_PAGE_IMAGE ||
+		    s_menu_items[i].page_id == GUI_PAGE_TEXT ||
 		    s_menu_items[i].page_id == GUI_PAGE_SETTINGS)
 		{
 			continue;

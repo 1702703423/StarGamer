@@ -23,6 +23,7 @@
 #include "lvgl.h"
 #include "lv_port_disp_template.h"
 #include "../GUI/GUI_Main.h"
+#include "../GUI/GUI_Start.h"
 
 /* External globals */
 extern Shell shell;
@@ -49,11 +50,27 @@ static osThreadAttr_t lvglTask_attributes = {
 };
 osThreadId_t lvglThreadId = NULL;
 
+static void lvgl_init(void);
+static int GUI_Init(void);
+
 /* ---- LVGL timer handler task ---- */
 static void lvgl_timer_task(void *arg)
 {
+	int code;
+
 	(void)arg;
+	lvgl_init();
+	code = GUI_Start_Show(GUI_Init);
+	if (code != SYSTEM_STATUS_OK)
+	{
+		(void)GUI_Init();
+	}
+
 	while (1) {
+		if (lvgl_ui_pause_point() != 0U)
+		{
+			lv_obj_invalidate(lv_scr_act());
+		}
 		lv_timer_handler();
 		osDelay(10);
 	}
@@ -871,9 +888,9 @@ static void lvgl_start_task()
 	lvglThreadId = osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
 }
 
-static void GUI_Init(void)
+static int GUI_Init(void)
 {
-	(void)GUI_Main_Init();
+	return GUI_Main_Init();
 }
 
 void init(void)
@@ -882,10 +899,7 @@ void init(void)
 	res = mount_fs();
 	System_init();
 	bsp_init();
-		/* LVGL 初始化 */
-	lvgl_init();
 //	nes_load((u8*)"0://SICHUAN.NES");
-	GUI_Init();
 	lvgl_start_task();
 //	LCD_Fill(1, 1, 320, 240, BLACK, p);
 //	LCD_Flush(p);lcd_test();

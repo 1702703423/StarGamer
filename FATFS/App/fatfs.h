@@ -29,7 +29,7 @@
 
 /* USER CODE BEGIN Includes */
 #ifndef FATFS_LOG_ENABLE
-#define FATFS_LOG_ENABLE 1U
+#define FATFS_LOG_ENABLE 0U
 #endif
 
 #if FATFS_LOG_ENABLE

@@ -311,22 +311,171 @@ int SysUnregisterThread(osThreadId_t tid)
 
 extern osThreadId_t lvglThreadId;
 
-int lvgl_start_ui()
-{
-	if (lvglThreadId == NULL)
-		return OPERATE_FAILED;
+#define LVGL_UI_FLAG_RESUME         (1UL << 27)
+#define LVGL_UI_FLAG_PAUSED         (1UL << 28)
+#define LVGL_UI_FLAG_RESUMED        (1UL << 29)
+#define LVGL_UI_HANDSHAKE_TIMEOUT   1000U
 
-	osStatus_t status = osThreadResume(lvglThreadId);
-	return (status == osOK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+static volatile u8 s_lvgl_pause_requested;
+static volatile u8 s_lvgl_paused;
+static osThreadId_t s_lvgl_display_owner;
+
+int lvgl_start_ui(void)
+{
+	osThreadId_t current;
+	u32 flags;
+	s32 lock_state;
+
+	current = osThreadGetId();
+	if (lvglThreadId == NULL || current == NULL)
+	{
+		return OPERATE_FAILED;
+	}
+
+	(void)osThreadFlagsClear(LVGL_UI_FLAG_RESUMED);
+	lock_state = osKernelLock();
+	if (lock_state < 0)
+	{
+		return OPERATE_FAILED;
+	}
+	if (s_lvgl_display_owner != current || s_lvgl_pause_requested == 0U || s_lvgl_paused == 0U)
+	{
+		(void)osKernelRestoreLock(lock_state);
+		return OPERATE_FAILED;
+	}
+
+	s_lvgl_pause_requested = 0U;
+	__DMB();
+	(void)osKernelRestoreLock(lock_state);
+	flags = osThreadFlagsSet(lvglThreadId, LVGL_UI_FLAG_RESUME);
+	if ((flags & osFlagsError) != 0U)
+	{
+		return OPERATE_FAILED;
+	}
+
+	flags = osThreadFlagsWait(LVGL_UI_FLAG_RESUMED, osFlagsWaitAny, LVGL_UI_HANDSHAKE_TIMEOUT);
+	return ((flags & osFlagsError) == 0U) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
 }
 
-int lvgl_stop_ui()
+int lvgl_stop_ui(void)
 {
-	if (lvglThreadId == NULL)
-		return OPERATE_FAILED;
+	osThreadId_t current;
+	u32 flags;
+	s32 lock_state;
 
-	osStatus_t status = osThreadSuspend(lvglThreadId);
-	return (status == osOK) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+	current = osThreadGetId();
+	if (lvglThreadId == NULL || current == NULL || current == lvglThreadId)
+	{
+		return OPERATE_FAILED;
+	}
+
+	(void)osThreadFlagsClear(LVGL_UI_FLAG_PAUSED | LVGL_UI_FLAG_RESUMED);
+	lock_state = osKernelLock();
+	if (lock_state < 0)
+	{
+		return OPERATE_FAILED;
+	}
+	if (s_lvgl_display_owner != NULL || s_lvgl_pause_requested != 0U || s_lvgl_paused != 0U)
+	{
+		(void)osKernelRestoreLock(lock_state);
+		return OPERATE_FAILED;
+	}
+
+	s_lvgl_display_owner = current;
+	s_lvgl_pause_requested = 1U;
+	__DMB();
+	(void)osKernelRestoreLock(lock_state);
+
+	flags = osThreadFlagsWait(LVGL_UI_FLAG_PAUSED, osFlagsWaitAny, LVGL_UI_HANDSHAKE_TIMEOUT);
+	if ((flags & osFlagsError) == 0U)
+	{
+		return SYSTEM_STATUS_OK;
+	}
+
+	lock_state = osKernelLock();
+	if (lock_state >= 0)
+	{
+		if (s_lvgl_display_owner == current)
+		{
+			s_lvgl_pause_requested = 0U;
+			s_lvgl_display_owner = NULL;
+		}
+		(void)osKernelRestoreLock(lock_state);
+	}
+	(void)osThreadFlagsSet(lvglThreadId, LVGL_UI_FLAG_RESUME);
+	return OPERATE_FAILED;
+}
+
+u8 lvgl_ui_pause_point(void)
+{
+	osThreadId_t owner;
+	u32 flags;
+	u32 acknowledge_flags;
+	s32 lock_state;
+	u8 paused = 0U;
+
+	if (s_lvgl_pause_requested == 0U)
+	{
+		return 0U;
+	}
+
+	(void)osThreadFlagsClear(LVGL_UI_FLAG_RESUME);
+	lock_state = osKernelLock();
+	if (lock_state < 0)
+	{
+		return 0U;
+	}
+	owner = s_lvgl_display_owner;
+	if (s_lvgl_pause_requested == 0U || owner == NULL)
+	{
+		(void)osKernelRestoreLock(lock_state);
+		return 0U;
+	}
+
+	s_lvgl_paused = 1U;
+	__DMB();
+	acknowledge_flags = osThreadFlagsSet(owner, LVGL_UI_FLAG_PAUSED);
+	(void)osKernelRestoreLock(lock_state);
+	if ((acknowledge_flags & osFlagsError) != 0U)
+	{
+		lock_state = osKernelLock();
+		if (lock_state >= 0)
+		{
+			s_lvgl_paused = 0U;
+			s_lvgl_pause_requested = 0U;
+			if (s_lvgl_display_owner == owner)
+			{
+				s_lvgl_display_owner = NULL;
+			}
+			(void)osKernelRestoreLock(lock_state);
+		}
+		return 0U;
+	}
+	paused = 1U;
+
+	while (s_lvgl_pause_requested != 0U)
+	{
+		flags = osThreadFlagsWait(LVGL_UI_FLAG_RESUME, osFlagsWaitAny, osWaitForever);
+		if ((flags & osFlagsError) != 0U)
+		{
+			(void)osDelay(1U);
+		}
+	}
+
+	lock_state = osKernelLock();
+	if (lock_state >= 0)
+	{
+		s_lvgl_paused = 0U;
+		__DMB();
+		if (s_lvgl_display_owner == owner)
+		{
+			(void)osThreadFlagsSet(owner, LVGL_UI_FLAG_RESUMED);
+			s_lvgl_display_owner = NULL;
+		}
+		(void)osKernelRestoreLock(lock_state);
+	}
+
+	return paused;
 }
 
 void System_Settings_SetDefaults(System_Settings_t* settings)
@@ -476,5 +625,9 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 		settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
 	}
 }
+
+SHELL_EXPORT_CMD(
+SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_CMD_FUNC)|SHELL_CMD_DISABLE_RETURN,
+sdinfo, GetSdCardInfo, show SD card information);
 
 

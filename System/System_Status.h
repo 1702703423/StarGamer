@@ -100,6 +100,7 @@ int SysUnregisterThread(osThreadId_t tid);
 int SysTerminateThread(osThreadId_t tid);
 int lvgl_start_ui(void);
 int lvgl_stop_ui(void);
+u8 lvgl_ui_pause_point(void);
 void System_Settings_SetDefaults(System_Settings_t* settings);
 int System_Settings_Init(void);
 int System_Settings_Load(void);
