@@ -20,7 +20,7 @@ audio_play_info_t apif;
 
 typedef enum WAV_RES_t  {
   WAV_OK = 0,WAV_SAMPLE,ER_WAV_FILE,ER_NOT_WAV,ER_WAV_CHANNEL,ER_WAV_PCM,ER_WAV_DESTORYED,ER_WAV_RIFF,ER_WAV_FMT,
-  ER_WAV_FORMAT,ER_WAV_CHANNELS,ER_WAV_DEPTH,ER_WAV_DATA,ER_WAV_NOT_SUPPORT
+  ER_WAV_FORMAT,ER_WAV_CHANNELS,ER_WAV_DEPTH,ER_WAV_DATA,ER_WAV_NOT_SUPPORT,ER_WAV_MEMORY
 }WAV_RES;
 
 #define RIFF_CHUNK_SIZE_BYTE  12
@@ -36,10 +36,13 @@ typedef enum WAV_RES_t  {
 #define PLAYER_PATH_SIZE 256U
 
 #define WAV_THREAD_STACK_SIZE (2048U * sizeof(u32))
+#define WAV_CLEANUP_DELAY_TICKS 2U
 static osThreadId_t WavTaskHandle;
 static FIL WavFile;
 static u8 WavFileOpened = 0U;
 static volatile Player_State_t s_player_state = PLAYER_STATE_IDLE;
+static volatile u32 WavTaskExitTick;
+static volatile u32 WavTaskStackSpace;
 static Wave_Infomation s_player_info;
 static TCHAR s_player_path[PLAYER_PATH_SIZE];
 osStaticThreadDef_t WavTaskControlBlock;
@@ -51,10 +54,12 @@ osThreadAttr_t WavTaskAttr = {
   .stack_size = WAV_THREAD_STACK_SIZE,
   .priority = (osPriority_t) osPriorityHigh2,
 };
-#define WAV_PLAY_BUFF_SIZE 8192U
-__ALIGNED(4) static uint8_t wav_play_buf[WAV_PLAY_BUFF_SIZE];
+#define WAV_PLAY_BUFF_SIZE 16384U
+/* Keep this SDIO DMA target allocated for the lifetime of the firmware. */
+static u8 *wav_play_buf;
 
 int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation);
+static void player_free_stack(void);
 
 static u8 player_copy_path(TCHAR *dst, u32 dst_size, const TCHAR *src)
 {
@@ -76,6 +81,15 @@ static u8 player_copy_path(TCHAR *dst, u32 dst_size, const TCHAR *src)
 
   dst[dst_size - 1U] = '\0';
   return 0U;
+}
+
+static void player_free_stack(void)
+{
+  if(WavTaskAttr.stack_mem != NULL)
+  {
+    sys_thread_stack_free(WavTaskAttr.stack_mem);
+    WavTaskAttr.stack_mem = NULL;
+  }
 }
 
 static void player_close_file(FIL *file)
@@ -145,7 +159,6 @@ static void player_exit(FIL *file)
 {
   osThreadId_t tid = WavTaskHandle;
 
-  WavTaskHandle = NULL;
   s_player_state = PLAYER_STATE_IDLE;
   audio_card_register_tx(NULL);
   audio_card_close();
@@ -156,6 +169,10 @@ static void player_exit(FIL *file)
     SysUnregisterThread(tid);
   }
 
+  WavTaskStackSpace = (u32)uxTaskGetStackHighWaterMark(NULL) * (u32)sizeof(StackType_t);
+  __DMB();
+  WavTaskExitTick = xTaskGetTickCount();
+  __DMB();
   osThreadExit();
 }
 
@@ -206,6 +223,8 @@ void WavePlayTaskStop(osThreadId_t tid)
   if(tid == WavTaskHandle)
   {
     WavTaskHandle = NULL;
+    WavTaskExitTick = 0U;
+    WavTaskStackSpace = 0U;
     close_file = 1U;
   }
 
@@ -222,6 +241,7 @@ void WavePlayTaskStop(osThreadId_t tid)
   if(close_file != 0U)
   {
     player_close_file(&WavFile);
+    player_free_stack();
   }
 }
 
@@ -231,6 +251,7 @@ int PlayerStart(const TCHAR *audio_path)
   FRESULT fr;
   int res;
 
+  PlayerCleanup();
   if(audio_path == NULL)
   {
     shellPrintEndLine(&shell,"PlayerStart:NULL_PATH\r\n");
@@ -252,6 +273,8 @@ int PlayerStart(const TCHAR *audio_path)
   player_close_file(&WavFile);
   memset(&WI, 0, sizeof(WI));
   memset(&s_player_info, 0, sizeof(s_player_info));
+  WavTaskStackSpace = 0U;
+  WavTaskExitTick = 0U;
   s_player_state = PLAYER_STATE_STARTING;
 
   fr = f_open(&WavFile,audio_path,FA_READ);
@@ -284,11 +307,32 @@ int PlayerStart(const TCHAR *audio_path)
   return SYSTEM_STATUS_OK;
 }
 
+void PlayerCleanup(void)
+{
+  u32 now;
+
+  if(WavTaskHandle == NULL || WavTaskExitTick == 0U)
+  {
+    return;
+  }
+
+  now = (u32)xTaskGetTickCount();
+  if((now - WavTaskExitTick) < WAV_CLEANUP_DELAY_TICKS)
+  {
+    return;
+  }
+
+  player_free_stack();
+  WavTaskHandle = NULL;
+  WavTaskExitTick = 0U;
+}
+
 int PlayerPause(void)
 {
   u32 flags;
 
-  if(WavTaskHandle == NULL)
+  PlayerCleanup();
+  if(WavTaskHandle == NULL || WavTaskExitTick != 0U)
   {
     return OPERATE_FAILED;
   }
@@ -306,7 +350,8 @@ int PlayerResume(void)
 {
   u32 flags;
 
-  if(WavTaskHandle == NULL)
+  PlayerCleanup();
+  if(WavTaskHandle == NULL || WavTaskExitTick != 0U)
   {
     return OPERATE_FAILED;
   }
@@ -334,7 +379,8 @@ int PlayerStop(void)
 {
   u32 flags;
 
-  if(WavTaskHandle == NULL)
+  PlayerCleanup();
+  if(WavTaskHandle == NULL || WavTaskExitTick != 0U)
   {
     s_player_state = PLAYER_STATE_IDLE;
     return SYSTEM_STATUS_OK;
@@ -347,6 +393,7 @@ int PlayerStop(void)
 
 u8 PlayerIsBusy(void)
 {
+  PlayerCleanup();
   return (WavTaskHandle != NULL) ? 1U : 0U;
 }
 
@@ -460,16 +507,8 @@ void audio_feeder()
 {
 	uint8_t dma_index = audio_card_get_idle_buffer_index();
 
-  if(WavTaskHandle == NULL)
+  if(WavTaskHandle == NULL || WavTaskExitTick != 0U)
   {
-    return;
-  }
-
-  if(osThreadGetState(WavTaskHandle) == osThreadTerminated)
-  {
-    WavTaskHandle = NULL;
-    s_player_state = PLAYER_STATE_IDLE;
-    audio_card_register_tx(NULL);
     return;
   }
 
@@ -598,6 +637,16 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
   {
     Wave_Infomation->WAV_Second = 0;
   }
+
+  if(wav_play_buf == NULL)
+  {
+    wav_play_buf = (u8 *)sys_malloc(SRAMEX, WAV_PLAY_BUFF_SIZE);
+    if(wav_play_buf == NULL)
+    {
+      shellPrintEndLine(&shell,"WavPlayBufferAllocFailed\r\n");
+      return ER_WAV_MEMORY;
+    }
+  }
 	
 	audio_card_init(audio_card_get_volume());
   if(audio_card_open_prepare(Wave_Infomation->Sample_Rate,Wave_Infomation->deepth,Wave_Infomation->Channels,WAV_PLAY_BUFF_SIZE) != 0)
@@ -615,10 +664,13 @@ int WavePlayTaskStart(FIL* file,Wave_Infomation* Wave_Infomation)
 		audio_card_close();
 		return ER_WAV_FILE;
 	}
+  WavTaskExitTick = 0U;
 	WavTaskHandle = SysCreateThread(WaveDataTransmitTask,file,&WavTaskAttr,0);
   if(WavTaskHandle == NULL)
   {
+    audio_card_register_tx(NULL);
     audio_card_close();
+    player_free_stack();
     return ER_WAV_FILE;
   }
 

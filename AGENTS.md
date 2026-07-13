@@ -24,7 +24,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器，集成 FreeRTOS、FATFS、LibJPE
 | 模块 | 路径 | 职责 |
 |------|------|------|
 | **Core** | `Core/Src/`, `Core/Inc/` | `main.c`（入口、外设初始化），`freertos.c`（空闲/定时器任务栈分配），`stm32f4xx_it.c`（ISR 含 HardFault），HAL MSP/timebase |
-| **Drivers** | `Drivers/` | CMSIS、STM32F4 HAL、`LCD/`（ST7789 FSMC 显示驱动） |
+| **Drivers** | `Drivers/` | CMSIS、STM32F4 HAL、`LCD/`（ST7789 SPI 显示驱动） |
 | **System** | `System/` | `sys.h`（u8/u16/u32、位带宏 PAout/PAin），`Malloc`（CCM + 外部 SRAM 分配器），`System_Status`（系统状态/错误码/资源表/设置持久化），`firmware_start.c`（系统初始化 + HardFault LCD 显示），`adt_chain`（链表 ADT），`ccm_memory.h`（CCM 布局常量），`StarGamer_CCM.sct`（链接脚本） |
 | **BSP** | `BSP/` | `w25q64`（SPI NOR Flash），`i2s`（I2S3 音频输出 + DMA），`at24c02`（I2C EEPROM），`key`（8 键驱动 + 游戏键位掩码别名） |
 | **Middlewares** | `Middlewares/Third_Party/` | FreeRTOS、FatFs（SDIO，codepage 936）、LibJPEG、LVGL、**NES 模拟器**（6502 + PPU + APU + 240+ mapper） |

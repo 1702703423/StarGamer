@@ -10,6 +10,7 @@
 #include <string.h>
 
 #define ARDUBOY_PORT_DELAY_SLICE_MS    10U
+#define ARDUBOY_PORT_EXIT_RELEASE_TIMEOUT_MS 300U
 #define ARDUBOY_PORT_LCD_WIDTH         320U
 #define ARDUBOY_PORT_CLEAR_ROWS        100U
 
@@ -17,6 +18,7 @@ extern RNG_HandleTypeDef hrng;
 
 static u8 *s_rgb_buffer;
 static volatile u8 s_stop_requested;
+static u32 s_stop_accept_tick;
 static u8 s_rng_failed;
 static u32 s_prng_state = 0x7F4A7C15U;
 static Arduboy_PortStats_t s_stats;
@@ -55,7 +57,6 @@ int Arduboy_Port_Begin(void)
 	memset(&s_stats, 0, sizeof(s_stats));
 	s_rng_failed = 0U;
 	s_prng_state ^= HAL_GetTick() ^ 0xA5C31E27U;
-	Arduboy_Port_ResetStop();
 	ArduboyCore_SetPlatform(&s_platform);
 	Arduboy_Port_ClearDisplay();
 	return SYSTEM_STATUS_OK;
@@ -74,6 +75,8 @@ void Arduboy_Port_End(void)
 void Arduboy_Port_ResetStop(void)
 {
 	s_stop_requested = 0U;
+	s_stop_accept_tick = osKernelGetTickCount();
+	__DMB();
 }
 
 void Arduboy_Port_RequestStop(void)
@@ -83,6 +86,8 @@ void Arduboy_Port_RequestStop(void)
 
 u8 Arduboy_Port_ShouldStop(void)
 {
+	KEY_Event_t event;
+
 	if (s_stop_requested != 0U)
 	{
 		return 1U;
@@ -94,7 +99,32 @@ u8 Arduboy_Port_ShouldStop(void)
 		return 1U;
 	}
 
+	while (KEY_GetEvent(&event, 0U) == osOK)
+	{
+		if (event.type == KEY_EVENT_PRESS &&
+		    (event.mask & KEY_GAME_EXIT) != 0U &&
+		    (s32)(event.tick - s_stop_accept_tick) >= 0)
+		{
+			s_stop_requested = 1U;
+			return 1U;
+		}
+	}
+
 	return 0U;
+}
+
+void Arduboy_Port_WaitForExitRelease(void)
+{
+	u32 start = osKernelGetTickCount();
+
+	while ((KEY_GetRawState() & KEY_GAME_EXIT) != 0U)
+	{
+		if ((osKernelGetTickCount() - start) >= ARDUBOY_PORT_EXIT_RELEASE_TIMEOUT_MS)
+		{
+			break;
+		}
+		(void)osDelay(ARDUBOY_PORT_DELAY_SLICE_MS);
+	}
 }
 
 void Arduboy_Port_RecordCpuLoad(u8 cpu_load)

@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "fatfs.h"
 #include "libjpeg.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -66,6 +67,8 @@ typedef StaticTask_t osStaticThreadDef_t;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+CRC_HandleTypeDef hcrc;
+
 DAC_HandleTypeDef hdac;
 
 I2S_HandleTypeDef hi2s3;
@@ -106,19 +109,6 @@ osThreadAttr_t defaultTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 
-/* DAC1 sine wave test thread */
-#define DAC_SINE_TABLE_SIZE     1000
-#define DAC_THREAD_STACK_SIZE   2048U
-static uint32_t dac_sine_table[DAC_SINE_TABLE_SIZE];
-static osStaticThreadDef_t dacTaskControlBlock;
-osThreadAttr_t dacTask_attributes = {
-  .name = "dacTask",
-  .cb_mem = &dacTaskControlBlock,
-  .cb_size = sizeof(dacTaskControlBlock),
-  .stack_mem = NULL,
-  .stack_size = DAC_THREAD_STACK_SIZE,
-  .priority = (osPriority_t) osPriorityNormal,
-};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -136,6 +126,7 @@ static void MX_I2S3_Init(void);
 static void MX_RNG_Init(void);
 static void MX_TIM11_Init(void);
 static void MX_TIM12_Init(void);
+static void MX_CRC_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -190,6 +181,7 @@ int main(void)
   MX_RNG_Init();
   MX_TIM11_Init();
   MX_TIM12_Init();
+  MX_CRC_Init();
   /* USER CODE BEGIN 2 */
   /* USER CODE END 2 */
 
@@ -290,6 +282,32 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief CRC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_CRC_Init(void)
+{
+
+  /* USER CODE BEGIN CRC_Init 0 */
+
+  /* USER CODE END CRC_Init 0 */
+
+  /* USER CODE BEGIN CRC_Init 1 */
+
+  /* USER CODE END CRC_Init 1 */
+  hcrc.Instance = CRC;
+  if (HAL_CRC_Init(&hcrc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN CRC_Init 2 */
+
+  /* USER CODE END CRC_Init 2 */
+
 }
 
 /**
@@ -843,6 +861,8 @@ static void MX_FSMC_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
+  /* init code for USB_DEVICE */
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 5 */
 	init();
   /* USER CODE END 5 */

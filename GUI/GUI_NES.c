@@ -10,6 +10,7 @@
 #define GUI_NES_THREAD_STACK_WORDS      2048U
 #define GUI_NES_THREAD_STACK_SIZE       (GUI_NES_THREAD_STACK_WORDS * sizeof(u32))
 #define GUI_NES_LAUNCH_DELAY_MS         80U
+#define GUI_NES_CLEANUP_DELAY_TICKS     2U
 #define GUI_NES_RESULT_PENDING          0xFFU
 #define GUI_NES_RESULT_STOP_FAILED      0xFEU
 #define GUI_NES_RESULT_THREAD_FAILED    0xFDU
@@ -32,6 +33,8 @@ typedef struct
 	volatile u8 result;
 	osThreadId_t thread_id;
 	lv_timer_t *poll_timer;
+	volatile u32 stack_space;
+	volatile u32 exit_tick;
 } GUI_NES_Context_t;
 
 typedef StaticTask_t osStaticThreadDef_t;
@@ -42,6 +45,7 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 static int GUI_NES_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_NES_RunTask(void *argument);
 static void GUI_NES_PollTimer(lv_timer_t *timer);
+static void GUI_NES_CleanupThread(GUI_NES_Context_t *context);
 static int GUI_NES_EnsureTimer(void);
 static const char *GUI_NES_ResultText(u8 result);
 static u8 GUI_NES_CopyText(char *dst, u32 dst_size, const char *src);
@@ -143,8 +147,10 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 		return OPERATE_FAILED;
 	}
 
-	if (context->active != 0U)
+	GUI_NES_CleanupThread(context);
+	if (context->active != 0U || context->thread_id != NULL)
 	{
+		GUI_FileManage_SetStatus(manager, "NES busy");
 		return OPERATE_FAILED;
 	}
 
@@ -159,6 +165,8 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 	context->result = GUI_NES_RESULT_PENDING;
 	context->state = GUI_NES_STATE_STARTING;
 	context->active = 1U;
+	context->stack_space = 0U;
+	context->exit_tick = 0U;
 
 	if (s_nes_thread_attr.stack_mem == NULL)
 	{
@@ -177,6 +185,8 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 	context->thread_id = osThreadNew(GUI_NES_RunTask, context, &s_nes_thread_attr);
 	if (context->thread_id == NULL)
 	{
+		sys_thread_stack_free(s_nes_thread_attr.stack_mem);
+		s_nes_thread_attr.stack_mem = NULL;
 		context->result = GUI_NES_RESULT_THREAD_FAILED;
 		context->state = GUI_NES_STATE_ERROR;
 		context->active = 0U;
@@ -212,6 +222,7 @@ static void GUI_NES_RunTask(void *argument)
 	if (context == NULL)
 	{
 		osThreadExit();
+		return;
 	}
 
 	osDelay(GUI_NES_LAUNCH_DELAY_MS);
@@ -229,8 +240,11 @@ static void GUI_NES_RunTask(void *argument)
 
 	context->result = result;
 	context->state = (result == 0U) ? GUI_NES_STATE_FINISHED : GUI_NES_STATE_ERROR;
+	context->stack_space = (u32)uxTaskGetStackHighWaterMark(NULL) * (u32)sizeof(StackType_t);
 	context->active = 0U;
-	context->thread_id = NULL;
+	__DMB();
+	context->exit_tick = osKernelGetTickCount();
+	__DMB();
 
 	osThreadExit();
 }
@@ -247,6 +261,7 @@ static void GUI_NES_PollTimer(lv_timer_t *timer)
 		return;
 	}
 
+	GUI_NES_CleanupThread(&s_nes);
 	state = s_nes.state;
 	if (state == GUI_NES_STATE_STARTING)
 	{
@@ -263,6 +278,7 @@ static void GUI_NES_PollTimer(lv_timer_t *timer)
 		result = s_nes.result;
 		GUI_FileManage_SetLocked(&s_nes.file_manage, 0U);
 		GUI_FileManage_SetStatus(&s_nes.file_manage, GUI_NES_ResultText(result));
+		GUI_NES_CleanupThread(&s_nes);
 		s_nes.state = GUI_NES_STATE_IDLE;
 
 		if (Page_GetCurrent() == GUI_PAGE_NES)
@@ -271,6 +287,30 @@ static void GUI_NES_PollTimer(lv_timer_t *timer)
 			lv_obj_invalidate(s_nes.file_manage.screen);
 		}
 	}
+}
+
+static void GUI_NES_CleanupThread(GUI_NES_Context_t *context)
+{
+	u32 now;
+
+	if (context == NULL || context->thread_id == NULL || context->exit_tick == 0U)
+	{
+		return;
+	}
+
+	now = osKernelGetTickCount();
+	if ((now - context->exit_tick) < GUI_NES_CLEANUP_DELAY_TICKS)
+	{
+		return;
+	}
+
+	if (s_nes_thread_attr.stack_mem != NULL)
+	{
+		sys_thread_stack_free(s_nes_thread_attr.stack_mem);
+		s_nes_thread_attr.stack_mem = NULL;
+	}
+	context->thread_id = NULL;
+	context->exit_tick = 0U;
 }
 
 static int GUI_NES_EnsureTimer(void)

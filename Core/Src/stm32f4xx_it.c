@@ -57,6 +57,7 @@ void HardFault_Handler_C(u32 *stack_pointer, u32 lr_value, u32 msp_value, u32 ps
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 extern DAC_HandleTypeDef hdac;
 extern DMA_HandleTypeDef hdma_spi3_tx;
 extern DMA_HandleTypeDef hdma_sdio_rx;
@@ -94,7 +95,6 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Hard fault interrupt.
   */
-__attribute__((naked))
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
@@ -110,8 +110,12 @@ void HardFault_Handler(void)
     );
 
   /* USER CODE END HardFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
+    /* USER CODE END W1_HardFault_IRQn 0 */
+  }
 }
-
 
 /**
   * @brief This function handles Memory management fault.
@@ -292,6 +296,20 @@ void DMA2_Stream3_IRQHandler(void)
   /* USER CODE BEGIN DMA2_Stream3_IRQn 1 */
 
   /* USER CODE END DMA2_Stream3_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USB On The Go FS global interrupt.
+  */
+void OTG_FS_IRQHandler(void)
+{
+  /* USER CODE BEGIN OTG_FS_IRQn 0 */
+
+  /* USER CODE END OTG_FS_IRQn 0 */
+  HAL_PCD_IRQHandler(&hpcd_USB_OTG_FS);
+  /* USER CODE BEGIN OTG_FS_IRQn 1 */
+
+  /* USER CODE END OTG_FS_IRQn 1 */
 }
 
 /**

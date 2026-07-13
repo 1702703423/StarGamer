@@ -23,6 +23,7 @@
 #define GUI_IMAGE_CLOSE_H            26
 #define GUI_IMAGE_STATUS_LEN         64U
 #define GUI_IMAGE_DECODE_STACK_SIZE  8192U
+#define GUI_IMAGE_CLEANUP_DELAY_TICKS 2U
 
 #ifndef GUI_IMAGE_JPEG_LOG_ENABLE
 #define GUI_IMAGE_JPEG_LOG_ENABLE    0U
@@ -87,6 +88,8 @@ typedef struct
 	volatile u8 decoding;
 	volatile u8 decode_ready;
 	volatile u8 decode_result;
+	volatile u32 decode_stack_space;
+	volatile u32 decode_exit_tick;
 } GUI_ImageContext_t;
 
 typedef StaticTask_t osStaticThreadDef_t;
@@ -99,6 +102,7 @@ static void GUI_Image_CreateViewer(GUI_ImageContext_t *context);
 static void GUI_Image_CloseEvent(lv_event_t *event);
 static void GUI_Image_Timer(lv_timer_t *timer);
 static void GUI_Image_DecodeThread(void *argument);
+static void GUI_Image_CleanupDecodeThread(GUI_ImageContext_t *context);
 static void GUI_Image_ShowViewer(GUI_ImageContext_t *context);
 static void GUI_Image_HideViewer(GUI_ImageContext_t *context);
 static void GUI_Image_RebuildViewerFocus(GUI_ImageContext_t *context);
@@ -232,7 +236,8 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 		return OPERATE_FAILED;
 	}
 
-	if (context->decoding != 0U)
+	GUI_Image_CleanupDecodeThread(context);
+	if (context->decoding != 0U || context->decode_thread != NULL)
 	{
 		GUI_IMAGE_JPEG_LOG("open busy path=%s", item->path);
 		GUI_FileManage_SetStatus(manager, "Decoding JPG");
@@ -267,6 +272,8 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	GUI_Image_FreeDecoded(&context->pending_decoded);
 	context->decode_ready = 0U;
 	context->decode_result = (u8)GUI_IMAGE_DECODE_FORMAT;
+	context->decode_stack_space = 0U;
+	context->decode_exit_tick = 0U;
 	context->decoding = 1U;
 	GUI_FileManage_SetLocked(manager, 1U);
 	GUI_FileManage_SetStatus(manager, "Decoding JPG");
@@ -275,6 +282,8 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	if (tid == NULL)
 	{
 		GUI_IMAGE_JPEG_LOG("thread create fail path=%s", context->decode_path);
+		sys_thread_stack_free(s_image_decode_thread_attr.stack_mem);
+		s_image_decode_thread_attr.stack_mem = NULL;
 		context->decoding = 0U;
 		GUI_FileManage_SetLocked(manager, 0U);
 		GUI_FileManage_SetStatus(manager, "JPG thread failed");
@@ -394,17 +403,19 @@ static void GUI_Image_Timer(lv_timer_t *timer)
 
 	if (context->decode_ready == 0U)
 	{
+		GUI_Image_CleanupDecodeThread(context);
 		return;
 	}
 
 	result = (GUI_ImageDecodeResult_t)context->decode_result;
 	context->decode_ready = 0U;
 	context->decoding = 0U;
-	context->decode_thread = NULL;
+	GUI_Image_CleanupDecodeThread(context);
 	GUI_FileManage_SetLocked(&context->file_manage, 0U);
-	GUI_IMAGE_JPEG_LOG("timer result=%u data=%p",
+	GUI_IMAGE_JPEG_LOG("timer result=%u data=%p stack_free=%lu",
 	                   (unsigned int)result,
-	                   (void *)context->pending_decoded.data);
+	                   (void *)context->pending_decoded.data,
+	                   (unsigned long)context->decode_stack_space);
 
 	if (result == GUI_IMAGE_DECODE_OK && context->pending_decoded.data != NULL)
 	{
@@ -465,11 +476,39 @@ static void GUI_Image_DecodeThread(void *argument)
 	}
 
 	context->decode_result = (u8)result;
+	context->decode_stack_space = (u32)uxTaskGetStackHighWaterMark(NULL) * (u32)sizeof(StackType_t);
+	__DMB();
 	context->decode_ready = 1U;
+	context->decode_exit_tick = osKernelGetTickCount();
+	__DMB();
 	GUI_IMAGE_JPEG_LOG("thread exit result=%u stack_free=%lu",
 	                   (unsigned int)result,
-	                   (unsigned long)uxTaskGetStackHighWaterMark(NULL));
+	                   (unsigned long)context->decode_stack_space);
 	osThreadExit();
+}
+
+static void GUI_Image_CleanupDecodeThread(GUI_ImageContext_t *context)
+{
+	u32 now;
+
+	if (context == NULL || context->decode_thread == NULL || context->decode_exit_tick == 0U)
+	{
+		return;
+	}
+
+	now = osKernelGetTickCount();
+	if ((now - context->decode_exit_tick) < GUI_IMAGE_CLEANUP_DELAY_TICKS)
+	{
+		return;
+	}
+
+	if (s_image_decode_thread_attr.stack_mem != NULL)
+	{
+		sys_thread_stack_free(s_image_decode_thread_attr.stack_mem);
+		s_image_decode_thread_attr.stack_mem = NULL;
+	}
+	context->decode_thread = NULL;
+	context->decode_exit_tick = 0U;
 }
 
 static void GUI_Image_ShowViewer(GUI_ImageContext_t *context)

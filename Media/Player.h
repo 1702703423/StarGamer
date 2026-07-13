@@ -32,6 +32,7 @@ int PlayerPause(void);
 int PlayerResume(void);
 int PlayerTogglePause(void);
 int PlayerStop(void);
+void PlayerCleanup(void);
 u8 PlayerIsBusy(void);
 Player_State_t PlayerGetState(void);
 int PlayerGetInfo(Wave_Infomation *info);

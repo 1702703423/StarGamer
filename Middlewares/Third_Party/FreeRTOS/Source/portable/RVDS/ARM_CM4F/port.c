@@ -249,13 +249,10 @@ void __attribute__((naked)) vPortSVCHandler(void)
         "ite eq\n"
         "mrseq r0, msp\n"
         "mrsne r0, psp\n"
-        "mov r1, r0\n"          // r1 = 原始异常栈帧指针
-        "tst lr, #0x10\n"       // 扩展FPU栈帧时，基础异常帧在SP+0x48
-        "it eq\n"
-        "addeq r1, r1, #0x48\n"
+        "mov r1, r0\n"          // r1 = 异常栈帧指针（保存，不要被破坏）
 
         // 获取SVC编号
-        "ldr r2, [r1, #0x18]\n" // 取PC
+        "ldr r2, [r0, #0x18]\n" // 取PC
         "subs r2, r2, #2\n"     // 指向SVC指令
         "ldrb r3, [r2]\n"       // 读SVC编号
 

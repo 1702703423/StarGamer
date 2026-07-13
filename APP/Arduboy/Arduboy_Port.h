@@ -29,6 +29,7 @@ void Arduboy_Port_End(void);
 void Arduboy_Port_ResetStop(void);
 void Arduboy_Port_RequestStop(void);
 u8 Arduboy_Port_ShouldStop(void);
+void Arduboy_Port_WaitForExitRelease(void);
 void Arduboy_Port_RecordCpuLoad(u8 cpu_load);
 void Arduboy_Port_GetStats(Arduboy_PortStats_t *stats);
 

@@ -33,6 +33,7 @@ typedef enum
 
 int Arduboy_Runtime_Start(u8 game_index);
 void Arduboy_Runtime_RequestStop(void);
+void Arduboy_Runtime_Cleanup(void);
 Arduboy_RuntimeState_t Arduboy_Runtime_GetState(void);
 Arduboy_RuntimeResult_t Arduboy_Runtime_GetResult(void);
 u8 Arduboy_Runtime_GetGameIndex(void);

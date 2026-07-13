@@ -5,6 +5,7 @@
 #include "w25q64.h"
 #include "cmsis_os.h"
 #include "FreeRTOS.h"
+#include "task.h"
 #include "ff.h"
 
 #include <stdio.h>
@@ -16,6 +17,7 @@
 #define GUI_FONT_IO_CHUNK_SIZE          4096U
 #define GUI_FONT_BITMAP_BUF_SIZE        1024U
 #define GUI_FONT_INSTALL_STACK_SIZE     4096U
+#define GUI_FONT_CLEANUP_DELAY_TICKS    2U
 #define GUI_FONT_DEFAULT_LINE_HEIGHT    21U
 #define GUI_FONT_DEFAULT_BASE_LINE      0U
 
@@ -80,6 +82,9 @@ typedef struct
 	volatile u8 stage;
 	volatile u8 error;
 	volatile u8 progress;
+	osThreadId_t install_thread;
+	volatile u32 stack_space;
+	volatile u32 exit_tick;
 } GUI_FontContext_t;
 
 static int GUI_Font_PageBuild(Page_Struct_t *page);
@@ -88,6 +93,7 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 static int GUI_Font_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Font_Timer(lv_timer_t *timer);
 static void GUI_Font_InstallThread(void *argument);
+static void GUI_Font_CleanupInstallThread(GUI_FontContext_t *context);
 static u8 GUI_Font_EnsureIoBuffers(void);
 static u8 GUI_Font_EnsureBitmapBuffer(void);
 static u8 GUI_Font_EnsureInstallStack(void);
@@ -168,7 +174,8 @@ int GUI_Font_Uninstall(void)
 {
 	System_Settings_t previous_settings;
 
-	if (s_font.installing != 0U || s_font.thread_active != 0U)
+	GUI_Font_CleanupInstallThread(&s_font);
+	if (s_font.installing != 0U || s_font.thread_active != 0U || s_font.install_thread != NULL)
 	{
 		return OPERATE_FAILED;
 	}
@@ -324,7 +331,8 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 		return SYSTEM_STATUS_OK;
 	}
 
-	if (context->installing != 0U || context->thread_active != 0U)
+	GUI_Font_CleanupInstallThread(context);
+	if (context->installing != 0U || context->thread_active != 0U || context->install_thread != NULL)
 	{
 		GUI_FileManage_SetStatus(manager, "Install is running");
 		return OPERATE_FAILED;
@@ -357,6 +365,8 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 	context->install_size = item->size;
 	context->installing = 1U;
 	context->thread_active = 1U;
+	context->stack_space = 0U;
+	context->exit_tick = 0U;
 	GUI_Font_SetInstallState(context, GUI_FONT_STAGE_VALIDATE, 0U, GUI_FONT_ERROR_NONE);
 	GUI_FileManage_SetLocked(manager, 1U);
 	GUI_FileManage_SetStatus(manager, "Validating font");
@@ -364,6 +374,8 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 	tid = osThreadNew(GUI_Font_InstallThread, context, &s_font_install_thread_attr);
 	if (tid == NULL)
 	{
+		sys_thread_stack_free(s_font_install_thread_attr.stack_mem);
+		s_font_install_thread_attr.stack_mem = NULL;
 		context->thread_active = 0U;
 		context->installing = 0U;
 		GUI_Font_SetInstallState(context, GUI_FONT_STAGE_ERROR, 0U, GUI_FONT_ERROR_THREAD);
@@ -372,6 +384,7 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 		return OPERATE_FAILED;
 	}
 
+	context->install_thread = tid;
 	return SYSTEM_STATUS_OK;
 }
 
@@ -379,7 +392,12 @@ static int GUI_Font_Back(GUI_FileManage_t *manager, void *user_data)
 {
 	GUI_FontContext_t *context = (GUI_FontContext_t *)user_data;
 
-	if (context != NULL && context->installing != 0U)
+	if (context != NULL)
+	{
+		GUI_Font_CleanupInstallThread(context);
+	}
+
+	if (context != NULL && (context->installing != 0U || context->install_thread != NULL))
 	{
 		if (manager != NULL)
 		{
@@ -403,6 +421,7 @@ static void GUI_Font_Timer(lv_timer_t *timer)
 		return;
 	}
 
+	GUI_Font_CleanupInstallThread(context);
 	if (Page_Find(GUI_PAGE_FONT) == NULL)
 	{
 		return;
@@ -428,6 +447,7 @@ static void GUI_Font_Timer(lv_timer_t *timer)
 		GUI_FileManage_SetLocked(&context->file_manager, 0U);
 		(void)snprintf(context->status_text, sizeof(context->status_text), "Install failed: %s", GUI_Font_ErrorText(error));
 		GUI_FileManage_SetStatus(&context->file_manager, context->status_text);
+		GUI_Font_CleanupInstallThread(context);
 	}
 	else if (stage == (u8)GUI_FONT_STAGE_DONE)
 	{
@@ -440,6 +460,7 @@ static void GUI_Font_Timer(lv_timer_t *timer)
 			(void)GUI_FileManage_Refresh(&context->file_manager);
 		}
 		GUI_FileManage_SetStatus(&context->file_manager, "Font installed");
+		GUI_Font_CleanupInstallThread(context);
 	}
 	else if (context->installing != 0U)
 	{
@@ -470,6 +491,7 @@ static void GUI_Font_InstallThread(void *argument)
 	if (context == NULL)
 	{
 		osThreadExit();
+		return;
 	}
 
 	memset(&header, 0, sizeof(header));
@@ -622,8 +644,36 @@ finish:
 		GUI_Font_SetInstallState(context, GUI_FONT_STAGE_ERROR, context->progress, error);
 	}
 
+	context->stack_space = (u32)uxTaskGetStackHighWaterMark(NULL) * (u32)sizeof(StackType_t);
 	context->thread_active = 0U;
+	__DMB();
+	context->exit_tick = osKernelGetTickCount();
+	__DMB();
 	osThreadExit();
+}
+
+static void GUI_Font_CleanupInstallThread(GUI_FontContext_t *context)
+{
+	u32 now;
+
+	if (context == NULL || context->install_thread == NULL || context->exit_tick == 0U)
+	{
+		return;
+	}
+
+	now = osKernelGetTickCount();
+	if ((now - context->exit_tick) < GUI_FONT_CLEANUP_DELAY_TICKS)
+	{
+		return;
+	}
+
+	if (s_font_install_thread_attr.stack_mem != NULL)
+	{
+		sys_thread_stack_free(s_font_install_thread_attr.stack_mem);
+		s_font_install_thread_attr.stack_mem = NULL;
+	}
+	context->install_thread = NULL;
+	context->exit_tick = 0U;
 }
 
 static u8 GUI_Font_EnsureIoBuffers(void)

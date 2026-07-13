@@ -30,6 +30,7 @@ typedef struct GUI_ArduboyContext
 	Arduboy_RuntimeState_t last_state;
 	Arduboy_RuntimeResult_t last_result;
 	lv_timer_t *poll_timer;
+	u8 locked;
 	char status_text[96];
 } GUI_ArduboyContext_t;
 
@@ -44,6 +45,9 @@ static void GUI_Arduboy_Poll(lv_timer_t *timer);
 static void GUI_Arduboy_SetLocked(GUI_ArduboyContext_t *context, u8 locked);
 static void GUI_Arduboy_SetStatus(GUI_ArduboyContext_t *context, const char *text);
 static void GUI_Arduboy_RebuildFocus(GUI_ArduboyContext_t *context, lv_obj_t *focus);
+static void GUI_Arduboy_RestoreFocus(GUI_ArduboyContext_t *context);
+static void GUI_Arduboy_WaitInputRelease(void);
+static int GUI_Arduboy_ReturnToMain(void);
 static u8 GUI_Arduboy_HandleNavigation(u32 key);
 
 static GUI_ArduboyContext_t s_arduboy;
@@ -110,8 +114,10 @@ static int GUI_Arduboy_PageLoaded(Page_Struct_t *page, void *user_data)
 	(void)user_data;
 
 	GUI_Arduboy_Poll(NULL);
-	GUI_Arduboy_RebuildFocus(&s_arduboy,
-	                         (s_arduboy.game_count > 0U) ? s_arduboy.game_buttons[0] : s_arduboy.back_button);
+	if (Arduboy_Runtime_IsActive() == 0U && s_arduboy.locked == 0U)
+	{
+		GUI_Arduboy_RestoreFocus(&s_arduboy);
+	}
 	lv_obj_invalidate(s_arduboy.screen);
 	return SYSTEM_STATUS_OK;
 }
@@ -243,7 +249,8 @@ static void GUI_Arduboy_BackEvent(lv_event_t *event)
 	    (code == LV_EVENT_KEY && (lv_event_get_key(event) == LV_KEY_ENTER ||
 	                              lv_event_get_key(event) == LV_KEY_ESC)))
 	{
-		(void)Page_Back();
+		GUI_Arduboy_WaitInputRelease();
+		(void)GUI_Arduboy_ReturnToMain();
 	}
 	else if (code == LV_EVENT_KEY)
 	{
@@ -268,7 +275,11 @@ static void GUI_Arduboy_GameEvent(lv_event_t *event)
 		key = lv_event_get_key(event);
 		if (key == LV_KEY_ESC || key == LV_KEY_LEFT)
 		{
-			if (Arduboy_Runtime_IsActive() == 0U) (void)Page_Back();
+			if (Arduboy_Runtime_IsActive() == 0U)
+			{
+				GUI_Arduboy_WaitInputRelease();
+				(void)GUI_Arduboy_ReturnToMain();
+			}
 			return;
 		}
 		if (key != LV_KEY_ENTER && key != LV_KEY_RIGHT)
@@ -298,10 +309,14 @@ static void GUI_Arduboy_GameEvent(lv_event_t *event)
 	(void)snprintf(s_arduboy.status_text, sizeof(s_arduboy.status_text), "Starting %s", game->name);
 	GUI_Arduboy_SetStatus(&s_arduboy, s_arduboy.status_text);
 	GUI_Arduboy_SetLocked(&s_arduboy, 1U);
+	/* Force the next poll to consume completion even for a very short run. */
+	s_arduboy.last_state = ARDUBOY_RUNTIME_IDLE;
+	s_arduboy.last_result = ARDUBOY_RUNTIME_RESULT_NONE;
 	if (Arduboy_Runtime_Start(*index) != SYSTEM_STATUS_OK)
 	{
 		GUI_Arduboy_SetLocked(&s_arduboy, 0U);
 		GUI_Arduboy_SetStatus(&s_arduboy, Arduboy_Runtime_ResultText(Arduboy_Runtime_GetResult()));
+		GUI_Arduboy_RestoreFocus(&s_arduboy);
 	}
 }
 
@@ -311,8 +326,11 @@ static void GUI_Arduboy_Poll(lv_timer_t *timer)
 	Arduboy_RuntimeResult_t result;
 	Arduboy_PortStats_t stats;
 	const Arduboy_Game_t *game;
+	u8 active;
+	u8 desired_locked;
 
 	(void)timer;
+	Arduboy_Runtime_Cleanup();
 	if (s_arduboy.screen == NULL)
 	{
 		return;
@@ -320,7 +338,11 @@ static void GUI_Arduboy_Poll(lv_timer_t *timer)
 
 	state = Arduboy_Runtime_GetState();
 	result = Arduboy_Runtime_GetResult();
-	if (state == s_arduboy.last_state && result == s_arduboy.last_result)
+	active = Arduboy_Runtime_IsActive();
+	desired_locked = (active != 0U) ? 1U : 0U;
+	if (state == s_arduboy.last_state &&
+	    result == s_arduboy.last_result &&
+	    s_arduboy.locked == desired_locked)
 	{
 		return;
 	}
@@ -351,11 +373,13 @@ static void GUI_Arduboy_Poll(lv_timer_t *timer)
 		               (unsigned long)Arduboy_Runtime_GetStackSpace());
 		GUI_Arduboy_SetStatus(&s_arduboy, s_arduboy.status_text);
 		GUI_Arduboy_SetLocked(&s_arduboy, 0U);
+		GUI_Arduboy_RestoreFocus(&s_arduboy);
 	}
 	else if (state == ARDUBOY_RUNTIME_ERROR)
 	{
 		GUI_Arduboy_SetStatus(&s_arduboy, Arduboy_Runtime_ResultText(result));
 		GUI_Arduboy_SetLocked(&s_arduboy, 0U);
+		GUI_Arduboy_RestoreFocus(&s_arduboy);
 	}
 	else
 	{
@@ -370,6 +394,12 @@ static void GUI_Arduboy_SetLocked(GUI_ArduboyContext_t *context, u8 locked)
 {
 	u8 i;
 
+	if (context == NULL)
+	{
+		return;
+	}
+
+	context->locked = (locked != 0U) ? 1U : 0U;
 	for (i = 0U; i < context->game_count; i++)
 	{
 		if (context->game_buttons[i] == NULL) continue;
@@ -436,6 +466,41 @@ static void GUI_Arduboy_RebuildFocus(GUI_ArduboyContext_t *context, lv_obj_t *fo
 	{
 		lv_group_focus_obj(focus);
 	}
+}
+
+static void GUI_Arduboy_RestoreFocus(GUI_ArduboyContext_t *context)
+{
+	lv_obj_t *focus;
+
+	if (context == NULL || Page_GetCurrent() != GUI_PAGE_ARDUBOY)
+	{
+		return;
+	}
+
+	focus = (context->game_count > 0U) ? context->game_buttons[0] : context->back_button;
+	if (context->selected_game < context->game_count &&
+	    context->game_buttons[context->selected_game] != NULL)
+	{
+		focus = context->game_buttons[context->selected_game];
+	}
+
+	GUI_Arduboy_RebuildFocus(context, focus);
+}
+
+static void GUI_Arduboy_WaitInputRelease(void)
+{
+	lv_indev_t *indev = lv_indev_get_act();
+
+	if (indev != NULL)
+	{
+		lv_indev_wait_release(indev);
+	}
+}
+
+static int GUI_Arduboy_ReturnToMain(void)
+{
+	Page_ClearHistory();
+	return Page_Back();
 }
 
 static u8 GUI_Arduboy_HandleNavigation(u32 key)

@@ -448,6 +448,7 @@ static void GUI_Player_PollTimer(lv_timer_t *timer)
 {
 	(void)timer;
 
+	PlayerCleanup();
 	if (s_player.file_manage.screen == NULL)
 	{
 		return;
