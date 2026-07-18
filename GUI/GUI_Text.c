@@ -81,6 +81,7 @@ typedef struct
 
 static int GUI_Text_PageBuild(Page_Struct_t *page);
 static int GUI_Text_PageLoaded(Page_Struct_t *page, void *user_data);
+static GUI_TextContext_t *GUI_Text_GetContext(void);
 static int GUI_Text_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data);
 static int GUI_Text_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Text_CreateViewer(GUI_TextContext_t *context);
@@ -118,7 +119,7 @@ static const char *GUI_Text_EncodingName(u8 encoding);
 static const char *GUI_Text_ResultText(GUI_TextOpenResult_t result);
 static u8 GUI_Text_CopyText(char *dst, u32 dst_size, const char *src);
 
-static GUI_TextContext_t s_text;
+static GUI_TextContext_t *s_text;
 
 static const char * const s_text_extensions[] =
 {
@@ -139,6 +140,11 @@ int GUI_Text_Register(void)
 	if (Page_Find(GUI_PAGE_TEXT) != NULL)
 	{
 		return SYSTEM_STATUS_OK;
+	}
+
+	if (GUI_Text_GetContext() == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
 	}
 
 	return Page_Create(GUI_PAGE_TEXT, "Text", GUI_Text_PageBuild, GUI_Text_PageLoaded);
@@ -162,6 +168,7 @@ int GUI_Text_Show(void)
 
 static int GUI_Text_PageBuild(Page_Struct_t *page)
 {
+	GUI_TextContext_t *context;
 	GUI_FileManageConfig_t config;
 	int code;
 
@@ -170,7 +177,13 @@ static int GUI_Text_PageBuild(Page_Struct_t *page)
 		return OPERATE_FAILED;
 	}
 
-	memset(&s_text, 0, sizeof(s_text));
+	context = GUI_Text_GetContext();
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	memset(context, 0, sizeof(*context));
 	memset(&config, 0, sizeof(config));
 
 	config.title = "Text";
@@ -182,17 +195,17 @@ static int GUI_Text_PageBuild(Page_Struct_t *page)
 	config.accent_color = GUI_TEXT_ACCENT;
 	config.open = GUI_Text_OpenFile;
 	config.back = GUI_Text_Back;
-	config.user_data = &s_text;
+	config.user_data = context;
 
-	s_text.page = page;
-	code = GUI_FileManage_Create(&s_text.file_manage, page, &config);
+	context->page = page;
+	code = GUI_FileManage_Create(&context->file_manage, page, &config);
 	if (code != SYSTEM_STATUS_OK)
 	{
 		return code;
 	}
 
-	GUI_Text_CreateViewer(&s_text);
-	if (s_text.viewer == NULL || s_text.text_label == NULL)
+	GUI_Text_CreateViewer(context);
+	if (context->viewer == NULL || context->text_label == NULL)
 	{
 		return OUT_OF_HEAP_MEMORY;
 	}
@@ -202,21 +215,42 @@ static int GUI_Text_PageBuild(Page_Struct_t *page)
 
 static int GUI_Text_PageLoaded(Page_Struct_t *page, void *user_data)
 {
+	GUI_TextContext_t *context = s_text;
+
 	(void)page;
 	(void)user_data;
 
-	if (s_text.view_active != 0U)
+	if (context == NULL)
 	{
-		GUI_Text_FocusViewer(&s_text);
+		return OPERATE_FAILED;
+	}
+
+	if (context->view_active != 0U)
+	{
+		GUI_Text_FocusViewer(context);
 		return SYSTEM_STATUS_OK;
 	}
 
 	if (GUI_Font_IsInstalled() == 0U)
 	{
-		GUI_FileManage_SetStatus(&s_text.file_manage, "Install font first");
+		GUI_FileManage_SetStatus(&context->file_manage, "Install font first");
 	}
 
-	return GUI_FileManage_PageLoaded(&s_text.file_manage);
+	return GUI_FileManage_PageLoaded(&context->file_manage);
+}
+
+static GUI_TextContext_t *GUI_Text_GetContext(void)
+{
+	if (s_text == NULL)
+	{
+		s_text = (GUI_TextContext_t *)sys_malloc(SRAMEX, sizeof(GUI_TextContext_t));
+		if (s_text != NULL)
+		{
+			memset(s_text, 0, sizeof(GUI_TextContext_t));
+		}
+	}
+
+	return s_text;
 }
 
 static int GUI_Text_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data)
@@ -877,7 +911,7 @@ static GUI_TextOpenResult_t GUI_Text_PrepareFile(GUI_TextContext_t *context, con
 		return GUI_TEXT_OPEN_MEMORY;
 	}
 
-	if (GUI_Text_CopyText(context->current_path, GUI_FILEMANAGE_PATH_SIZE, item->path) == 0U ||
+	if (GUI_FileManage_BuildItemPath(&context->file_manage, item, context->current_path, GUI_FILEMANAGE_PATH_SIZE) == 0U ||
 	    GUI_Text_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name) == 0U)
 	{
 		return GUI_TEXT_OPEN_FILE;
@@ -1012,7 +1046,14 @@ static GUI_TextOpenResult_t GUI_Text_ValidateEncoding(const char *path, u32 file
 		return GUI_TEXT_OPEN_FILE;
 	}
 
-	if (GUI_Text_ReaderInit(&reader, file, s_text.io_buffer, GUI_TEXT_IO_BUFFER_SIZE, file_size, start_offset) == 0U)
+	if (s_text == NULL || s_text->io_buffer == NULL)
+	{
+		(void)f_close(file);
+		GUI_Text_FreeFile(file);
+		return GUI_TEXT_OPEN_MEMORY;
+	}
+
+	if (GUI_Text_ReaderInit(&reader, file, s_text->io_buffer, GUI_TEXT_IO_BUFFER_SIZE, file_size, start_offset) == 0U)
 	{
 		(void)f_close(file);
 		GUI_Text_FreeFile(file);

@@ -56,6 +56,7 @@ typedef struct System_Settings
 {
 	u32 volume;
 	u8 Debug;
+	u8 UsbMscEnabled;
 	u16 ScreenLight;
 	u8 FontInstalled;
 	u8 FontBpp;
@@ -106,5 +107,7 @@ int System_Settings_Init(void);
 int System_Settings_Load(void);
 int System_Settings_Save(void);
 u8 System_Settings_FontInstalled(void);
+u8 System_Settings_UsbMscEnabled(void);
+int System_Settings_SetUsbMscEnabled(u8 enabled);
 
 #endif

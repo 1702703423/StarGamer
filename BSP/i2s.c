@@ -3,13 +3,14 @@
 
 extern I2S_HandleTypeDef hi2s3;
 
-#define AUDIO_CARD_MEM_POOL      SRAMEX
+#define AUDIO_CARD_MEM_POOL      SRAMMAIN
 #define AUDIO_CARD_MAX_VOLUME    100U
 #define AUDIO_CARD_MIN_PKG_SIZE  16U
 
 static audio_play_info_t apif;
 static uint8_t audio_card_opened = 0;
 static uint16_t audio_card_volume = AUDIO_CARD_MAX_VOLUME;
+static volatile audio_card_stats_t audio_card_stats;
 
 static uint32_t audio_card_map_freq(int sample_rate)
 {
@@ -69,7 +70,43 @@ static int16_t audio_card_read_le16(const uint8_t *src)
 
 static int16_t audio_card_scale_sample(int32_t sample)
 {
+	if (apif.volume >= AUDIO_CARD_MAX_VOLUME)
+	{
+		return (int16_t)sample;
+	}
+	if (apif.volume == 0U)
+	{
+		return 0;
+	}
+
 	return (int16_t)(sample * (int32_t)apif.volume / (int32_t)AUDIO_CARD_MAX_VOLUME);
+}
+
+static void audio_card_note_udr(void)
+{
+	if (__HAL_I2S_GET_FLAG(&hi2s3, I2S_FLAG_UDR) == SET)
+	{
+		audio_card_stats.udr_count++;
+		audio_card_stats.last_sr = hi2s3.Instance->SR;
+		__HAL_I2S_CLEAR_UDRFLAG(&hi2s3);
+	}
+}
+
+static u8 audio_card_dma_active_index(void)
+{
+	u32 remain;
+	u32 half_halfwords;
+
+	if ((hi2s3.hdmatx == NULL) || (hi2s3.hdmatx->Instance == NULL) ||
+	    (apif.WAV_PLAY_BUFF_SIZE == 0U))
+	{
+		return 0xFFU;
+	}
+
+	half_halfwords = apif.WAV_PLAY_BUFF_SIZE / 2U;
+	remain = hi2s3.hdmatx->Instance->NDTR;
+
+	return (remain > half_halfwords) ? 0U : 1U;
 }
 
 static void audio_card_pcm_8b_1ch(const uint8_t *src, int src_size, int16_t *dst)
@@ -135,6 +172,11 @@ static void audio_card_pcm_16b_2ch(const uint8_t *src, int src_size, int16_t *ds
 	{
 		samples = max_samples;
 	}
+	if (apif.volume >= AUDIO_CARD_MAX_VOLUME)
+	{
+		memcpy(dst, src, (size_t)samples * sizeof(int16_t));
+		return;
+	}
 
 	for (i = 0; i < samples; i++)
 	{
@@ -156,6 +198,7 @@ static int audio_card_start_dma(void)
 	{
 		return -2;
 	}
+	__HAL_I2S_ENABLE_IT(&hi2s3, I2S_IT_ERR);
 
 	return 0;
 }
@@ -165,6 +208,16 @@ static void audio_card_notify(uint8_t current_buf_index)
 	if (!audio_card_opened)
 	{
 		return;
+	}
+
+	audio_card_note_udr();
+	if (current_buf_index == 1U)
+	{
+		audio_card_stats.half_count++;
+	}
+	else
+	{
+		audio_card_stats.full_count++;
 	}
 
 	apif.curr_buf_index = current_buf_index;
@@ -277,6 +330,7 @@ int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_s
 	}
 
 	memset(&apif, 0, sizeof(apif));
+	audio_card_reset_stats();
 	apif.sample = (uint32_t)sample_rate;
 	apif.sample_bits = (uint8_t)deepth;
 	apif.channels = (uint8_t)channels;
@@ -431,7 +485,16 @@ int audio_card_write_to_buffer(uint8_t index, void *pkg_buff, int pkg_size)
 	}
 
 	dst = apif.wav_buffer + ((uint32_t)index * apif.WAV_PLAY_BUFF_SIZE);
-	memset(dst, 0, apif.WAV_PLAY_BUFF_SIZE);
+	if ((hi2s3.Instance != NULL) &&
+	    ((hi2s3.Instance->I2SCFGR & SPI_I2SCFGR_I2SE) != 0U) &&
+	    (audio_card_dma_active_index() == index))
+	{
+		audio_card_stats.late_write_count++;
+	}
+	if (pkg_size < (int)apif.pkg_size)
+	{
+		memset(dst, 0, apif.WAV_PLAY_BUFF_SIZE);
+	}
 
 	if (pkg_size == 0)
 	{
@@ -468,6 +531,31 @@ int audio_card_write_to_buffer(uint8_t index, void *pkg_buff, int pkg_size)
 	return 0;
 }
 
+int audio_card_write_silence(uint8_t index)
+{
+	uint8_t *dst;
+
+	if (!audio_card_opened || (apif.wav_buffer == NULL))
+	{
+		return -1;
+	}
+	if (index > 1U)
+	{
+		return -2;
+	}
+
+	dst = apif.wav_buffer + ((uint32_t)index * apif.WAV_PLAY_BUFF_SIZE);
+	if ((hi2s3.Instance != NULL) &&
+	    ((hi2s3.Instance->I2SCFGR & SPI_I2SCFGR_I2SE) != 0U) &&
+	    (audio_card_dma_active_index() == index))
+	{
+		audio_card_stats.late_write_count++;
+	}
+	memset(dst, 0, apif.WAV_PLAY_BUFF_SIZE);
+
+	return 0;
+}
+
 int audio_card_write(void *pkg_buff, int pkg_size)
 {
 	return audio_card_write_to_buffer(audio_card_get_idle_buffer_index(), pkg_buff, pkg_size);
@@ -476,6 +564,7 @@ int audio_card_write(void *pkg_buff, int pkg_size)
 int audio_card_close(void)
 {
 	audio_card_opened = 0;
+	__HAL_I2S_DISABLE_IT(&hi2s3, I2S_IT_ERR);
 	HAL_I2S_DMAStop(&hi2s3);
 
 	if (apif.wav_buffer != NULL)
@@ -514,6 +603,28 @@ uint8_t audio_card_get_idle_buffer_index(void)
 	return (uint8_t)((apif.curr_buf_index + 1U) & 0x01U);
 }
 
+void audio_card_get_stats(audio_card_stats_t *stats)
+{
+	if (stats == NULL)
+	{
+		return;
+	}
+
+	stats->half_count = audio_card_stats.half_count;
+	stats->full_count = audio_card_stats.full_count;
+	stats->udr_count = audio_card_stats.udr_count;
+	stats->dma_error_count = audio_card_stats.dma_error_count;
+	stats->i2s_error_count = audio_card_stats.i2s_error_count;
+	stats->late_write_count = audio_card_stats.late_write_count;
+	stats->last_error = audio_card_stats.last_error;
+	stats->last_sr = audio_card_stats.last_sr;
+}
+
+void audio_card_reset_stats(void)
+{
+	memset((void *)&audio_card_stats, 0, sizeof(audio_card_stats));
+}
+
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
 	if (hi2s == &hi2s3)
@@ -528,4 +639,34 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 	{
 		audio_card_notify(0U);
 	}
+}
+
+void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
+{
+	u32 err;
+
+	if (hi2s != &hi2s3)
+	{
+		return;
+	}
+
+	err = HAL_I2S_GetError(hi2s);
+	audio_card_stats.i2s_error_count++;
+	audio_card_stats.last_error = err;
+	audio_card_stats.last_sr = hi2s->Instance->SR;
+
+	if ((err & HAL_I2S_ERROR_DMA) != 0U)
+	{
+		audio_card_stats.dma_error_count++;
+	}
+	if ((err & HAL_I2S_ERROR_UDR) != 0U)
+	{
+		audio_card_stats.udr_count++;
+		__HAL_I2S_CLEAR_UDRFLAG(hi2s);
+	}
+}
+
+void SPI3_IRQHandler(void)
+{
+	HAL_I2S_IRQHandler(&hi2s3);
 }

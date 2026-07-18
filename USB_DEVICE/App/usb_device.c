@@ -27,11 +27,13 @@
 #include "usbd_storage_if.h"
 
 /* USER CODE BEGIN Includes */
+#include "System_Status.h"
 
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+static u8 s_usb_device_started;
 
 /* USER CODE END PV */
 
@@ -47,6 +49,74 @@ USBD_HandleTypeDef hUsbDeviceFS;
  * -- Insert your variables declaration here --
  */
 /* USER CODE BEGIN 0 */
+static int USB_DEVICE_MSC_Start(void)
+{
+  if (s_usb_device_started != 0U)
+  {
+    return SYSTEM_STATUS_OK;
+  }
+
+  if (USBD_Init(&hUsbDeviceFS, &FS_Desc, DEVICE_FS) != USBD_OK)
+  {
+    goto start_failed;
+  }
+  if (USBD_RegisterClass(&hUsbDeviceFS, &USBD_MSC) != USBD_OK)
+  {
+    goto start_failed;
+  }
+  if (USBD_MSC_RegisterStorage(&hUsbDeviceFS, &USBD_Storage_Interface_fops_FS) != USBD_OK)
+  {
+    goto start_failed;
+  }
+  if (USBD_Start(&hUsbDeviceFS) != USBD_OK)
+  {
+    goto start_failed;
+  }
+
+  s_usb_device_started = 1U;
+  return SYSTEM_STATUS_OK;
+
+start_failed:
+  (void)USBD_Stop(&hUsbDeviceFS);
+  (void)USBD_DeInit(&hUsbDeviceFS);
+  s_usb_device_started = 0U;
+  return OPERATE_FAILED;
+}
+
+int USB_DEVICE_MSC_Stop(void)
+{
+  if (s_usb_device_started == 0U)
+  {
+    return SYSTEM_STATUS_OK;
+  }
+
+  if (USBD_Stop(&hUsbDeviceFS) != USBD_OK)
+  {
+    return OPERATE_FAILED;
+  }
+  if (USBD_DeInit(&hUsbDeviceFS) != USBD_OK)
+  {
+    return OPERATE_FAILED;
+  }
+
+  s_usb_device_started = 0U;
+  return SYSTEM_STATUS_OK;
+}
+
+int USB_DEVICE_MSC_ApplySetting(void)
+{
+  if (System_Settings_UsbMscEnabled() != 0U)
+  {
+    return USB_DEVICE_MSC_Start();
+  }
+
+  return USB_DEVICE_MSC_Stop();
+}
+
+u8 USB_DEVICE_MSC_IsStarted(void)
+{
+  return (s_usb_device_started != 0U) ? 1U : 0U;
+}
 
 /* USER CODE END 0 */
 
@@ -64,6 +134,10 @@ USBD_HandleTypeDef hUsbDeviceFS;
 void MX_USB_DEVICE_Init(void)
 {
   /* USER CODE BEGIN USB_DEVICE_Init_PreTreatment */
+  if (System_Settings_UsbMscEnabled() == 0U || s_usb_device_started != 0U)
+  {
+    return;
+  }
 
   /* USER CODE END USB_DEVICE_Init_PreTreatment */
 
@@ -86,6 +160,7 @@ void MX_USB_DEVICE_Init(void)
   }
 
   /* USER CODE BEGIN USB_DEVICE_Init_PostTreatment */
+  s_usb_device_started = 1U;
 
   /* USER CODE END USB_DEVICE_Init_PostTreatment */
 }

@@ -7,12 +7,21 @@
 #include "fatfs.h"
 #include "sys.h"
 
-typedef struct Wave_Infomation_t {
-  u32 WAV_Second;
-  u32 Sample_Rate;
-  int Channels;
-  int deepth;
-}Wave_Infomation;
+typedef enum
+{
+  PLAYER_CODEC_WAV = 0,
+  PLAYER_CODEC_MP3
+} Player_Codec_t;
+
+typedef struct Player_Info
+{
+  Player_Codec_t codec;
+  u32 duration_seconds;
+  u32 sample_rate;
+  u32 bitrate;
+  u8 channels;
+  u8 bits_per_sample;
+} Player_Info_t;
 
 typedef enum
 {
@@ -35,7 +44,7 @@ int PlayerStop(void);
 void PlayerCleanup(void);
 u8 PlayerIsBusy(void);
 Player_State_t PlayerGetState(void);
-int PlayerGetInfo(Wave_Infomation *info);
+int PlayerGetInfo(Player_Info_t *info);
 const TCHAR *PlayerGetCurrentPath(void);
 void WavePlayTaskStop(osThreadId_t tid);
 

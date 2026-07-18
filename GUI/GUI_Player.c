@@ -3,6 +3,7 @@
 #include "Player.h"
 #include "i2s.h"
 #include "System_Status.h"
+#include "Malloc.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -40,10 +41,11 @@ typedef struct
 
 static int GUI_Player_PageBuild(Page_Struct_t *page);
 static int GUI_Player_PageLoaded(Page_Struct_t *page, void *user_data);
+static GUI_Player_Context_t *GUI_Player_GetContext(void);
 static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data);
 static int GUI_Player_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Player_CreateControls(GUI_Player_Context_t *context);
-static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb);
+static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb, GUI_Player_Context_t *context);
 static void GUI_Player_PlayEvent(lv_event_t *event);
 static void GUI_Player_StopEvent(lv_event_t *event);
 static void GUI_Player_VolumeEvent(lv_event_t *event);
@@ -59,15 +61,21 @@ static void GUI_Player_SetLabelTextIfChanged(lv_obj_t *label, const char *text);
 static u8 GUI_Player_CopyText(char *dst, u32 dst_size, const char *src);
 static const char *GUI_Player_FileName(const char *path);
 
-static GUI_Player_Context_t s_player;
+static GUI_Player_Context_t *s_player;
 static const char * const s_player_extensions[] =
 {
-	".wav"
+	".wav",
+	".mp3"
 };
 
 int GUI_Player_Register(void)
 {
 	int code;
+
+	if (GUI_Player_GetContext() == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
 
 	if (Page_Find(GUI_PAGE_MUSIC) != NULL)
 	{
@@ -101,6 +109,7 @@ int GUI_Player_Show(void)
 
 static int GUI_Player_PageBuild(Page_Struct_t *page)
 {
+	GUI_Player_Context_t *context;
 	GUI_FileManageConfig_t config;
 	int code;
 
@@ -109,50 +118,77 @@ static int GUI_Player_PageBuild(Page_Struct_t *page)
 		return OPERATE_FAILED;
 	}
 
-	memset(&s_player, 0, sizeof(s_player));
+	context = GUI_Player_GetContext();
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	memset(context, 0, sizeof(*context));
 	memset(&config, 0, sizeof(config));
 
 	config.title = "Music";
 	config.root_path = "0:/";
-	config.empty_text = "No WAV files";
+	config.empty_text = "No audio files";
 	config.status_text = "Audio";
 	config.extensions = s_player_extensions;
 	config.extension_count = (u8)(sizeof(s_player_extensions) / sizeof(s_player_extensions[0]));
 	config.accent_color = GUI_PLAYER_ACCENT;
 	config.open = GUI_Player_OpenAudio;
 	config.back = GUI_Player_Back;
-	config.user_data = &s_player;
+	config.user_data = context;
 
-	code = GUI_FileManage_Create(&s_player.file_manage, page, &config);
+	code = GUI_FileManage_Create(&context->file_manage, page, &config);
 	if (code != SYSTEM_STATUS_OK)
 	{
 		return code;
 	}
 
-	if (s_player.file_manage.list != NULL)
+	if (context->file_manage.list != NULL)
 	{
-		lv_obj_set_height(s_player.file_manage.list, GUI_PLAYER_LIST_H);
+		lv_obj_set_height(context->file_manage.list, GUI_PLAYER_LIST_H);
 	}
-	if (s_player.file_manage.status_label != NULL)
+	if (context->file_manage.status_label != NULL)
 	{
-		lv_obj_set_pos(s_player.file_manage.status_label, 12, GUI_PLAYER_STATUS_Y);
+		lv_obj_set_pos(context->file_manage.status_label, 12, GUI_PLAYER_STATUS_Y);
 	}
 
-	s_player.last_state = PLAYER_STATE_IDLE;
-	s_player.volume = (u8)GUI_Player_LimitVolume(audio_card_get_volume());
-	GUI_Player_CreateControls(&s_player);
-	GUI_Player_UpdateView(&s_player);
+	context->last_state = PLAYER_STATE_IDLE;
+	context->volume = (u8)GUI_Player_LimitVolume(audio_card_get_volume());
+	GUI_Player_CreateControls(context);
+	GUI_Player_UpdateView(context);
 
 	return SYSTEM_STATUS_OK;
 }
 
 static int GUI_Player_PageLoaded(Page_Struct_t *page, void *user_data)
 {
+	GUI_Player_Context_t *context = s_player;
+
 	(void)page;
 	(void)user_data;
 
-	GUI_Player_UpdateView(&s_player);
-	return GUI_FileManage_PageLoaded(&s_player.file_manage);
+	if (context == NULL)
+	{
+		return OPERATE_FAILED;
+	}
+
+	GUI_Player_UpdateView(context);
+	return GUI_FileManage_PageLoaded(&context->file_manage);
+}
+
+static GUI_Player_Context_t *GUI_Player_GetContext(void)
+{
+	if (s_player == NULL)
+	{
+		s_player = (GUI_Player_Context_t *)sys_malloc(SRAMEX, sizeof(GUI_Player_Context_t));
+		if (s_player != NULL)
+		{
+			memset(s_player, 0, sizeof(GUI_Player_Context_t));
+		}
+	}
+
+	return s_player;
 }
 
 static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data)
@@ -171,7 +207,7 @@ static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageI
 		return OPERATE_FAILED;
 	}
 
-	if (GUI_Player_CopyText(context->current_path, GUI_FILEMANAGE_PATH_SIZE, item->path) == 0U ||
+	if (GUI_FileManage_BuildItemPath(manager, item, context->current_path, GUI_FILEMANAGE_PATH_SIZE) == 0U ||
 	    GUI_Player_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name) == 0U)
 	{
 		GUI_FileManage_SetStatus(manager, "Path too long");
@@ -231,9 +267,9 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_obj_set_pos(context->state_label, 10, 27);
 	lv_obj_set_style_text_color(context->state_label, lv_color_hex(0x95A3B0U), 0);
 
-	context->play_btn = GUI_Player_CreateButton(context->bar, LV_SYMBOL_PLAY, 210, GUI_Player_PlayEvent);
+	context->play_btn = GUI_Player_CreateButton(context->bar, LV_SYMBOL_PLAY, 210, GUI_Player_PlayEvent, context);
 	context->play_icon = lv_obj_get_child(context->play_btn, 0);
-	context->stop_btn = GUI_Player_CreateButton(context->bar, LV_SYMBOL_STOP, 252, GUI_Player_StopEvent);
+	context->stop_btn = GUI_Player_CreateButton(context->bar, LV_SYMBOL_STOP, 252, GUI_Player_StopEvent, context);
 	context->stop_icon = lv_obj_get_child(context->stop_btn, 0);
 
 	context->volume_icon = lv_label_create(context->bar);
@@ -268,7 +304,7 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	GUI_Player_UpdateVolumeView(context, context->volume);
 }
 
-static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb)
+static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb, GUI_Player_Context_t *context)
 {
 	lv_obj_t *btn;
 	lv_obj_t *icon;
@@ -290,8 +326,8 @@ static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, l
 	lv_obj_set_style_outline_color(btn, lv_color_hex(GUI_PLAYER_ACCENT), LV_STATE_FOCUSED);
 	lv_obj_set_style_shadow_width(btn, 0, 0);
 	lv_obj_set_style_pad_all(btn, 0, 0);
-	lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, &s_player);
-	lv_obj_add_event_cb(btn, cb, LV_EVENT_KEY, &s_player);
+	lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, context);
+	lv_obj_add_event_cb(btn, cb, LV_EVENT_KEY, context);
 
 	icon = lv_label_create(btn);
 	lv_label_set_text(icon, symbol);
@@ -446,26 +482,38 @@ static u8 GUI_Player_HandleKey(u32 key)
 
 static void GUI_Player_PollTimer(lv_timer_t *timer)
 {
-	(void)timer;
+	GUI_Player_Context_t *context = (GUI_Player_Context_t *)timer->user_data;
 
 	PlayerCleanup();
-	if (s_player.file_manage.screen == NULL)
+	if (context == NULL)
+	{
+		context = s_player;
+	}
+
+	if (context == NULL || context->file_manage.screen == NULL)
 	{
 		return;
 	}
 
-	GUI_Player_UpdateView(&s_player);
+	GUI_Player_UpdateView(context);
 }
 
 static int GUI_Player_EnsureTimer(void)
 {
-	if (s_player.poll_timer != NULL)
+	GUI_Player_Context_t *context = GUI_Player_GetContext();
+
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	if (context->poll_timer != NULL)
 	{
 		return SYSTEM_STATUS_OK;
 	}
 
-	s_player.poll_timer = lv_timer_create(GUI_Player_PollTimer, GUI_PLAYER_TIMER_MS, NULL);
-	if (s_player.poll_timer == NULL)
+	context->poll_timer = lv_timer_create(GUI_Player_PollTimer, GUI_PLAYER_TIMER_MS, context);
+	if (context->poll_timer == NULL)
 	{
 		return OUT_OF_HEAP_MEMORY;
 	}
@@ -476,7 +524,7 @@ static int GUI_Player_EnsureTimer(void)
 static void GUI_Player_UpdateView(GUI_Player_Context_t *context)
 {
 	Player_State_t state;
-	Wave_Infomation info;
+	Player_Info_t info;
 	const char *track;
 	char text[64];
 
@@ -495,13 +543,13 @@ static void GUI_Player_UpdateView(GUI_Player_Context_t *context)
 
 	if (context->state_label != NULL)
 	{
-		if (PlayerGetInfo(&info) == SYSTEM_STATUS_OK && info.Sample_Rate != 0U)
+		if (PlayerGetInfo(&info) == SYSTEM_STATUS_OK && info.sample_rate != 0U)
 		{
 			(void)snprintf(text, sizeof(text), "%s  %luHz %dch %dbit",
 			               GUI_Player_StateText(state),
-			               (unsigned long)info.Sample_Rate,
-			               info.Channels,
-			               info.deepth);
+			               (unsigned long)info.sample_rate,
+			               info.channels,
+			               info.bits_per_sample);
 			GUI_Player_SetLabelTextIfChanged(context->state_label, text);
 		}
 		else

@@ -58,6 +58,7 @@ typedef StaticTask_t osStaticThreadDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define DEFAULT_TASK_STACK_SIZE 4096U
 
 /* USER CODE END PD */
 
@@ -95,19 +96,20 @@ UART_HandleTypeDef huart1;
 SRAM_HandleTypeDef hsram3;
 
 /* Definitions for defaultTask */
-#define DEFAULT_TASK_STACK_SIZE 4096U
 osThreadId_t defaultTaskHandle;
-static void *defaultTaskStackMem;
+uint32_t defaultTaskBuffer[ 1024 ];
 osStaticThreadDef_t defaultTaskControlBlock;
-osThreadAttr_t defaultTask_attributes = {
+const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .cb_mem = &defaultTaskControlBlock,
   .cb_size = sizeof(defaultTaskControlBlock),
-  .stack_mem = NULL,
-  .stack_size = DEFAULT_TASK_STACK_SIZE,
+  .stack_mem = &defaultTaskBuffer[0],
+  .stack_size = sizeof(defaultTaskBuffer),
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+static void *defaultTaskStackMem;
+static osThreadAttr_t defaultTaskCcmAttributes;
 
 /* USER CODE END PV */
 
@@ -195,7 +197,10 @@ int main(void)
   {
     Error_Handler();
   }
-  defaultTask_attributes.stack_mem = defaultTaskStackMem;
+  defaultTaskCcmAttributes = defaultTask_attributes;
+  defaultTaskCcmAttributes.stack_mem = defaultTaskStackMem;
+  defaultTaskCcmAttributes.stack_size = DEFAULT_TASK_STACK_SIZE;
+#define defaultTask_attributes defaultTaskCcmAttributes
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 

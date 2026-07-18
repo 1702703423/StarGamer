@@ -21,6 +21,18 @@ typedef struct audio_play_info
 	void (*tx_callback)(void);
 } audio_play_info_t;
 
+typedef struct audio_card_stats
+{
+	u32 half_count;
+	u32 full_count;
+	u32 udr_count;
+	u32 dma_error_count;
+	u32 i2s_error_count;
+	u32 late_write_count;
+	u32 last_error;
+	u32 last_sr;
+} audio_card_stats_t;
+
 int audio_card_init(int volume);
 int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size);
 int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_size);
@@ -34,11 +46,14 @@ int audio_card_get_volume(void);
 int audio_card_register_feeder(void (*feeding_func)(void));
 void audio_card_register_tx(void (*callback)(void));
 int audio_card_write_to_buffer(uint8_t index, void *pkg_buff, int pkg_size);
+int audio_card_write_silence(uint8_t index);
 int audio_card_write(void *pkg_buff, int pkg_size);
 int audio_card_close(void);
 uint8_t *audio_card_get_buffer(uint8_t index);
 uint32_t audio_card_get_pkg_size(void);
 uint32_t audio_card_get_pcm_size(void);
 uint8_t audio_card_get_idle_buffer_index(void);
+void audio_card_get_stats(audio_card_stats_t *stats);
+void audio_card_reset_stats(void);
 
 #endif

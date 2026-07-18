@@ -30,6 +30,7 @@ static void GUI_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_obj
 static void GUI_MenuFocusSet(u8 index);
 static void GUI_MenuFocusMove(s8 row_delta, s8 col_delta);
 static u8 GUI_MenuIndexFromObject(lv_obj_t *obj);
+static int GUI_Main_ShowPage(Page_ID_t id);
 static void GUI_MenuButtonEvent(lv_event_t *event);
 static void GUI_BackButtonEvent(lv_event_t *event);
 
@@ -419,42 +420,6 @@ int GUI_Main_Init(void)
 		return code;
 	}
 
-	code = GUI_NES_Register();
-	if (code != SYSTEM_STATUS_OK)
-	{
-		return code;
-	}
-
-	code = GUI_Arduboy_Register();
-	if (code != SYSTEM_STATUS_OK)
-	{
-		return code;
-	}
-
-	code = GUI_Player_Register();
-	if (code != SYSTEM_STATUS_OK)
-	{
-		return code;
-	}
-
-	code = GUI_Image_Register();
-	if (code != SYSTEM_STATUS_OK)
-	{
-		return code;
-	}
-
-	code = GUI_Text_Register();
-	if (code != SYSTEM_STATUS_OK)
-	{
-		return code;
-	}
-
-	code = GUI_Settings_Register();
-	if (code != SYSTEM_STATUS_OK)
-	{
-		return code;
-	}
-
 	for (i = 0U; i < GUI_MENU_ITEM_COUNT; i++)
 	{
 		if (s_menu_items[i].page_id == GUI_PAGE_NES ||
@@ -480,6 +445,27 @@ int GUI_Main_Init(void)
 int GUI_Main_Show(void)
 {
 	return Page_Show(GUI_PAGE_MAIN_MENU);
+}
+
+static int GUI_Main_ShowPage(Page_ID_t id)
+{
+	switch (id)
+	{
+		case GUI_PAGE_NES:
+			return GUI_NES_Show();
+		case GUI_PAGE_ARDUBOY:
+			return GUI_Arduboy_Show();
+		case GUI_PAGE_MUSIC:
+			return GUI_Player_Show();
+		case GUI_PAGE_IMAGE:
+			return GUI_Image_Show();
+		case GUI_PAGE_TEXT:
+			return GUI_Text_Show();
+		case GUI_PAGE_SETTINGS:
+			return GUI_Settings_Show();
+		default:
+			return Page_Show_Anim(id, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+	}
 }
 
 static void GUI_MenuButtonEvent(lv_event_t *event)
@@ -530,7 +516,7 @@ static void GUI_MenuButtonEvent(lv_event_t *event)
 	item = (const GUI_MenuItem_t *)lv_event_get_user_data(event);
 	if (item != NULL)
 	{
-		(void)Page_Show_Anim(item->page_id, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+		(void)GUI_Main_ShowPage(item->page_id);
 	}
 }
 

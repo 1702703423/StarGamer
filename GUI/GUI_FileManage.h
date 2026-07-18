@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #ifndef GUI_FILEMANAGE_MAX_ITEMS
-#define GUI_FILEMANAGE_MAX_ITEMS        32U
+#define GUI_FILEMANAGE_MAX_ITEMS        16U
 #endif
 
 #ifndef GUI_FILEMANAGE_SCAN_LIMIT
@@ -48,7 +48,6 @@ typedef struct
 	GUI_FileManage_t *manager;
 	GUI_FileManageItemType_t type;
 	char name[GUI_FILEMANAGE_NAME_SIZE];
-	char path[GUI_FILEMANAGE_PATH_SIZE];
 	u32 size;
 	u8 attr;
 } GUI_FileManageItem_t;
@@ -107,6 +106,7 @@ void GUI_FileManage_SetStatus(GUI_FileManage_t *manager, const char *text);
 void GUI_FileManage_SetLocked(GUI_FileManage_t *manager, u8 locked);
 const char *GUI_FileManage_GetCurrentPath(const GUI_FileManage_t *manager);
 void *GUI_FileManage_GetUserData(const GUI_FileManage_t *manager);
+u8 GUI_FileManage_BuildItemPath(const GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, char *dst, u32 dst_size);
 
 #ifdef __cplusplus
 }

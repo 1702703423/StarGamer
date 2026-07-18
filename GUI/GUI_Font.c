@@ -89,6 +89,7 @@ typedef struct
 
 static int GUI_Font_PageBuild(Page_Struct_t *page);
 static int GUI_Font_PageLoaded(Page_Struct_t *page, void *user_data);
+static GUI_FontContext_t *GUI_Font_GetContext(void);
 static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data);
 static int GUI_Font_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Font_Timer(lv_timer_t *timer);
@@ -115,7 +116,7 @@ static const uint8_t *GUI_Font_GetGlyphBitmap(const lv_font_t *font, uint32_t un
 static bool GUI_Font_GetGlyphDsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc_out, uint32_t unicode_letter, uint32_t unicode_letter_next);
 
 static const char * const s_font_extensions[] = {".bin", ".xbf"};
-static GUI_FontContext_t s_font;
+static GUI_FontContext_t *s_font;
 static u8 *s_font_io_buffer;
 static u8 *s_font_verify_buffer;
 static u8 *s_font_bitmap_buffer;
@@ -151,6 +152,11 @@ int GUI_Font_Register(void)
 		return SYSTEM_STATUS_OK;
 	}
 
+	if (GUI_Font_GetContext() == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
 	return Page_Create(GUI_PAGE_FONT, "Font Install", GUI_Font_PageBuild, GUI_Font_PageLoaded);
 }
 
@@ -172,10 +178,19 @@ int GUI_Font_Show(void)
 
 int GUI_Font_Uninstall(void)
 {
+	GUI_FontContext_t *context = s_font;
 	System_Settings_t previous_settings;
 
-	GUI_Font_CleanupInstallThread(&s_font);
-	if (s_font.installing != 0U || s_font.thread_active != 0U || s_font.install_thread != NULL)
+	if (context != NULL)
+	{
+		GUI_Font_CleanupInstallThread(context);
+		if (context->installing != 0U || context->thread_active != 0U || context->install_thread != NULL)
+		{
+			return OPERATE_FAILED;
+		}
+	}
+
+	if (s_font_install_thread_attr.stack_mem != NULL)
 	{
 		return OPERATE_FAILED;
 	}
@@ -226,6 +241,7 @@ const lv_font_t* GUI_Font_GetXbfFont(void)
 
 static int GUI_Font_PageBuild(Page_Struct_t *page)
 {
+	GUI_FontContext_t *context;
 	GUI_FileManageConfig_t config;
 	int code;
 
@@ -234,9 +250,15 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 		return OPERATE_FAILED;
 	}
 
-	memset(&s_font, 0, sizeof(s_font));
-	s_font.page = page;
-	s_font.stage = (u8)GUI_FONT_STAGE_IDLE;
+	context = GUI_Font_GetContext();
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	memset(context, 0, sizeof(*context));
+	context->page = page;
+	context->stage = (u8)GUI_FONT_STAGE_IDLE;
 
 	memset(&config, 0, sizeof(config));
 	config.title = "Font Install";
@@ -248,46 +270,46 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 	config.accent_color = GUI_FONT_ACCENT;
 	config.open = GUI_Font_OpenFile;
 	config.back = GUI_Font_Back;
-	config.user_data = &s_font;
+	config.user_data = context;
 
-	code = GUI_FileManage_Create(&s_font.file_manager, page, &config);
+	code = GUI_FileManage_Create(&context->file_manager, page, &config);
 	if (code != SYSTEM_STATUS_OK)
 	{
 		return code;
 	}
 
-	lv_obj_set_pos(s_font.file_manager.status_label, 12, 224);
+	lv_obj_set_pos(context->file_manager.status_label, 12, 224);
 
-	s_font.progress_bar = lv_bar_create(page->screen);
-	lv_obj_set_size(s_font.progress_bar, 236, 7);
-	lv_obj_set_pos(s_font.progress_bar, 12, 212);
-	lv_bar_set_range(s_font.progress_bar, 0, 100);
-	lv_bar_set_value(s_font.progress_bar, 0, LV_ANIM_OFF);
-	lv_obj_set_style_radius(s_font.progress_bar, 2, 0);
-	lv_obj_set_style_bg_color(s_font.progress_bar, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_opa(s_font.progress_bar, LV_OPA_COVER, 0);
-	lv_obj_set_style_bg_color(s_font.progress_bar, lv_color_hex(GUI_FONT_ACCENT), LV_PART_INDICATOR);
-	lv_obj_set_style_bg_opa(s_font.progress_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+	context->progress_bar = lv_bar_create(page->screen);
+	lv_obj_set_size(context->progress_bar, 236, 7);
+	lv_obj_set_pos(context->progress_bar, 12, 212);
+	lv_bar_set_range(context->progress_bar, 0, 100);
+	lv_bar_set_value(context->progress_bar, 0, LV_ANIM_OFF);
+	lv_obj_set_style_radius(context->progress_bar, 2, 0);
+	lv_obj_set_style_bg_color(context->progress_bar, lv_color_hex(0x252D36U), 0);
+	lv_obj_set_style_bg_opa(context->progress_bar, LV_OPA_COVER, 0);
+	lv_obj_set_style_bg_color(context->progress_bar, lv_color_hex(GUI_FONT_ACCENT), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_opa(context->progress_bar, LV_OPA_COVER, LV_PART_INDICATOR);
 
-	s_font.progress_label = lv_label_create(page->screen);
-	lv_label_set_text(s_font.progress_label, "0%");
-	lv_obj_set_width(s_font.progress_label, 52);
-	lv_obj_set_pos(s_font.progress_label, 258, 207);
-	lv_obj_set_style_text_align(s_font.progress_label, LV_TEXT_ALIGN_RIGHT, 0);
-	lv_obj_set_style_text_color(s_font.progress_label, lv_color_hex(0xAEB7C2U), 0);
+	context->progress_label = lv_label_create(page->screen);
+	lv_label_set_text(context->progress_label, "0%");
+	lv_obj_set_width(context->progress_label, 52);
+	lv_obj_set_pos(context->progress_label, 258, 207);
+	lv_obj_set_style_text_align(context->progress_label, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_set_style_text_color(context->progress_label, lv_color_hex(0xAEB7C2U), 0);
 
-	s_font.timer = lv_timer_create(GUI_Font_Timer, 100U, &s_font);
-	if (s_font.timer == NULL)
+	context->timer = lv_timer_create(GUI_Font_Timer, 100U, context);
+	if (context->timer == NULL)
 	{
 		return OUT_OF_HEAP_MEMORY;
 	}
 
 	if (GUI_Font_IsInstalled() != 0U)
 	{
-		GUI_FileManage_SetLocked(&s_font.file_manager, 0U);
-		GUI_FileManage_SetStatus(&s_font.file_manager, "Font already installed");
-		lv_bar_set_value(s_font.progress_bar, 100, LV_ANIM_OFF);
-		lv_label_set_text(s_font.progress_label, "100%");
+		GUI_FileManage_SetLocked(&context->file_manager, 0U);
+		GUI_FileManage_SetStatus(&context->file_manager, "Font already installed");
+		lv_bar_set_value(context->progress_bar, 100, LV_ANIM_OFF);
+		lv_label_set_text(context->progress_label, "100%");
 	}
 
 	return SYSTEM_STATUS_OK;
@@ -295,24 +317,44 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 
 static int GUI_Font_PageLoaded(Page_Struct_t *page, void *user_data)
 {
+	GUI_FontContext_t *context = s_font;
 	int code;
 
 	(void)page;
 	(void)user_data;
 
-	if (GUI_Font_IsInstalled() != 0U && s_font.installing == 0U)
+	if (context == NULL)
 	{
-		GUI_FileManage_SetLocked(&s_font.file_manager, 0U);
-		GUI_FileManage_SetStatus(&s_font.file_manager, "Font already installed");
-	}
-	else if (s_font.installing != 0U)
-	{
-		GUI_FileManage_SetLocked(&s_font.file_manager, 1U);
+		return OPERATE_FAILED;
 	}
 
-	code = GUI_FileManage_PageLoaded(&s_font.file_manager);
+	if (GUI_Font_IsInstalled() != 0U && context->installing == 0U)
+	{
+		GUI_FileManage_SetLocked(&context->file_manager, 0U);
+		GUI_FileManage_SetStatus(&context->file_manager, "Font already installed");
+	}
+	else if (context->installing != 0U)
+	{
+		GUI_FileManage_SetLocked(&context->file_manager, 1U);
+	}
+
+	code = GUI_FileManage_PageLoaded(&context->file_manager);
 	GUI_Font_WaitInputRelease();
 	return code;
+}
+
+static GUI_FontContext_t *GUI_Font_GetContext(void)
+{
+	if (s_font == NULL)
+	{
+		s_font = (GUI_FontContext_t *)sys_malloc(SRAMEX, sizeof(GUI_FontContext_t));
+		if (s_font != NULL)
+		{
+			memset(s_font, 0, sizeof(GUI_FontContext_t));
+		}
+	}
+
+	return s_font;
 }
 
 static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data)
@@ -344,7 +386,7 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 		return OPERATE_FAILED;
 	}
 
-	if (GUI_Font_CopyText(context->install_path, GUI_FILEMANAGE_PATH_SIZE, item->path) == 0U)
+	if (GUI_FileManage_BuildItemPath(manager, item, context->install_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
 	{
 		GUI_FileManage_SetStatus(manager, "Path too long");
 		return OPERATE_FAILED;

@@ -96,6 +96,7 @@ typedef StaticTask_t osStaticThreadDef_t;
 
 static int GUI_Image_PageBuild(Page_Struct_t *page);
 static int GUI_Image_PageLoaded(Page_Struct_t *page, void *user_data);
+static GUI_ImageContext_t *GUI_Image_GetContext(void);
 static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data);
 static int GUI_Image_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Image_CreateViewer(GUI_ImageContext_t *context);
@@ -117,7 +118,7 @@ static void GUI_Image_JpegOutputMessage(j_common_ptr cinfo);
 static const char *GUI_Image_ResultText(GUI_ImageDecodeResult_t result);
 static u8 GUI_Image_CopyText(char *dst, u32 dst_size, const char *src);
 
-static GUI_ImageContext_t s_image;
+static GUI_ImageContext_t *s_image;
 static osStaticThreadDef_t s_image_decode_thread_cb;
 static osThreadAttr_t s_image_decode_thread_attr =
 {
@@ -141,6 +142,11 @@ int GUI_Image_Register(void)
 		return SYSTEM_STATUS_OK;
 	}
 
+	if (GUI_Image_GetContext() == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
 	return Page_Create(GUI_PAGE_IMAGE, "Image", GUI_Image_PageBuild, GUI_Image_PageLoaded);
 }
 
@@ -162,6 +168,7 @@ int GUI_Image_Show(void)
 
 static int GUI_Image_PageBuild(Page_Struct_t *page)
 {
+	GUI_ImageContext_t *context;
 	GUI_FileManageConfig_t config;
 	int code;
 
@@ -170,8 +177,14 @@ static int GUI_Image_PageBuild(Page_Struct_t *page)
 		return OPERATE_FAILED;
 	}
 
-	GUI_Image_FreeCurrent(&s_image);
-	memset(&s_image, 0, sizeof(s_image));
+	context = GUI_Image_GetContext();
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	GUI_Image_FreeCurrent(context);
+	memset(context, 0, sizeof(*context));
 	memset(&config, 0, sizeof(config));
 
 	config.title = "Image";
@@ -183,17 +196,17 @@ static int GUI_Image_PageBuild(Page_Struct_t *page)
 	config.accent_color = GUI_IMAGE_ACCENT;
 	config.open = GUI_Image_OpenFile;
 	config.back = GUI_Image_Back;
-	config.user_data = &s_image;
+	config.user_data = context;
 
-	code = GUI_FileManage_Create(&s_image.file_manage, page, &config);
+	code = GUI_FileManage_Create(&context->file_manage, page, &config);
 	if (code != SYSTEM_STATUS_OK)
 	{
 		return code;
 	}
 
-	GUI_Image_CreateViewer(&s_image);
-	s_image.timer = lv_timer_create(GUI_Image_Timer, 50U, &s_image);
-	if (s_image.timer == NULL)
+	GUI_Image_CreateViewer(context);
+	context->timer = lv_timer_create(GUI_Image_Timer, 50U, context);
+	if (context->timer == NULL)
 	{
 		return OUT_OF_HEAP_MEMORY;
 	}
@@ -203,23 +216,44 @@ static int GUI_Image_PageBuild(Page_Struct_t *page)
 
 static int GUI_Image_PageLoaded(Page_Struct_t *page, void *user_data)
 {
+	GUI_ImageContext_t *context = s_image;
+
 	(void)page;
 	(void)user_data;
 
-	if (s_image.viewer_visible != 0U)
+	if (context == NULL)
 	{
-		GUI_Image_RebuildViewerFocus(&s_image);
-		lv_obj_invalidate(s_image.viewer);
+		return OPERATE_FAILED;
+	}
+
+	if (context->viewer_visible != 0U)
+	{
+		GUI_Image_RebuildViewerFocus(context);
+		lv_obj_invalidate(context->viewer);
 		return SYSTEM_STATUS_OK;
 	}
 
-	if (s_image.decoding != 0U)
+	if (context->decoding != 0U)
 	{
-		GUI_FileManage_SetLocked(&s_image.file_manage, 1U);
-		GUI_FileManage_SetStatus(&s_image.file_manage, "Decoding JPG");
+		GUI_FileManage_SetLocked(&context->file_manage, 1U);
+		GUI_FileManage_SetStatus(&context->file_manage, "Decoding JPG");
 	}
 
-	return GUI_FileManage_PageLoaded(&s_image.file_manage);
+	return GUI_FileManage_PageLoaded(&context->file_manage);
+}
+
+static GUI_ImageContext_t *GUI_Image_GetContext(void)
+{
+	if (s_image == NULL)
+	{
+		s_image = (GUI_ImageContext_t *)sys_malloc(SRAMEX, sizeof(GUI_ImageContext_t));
+		if (s_image != NULL)
+		{
+			memset(s_image, 0, sizeof(GUI_ImageContext_t));
+		}
+	}
+
+	return s_image;
 }
 
 static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data)
@@ -239,12 +273,12 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	GUI_Image_CleanupDecodeThread(context);
 	if (context->decoding != 0U || context->decode_thread != NULL)
 	{
-		GUI_IMAGE_JPEG_LOG("open busy path=%s", item->path);
+		GUI_IMAGE_JPEG_LOG("open busy name=%s", item->name);
 		GUI_FileManage_SetStatus(manager, "Decoding JPG");
 		return OPERATE_FAILED;
 	}
 
-	if (GUI_Image_CopyText(context->decode_path, GUI_FILEMANAGE_PATH_SIZE, item->path) == 0U ||
+	if (GUI_FileManage_BuildItemPath(manager, item, context->decode_path, GUI_FILEMANAGE_PATH_SIZE) == 0U ||
 	    GUI_Image_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name) == 0U)
 	{
 		GUI_IMAGE_JPEG_LOG("open path too long name=%s", item->name);

@@ -29,6 +29,7 @@ static int GUI_FM_ScheduleAction(GUI_FileManage_t *manager, GUI_FileManagePendin
 static void GUI_FM_AsyncAction(void *user_data);
 static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager);
 static int GUI_FM_ReadDir(GUI_FileManage_t *manager);
+static int GUI_FM_ScheduleItemPath(GUI_FileManageItem_t *item);
 static int GUI_FM_AddParent(GUI_FileManage_t *manager);
 static int GUI_FM_AddPageNav(GUI_FileManage_t *manager, GUI_FileManageItemType_t type, const char *name);
 static int GUI_FM_AddInfo(GUI_FileManage_t *manager, const FILINFO *info);
@@ -232,6 +233,21 @@ void *GUI_FileManage_GetUserData(const GUI_FileManage_t *manager)
 	return (manager != NULL) ? manager->config.user_data : NULL;
 }
 
+u8 GUI_FileManage_BuildItemPath(const GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, char *dst, u32 dst_size)
+{
+	if (manager == NULL || item == NULL || dst == NULL || dst_size == 0U)
+	{
+		return 0U;
+	}
+
+	if (item->type != GUI_FILEMANAGE_ITEM_DIR && item->type != GUI_FILEMANAGE_ITEM_FILE)
+	{
+		return 0U;
+	}
+
+	return GUI_FM_PathJoin(dst, dst_size, manager->current_path, item->name);
+}
+
 static void GUI_FM_ApplyScreenBase(lv_obj_t *screen)
 {
 	lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -396,7 +412,7 @@ static void GUI_FM_ItemEvent(lv_event_t *event)
 		}
 		else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 		{
-			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PATH, item->path);
+			(void)GUI_FM_ScheduleItemPath(item);
 		}
 		else
 		{
@@ -416,7 +432,7 @@ static void GUI_FM_ItemEvent(lv_event_t *event)
 		}
 		else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 		{
-			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PATH, item->path);
+			(void)GUI_FM_ScheduleItemPath(item);
 		}
 		else
 		{
@@ -493,7 +509,8 @@ static int GUI_FM_ScheduleAction(GUI_FileManage_t *manager, GUI_FileManagePendin
 
 	if (action == GUI_FILEMANAGE_PENDING_PATH)
 	{
-		if (GUI_FM_CopyText(manager->pending_path, GUI_FILEMANAGE_PATH_SIZE, path) == 0U)
+		if (path != manager->pending_path &&
+		    GUI_FM_CopyText(manager->pending_path, GUI_FILEMANAGE_PATH_SIZE, path) == 0U)
 		{
 			GUI_FileManage_SetStatus(manager, "Path too long");
 			return OPERATE_FAILED;
@@ -567,6 +584,25 @@ static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager)
 	GUI_FM_RebuildList(manager);
 
 	return code;
+}
+
+static int GUI_FM_ScheduleItemPath(GUI_FileManageItem_t *item)
+{
+	GUI_FileManage_t *manager;
+
+	if (item == NULL || item->manager == NULL)
+	{
+		return OPERATE_FAILED;
+	}
+
+	manager = item->manager;
+	if (GUI_FileManage_BuildItemPath(manager, item, manager->pending_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
+	{
+		GUI_FileManage_SetStatus(manager, "Path too long");
+		return OPERATE_FAILED;
+	}
+
+	return GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_PATH, manager->pending_path);
 }
 
 static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
@@ -743,14 +779,16 @@ static int GUI_FM_AddInfo(GUI_FileManage_t *manager, const FILINFO *info)
 			return SYSTEM_STATUS_OK;
 		}
 	}
-	else if (GUI_FM_PathJoin(path, GUI_FILEMANAGE_PATH_SIZE, manager->current_path, name) == 0U)
-	{
-		return OPERATE_FAILED;
-	}
 
 	if (manager->item_count >= GUI_FILEMANAGE_MAX_ITEMS)
 	{
 		GUI_FileManage_SetStatus(manager, "More files omitted");
+		return SYSTEM_STATUS_OK;
+	}
+
+	if (strlen(name) >= GUI_FILEMANAGE_NAME_SIZE)
+	{
+		GUI_FileManage_SetStatus(manager, "Name too long");
 		return SYSTEM_STATUS_OK;
 	}
 
@@ -761,7 +799,6 @@ static int GUI_FM_AddInfo(GUI_FileManage_t *manager, const FILINFO *info)
 	item->size = (u32)info->fsize;
 	item->attr = info->fattrib;
 	(void)GUI_FM_CopyText(item->name, GUI_FILEMANAGE_NAME_SIZE, name);
-	(void)GUI_FM_CopyText(item->path, GUI_FILEMANAGE_PATH_SIZE, path);
 	manager->item_count++;
 
 	return SYSTEM_STATUS_OK;
@@ -882,7 +919,12 @@ static int GUI_FM_OpenItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item
 
 	if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 	{
-		return GUI_FileManage_OpenPath(manager, item->path);
+		if (GUI_FileManage_BuildItemPath(manager, item, manager->pending_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
+		{
+			GUI_FileManage_SetStatus(manager, "Path too long");
+			return OPERATE_FAILED;
+		}
+		return GUI_FileManage_OpenPath(manager, manager->pending_path);
 	}
 
 	GUI_FM_CloseDir(manager);

@@ -340,7 +340,7 @@
               <MiscControls>-Wno-deprecated-non-prototype</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Drivers/LCD;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;../ELFLoader;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall;../USB_DEVICE/App;../USB_DEVICE/Target;../Middlewares/ST/STM32_USB_Device_Library/Core/Inc;../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc;..\ELF Loader</IncludePath>
+              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Middlewares/libhelix;../Middlewares/libhelix/port;../Drivers/LCD;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall;../USB_DEVICE/App;../USB_DEVICE/Target;../Middlewares/ST/STM32_USB_Device_Library/Core/Inc;../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc;..\ELF Loader</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1223,6 +1223,106 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Middlewares/Helix</GroupName>
+          <Files>
+            <File>
+              <FileName>bitstream.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\bitstream.c</FilePath>
+            </File>
+            <File>
+              <FileName>buffers.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\buffers.c</FilePath>
+            </File>
+            <File>
+              <FileName>dct32.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\dct32.c</FilePath>
+            </File>
+            <File>
+              <FileName>dequant.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\dequant.c</FilePath>
+            </File>
+            <File>
+              <FileName>dqchan.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\dqchan.c</FilePath>
+            </File>
+            <File>
+              <FileName>huffman.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\huffman.c</FilePath>
+            </File>
+            <File>
+              <FileName>hufftabs.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\hufftabs.c</FilePath>
+            </File>
+            <File>
+              <FileName>imdct.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\imdct.c</FilePath>
+            </File>
+            <File>
+              <FileName>mp3dec.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\mp3dec.c</FilePath>
+            </File>
+            <File>
+              <FileName>mp3tabs.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\mp3tabs.c</FilePath>
+            </File>
+            <File>
+              <FileName>scalfact.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\scalfact.c</FilePath>
+            </File>
+            <File>
+              <FileName>stproc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\stproc.c</FilePath>
+            </File>
+            <File>
+              <FileName>subband.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\subband.c</FilePath>
+            </File>
+            <File>
+              <FileName>trigtabs.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\trigtabs.c</FilePath>
+            </File>
+            <File>
+              <FileName>helix_support.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\libhelix\port\helix_support.c</FilePath>
+            </File>
+            <File>
+              <FileName>asmmisc_rvds.s</FileName>
+              <FileType>2</FileType>
+              <FilePath>..\Middlewares\libhelix\arm\asmmisc_rvds.s</FilePath>
+            </File>
+            <File>
+              <FileName>asmpoly_thumb2_rvds.s</FileName>
+              <FileType>2</FileType>
+              <FilePath>..\Middlewares\libhelix\arm\asmpoly_thumb2_rvds.s</FilePath>
+            </File>
+            <File>
+              <FileName>mp3dec.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Middlewares\libhelix\mp3dec.h</FilePath>
+            </File>
+            <File>
+              <FileName>helix_support.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Middlewares\libhelix\port\helix_support.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Middlewares/FreeRTOS</GroupName>
           <Files>
             <File>
@@ -1429,6 +1529,31 @@
               <FileName>Player.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Media\Player.h</FilePath>
+            </File>
+            <File>
+              <FileName>Player_Codec.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Player_Codec.h</FilePath>
+            </File>
+            <File>
+              <FileName>Player_WAV.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\Player_WAV.c</FilePath>
+            </File>
+            <File>
+              <FileName>Player_WAV.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Player_WAV.h</FilePath>
+            </File>
+            <File>
+              <FileName>Player_MP3.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\Player_MP3.c</FilePath>
+            </File>
+            <File>
+              <FileName>Player_MP3.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Player_MP3.h</FilePath>
             </File>
             <File>
               <FileName>Arduboy_Games.c</FileName>

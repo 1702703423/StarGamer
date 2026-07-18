@@ -1,6 +1,7 @@
 #include "GUI_Settings.h"
 #include "GUI_Font.h"
 #include "System_Status.h"
+#include "usb_device.h"
 #include "w25q64.h"
 
 #include <stdio.h>
@@ -13,9 +14,14 @@
 #define GUI_SETTINGS_LIST_X          10
 #define GUI_SETTINGS_LIST_Y          54
 #define GUI_SETTINGS_LIST_W          300
-#define GUI_SETTINGS_LIST_H          150
-#define GUI_SETTINGS_ROW_H           34
+#define GUI_SETTINGS_LIST_H          154
+#define GUI_SETTINGS_ROW_H           30
 #define GUI_SETTINGS_STATUS_Y        214
+#define GUI_SETTINGS_SWITCH_X        236
+#define GUI_SETTINGS_SWITCH_Y        4
+#define GUI_SETTINGS_SWITCH_W        46
+#define GUI_SETTINGS_SWITCH_H        22
+#define GUI_SETTINGS_SWITCH_TOGGLE_KEY LV_KEY_ENTER
 #define GUI_SETTINGS_ABOUT_X         10
 #define GUI_SETTINGS_ABOUT_Y         48
 #define GUI_SETTINGS_ABOUT_W         300
@@ -49,6 +55,8 @@ typedef struct
 	lv_obj_t *about_close_btn;
 	lv_obj_t *font_install_btn;
 	lv_obj_t *font_uninstall_btn;
+	lv_obj_t *usb_msc_btn;
+	lv_obj_t *usb_msc_switch;
 	lv_obj_t *about_btn;
 	lv_obj_t *first_item_btn;
 	char about_text[GUI_SETTINGS_TEXT_LEN];
@@ -61,18 +69,23 @@ static void GUI_Settings_ApplyScreenBase(lv_obj_t *screen);
 static void GUI_Settings_CreateHeader(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb);
 static void GUI_Settings_CreateList(GUI_SettingsContext_t *context);
+static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item);
 static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context);
 static void GUI_Settings_BackEvent(lv_event_t *event);
 static void GUI_Settings_ItemEvent(lv_event_t *event);
+static void GUI_Settings_UsbMscEvent(lv_event_t *event);
 static void GUI_Settings_AboutCloseEvent(lv_event_t *event);
 static void GUI_Settings_WaitInputRelease(void);
 static u8 GUI_Settings_HandleKey(u32 key);
+static u8 GUI_Settings_IsSwitchToggleKey(u32 key);
 static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsAction_t action);
 static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context);
+static void GUI_Settings_UpdateUsbMscSwitch(GUI_SettingsContext_t *context);
+static void GUI_Settings_SetUsbMscEnabled(GUI_SettingsContext_t *context, u8 enabled);
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled);
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text);
 static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *focus_obj);
@@ -130,6 +143,7 @@ static int GUI_Settings_PageBuild(Page_Struct_t *page)
 	GUI_Settings_CreateList(&s_settings);
 	GUI_Settings_CreateAboutPanel(&s_settings);
 	GUI_Settings_SetStatus(&s_settings, "Ready");
+	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
 	GUI_Settings_UpdateFontState(&s_settings);
 
 	return SYSTEM_STATUS_OK;
@@ -141,6 +155,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 	(void)user_data;
 
 	GUI_Settings_UpdateFontState(&s_settings);
+	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
 	GUI_Settings_RebuildFocus(&s_settings, s_settings.first_item_btn);
 	GUI_Settings_WaitInputRelease();
 	lv_obj_invalidate(s_settings.screen);
@@ -219,7 +234,10 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 	lv_obj_set_style_bg_color(context->list, lv_color_hex(0x141A20U), 0);
 	lv_obj_set_style_bg_opa(context->list, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->list, 2, 0);
+	lv_obj_set_style_pad_row(context->list, 0, 0);
 	lv_obj_set_scrollbar_mode(context->list, LV_SCROLLBAR_MODE_OFF);
+
+	GUI_Settings_CreateUsbMscSwitch(context);
 
 	for (i = 0U; i < (u8)(sizeof(s_setting_items) / sizeof(s_setting_items[0])); i++)
 	{
@@ -231,6 +249,60 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 	lv_obj_set_width(context->status_label, GUI_SETTINGS_SCREEN_W - 24);
 	lv_obj_set_pos(context->status_label, 12, GUI_SETTINGS_STATUS_Y);
 	lv_obj_set_style_text_color(context->status_label, lv_color_hex(0x8E98A4U), 0);
+}
+
+static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context)
+{
+	lv_obj_t *icon;
+	lv_obj_t *label;
+
+	if (context == NULL || context->list == NULL)
+	{
+		return;
+	}
+
+	context->usb_msc_btn = lv_btn_create(context->list);
+	lv_obj_clear_flag(context->usb_msc_btn, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(context->usb_msc_btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+	lv_obj_set_size(context->usb_msc_btn, GUI_SETTINGS_LIST_W - 8, GUI_SETTINGS_ROW_H);
+	lv_obj_set_style_radius(context->usb_msc_btn, 4, 0);
+	lv_obj_set_style_bg_color(context->usb_msc_btn, lv_color_hex(0x182028U), 0);
+	lv_obj_set_style_bg_color(context->usb_msc_btn, lv_color_hex(0x263240U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->usb_msc_btn, lv_color_hex(0x22303AU), LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_opa(context->usb_msc_btn, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_width(context->usb_msc_btn, 0, 0);
+	lv_obj_set_style_border_width(context->usb_msc_btn, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_border_color(context->usb_msc_btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_width(context->usb_msc_btn, 0, 0);
+	lv_obj_set_style_pad_all(context->usb_msc_btn, 0, 0);
+	lv_obj_add_event_cb(context->usb_msc_btn, GUI_Settings_UsbMscEvent, LV_EVENT_KEY, context);
+
+	icon = lv_label_create(context->usb_msc_btn);
+	lv_label_set_text(icon, LV_SYMBOL_USB);
+	lv_obj_set_style_text_color(icon, lv_color_hex(0xEEF2F6U), 0);
+	lv_obj_set_pos(icon, 12, 7);
+
+	label = lv_label_create(context->usb_msc_btn);
+	lv_label_set_text(label, "USB MSC");
+	lv_obj_set_style_text_color(label, lv_color_hex(0xEEF2F6U), 0);
+	lv_obj_set_style_text_color(label, lv_color_white(), LV_STATE_FOCUSED);
+	lv_obj_set_pos(label, 38, 7);
+
+	context->usb_msc_switch = lv_switch_create(context->usb_msc_btn);
+	lv_obj_clear_flag(context->usb_msc_switch, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_set_size(context->usb_msc_switch, GUI_SETTINGS_SWITCH_W, GUI_SETTINGS_SWITCH_H);
+	lv_obj_set_pos(context->usb_msc_switch, GUI_SETTINGS_SWITCH_X, GUI_SETTINGS_SWITCH_Y);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(0x303844U), 0);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(0x303844U), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(GUI_SETTINGS_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+
+	GUI_Settings_UpdateUsbMscSwitch(context);
+
+	if (context->first_item_btn == NULL)
+	{
+		context->first_item_btn = context->usb_msc_btn;
+	}
 }
 
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item)
@@ -419,6 +491,42 @@ static void GUI_Settings_ItemEvent(lv_event_t *event)
 	}
 }
 
+static void GUI_Settings_UsbMscEvent(lv_event_t *event)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+	u8 enabled;
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	if (context->about_visible != 0U)
+	{
+		return;
+	}
+
+	if (code == LV_EVENT_KEY)
+	{
+		key = lv_event_get_key(event);
+		if (GUI_Settings_IsSwitchToggleKey(key) != 0U)
+		{
+			enabled = (System_Settings_UsbMscEnabled() == 0U) ? 1U : 0U;
+			GUI_Settings_SetUsbMscEnabled(context, enabled);
+		}
+		else if (key == LV_KEY_ESC)
+		{
+			(void)Page_Back();
+		}
+		else
+		{
+			(void)GUI_Settings_HandleKey(key);
+		}
+	}
+}
+
 static void GUI_Settings_AboutCloseEvent(lv_event_t *event)
 {
 	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)lv_event_get_user_data(event);
@@ -474,6 +582,11 @@ static u8 GUI_Settings_HandleKey(u32 key)
 	}
 
 	return 0U;
+}
+
+static u8 GUI_Settings_IsSwitchToggleKey(u32 key)
+{
+	return (key == GUI_SETTINGS_SWITCH_TOGGLE_KEY) ? 1U : 0U;
 }
 
 static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsAction_t action)
@@ -621,14 +734,73 @@ static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context)
 		GUI_Settings_SetListButtonEnabled(context->font_install_btn, 0U);
 		GUI_Settings_SetListButtonEnabled(context->font_uninstall_btn, 1U);
 		GUI_Settings_SetStatus(context, "Font already installed");
-		context->first_item_btn = context->font_uninstall_btn;
+		if (context->usb_msc_btn == NULL)
+		{
+			context->first_item_btn = context->font_uninstall_btn;
+		}
 	}
 	else
 	{
 		GUI_Settings_SetListButtonEnabled(context->font_install_btn, 1U);
 		GUI_Settings_SetListButtonEnabled(context->font_uninstall_btn, 0U);
-		context->first_item_btn = context->font_install_btn;
+		if (context->usb_msc_btn == NULL)
+		{
+			context->first_item_btn = context->font_install_btn;
+		}
 	}
+}
+
+static void GUI_Settings_UpdateUsbMscSwitch(GUI_SettingsContext_t *context)
+{
+	if (context == NULL || context->usb_msc_switch == NULL)
+	{
+		return;
+	}
+
+	if (System_Settings_UsbMscEnabled() != 0U)
+	{
+		lv_obj_add_state(context->usb_msc_switch, LV_STATE_CHECKED);
+	}
+	else
+	{
+		lv_obj_clear_state(context->usb_msc_switch, LV_STATE_CHECKED);
+	}
+}
+
+static void GUI_Settings_SetUsbMscEnabled(GUI_SettingsContext_t *context, u8 enabled)
+{
+	u8 old_enabled;
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	old_enabled = System_Settings_UsbMscEnabled();
+	enabled = (enabled != 0U) ? 1U : 0U;
+	if (old_enabled == enabled)
+	{
+		GUI_Settings_UpdateUsbMscSwitch(context);
+		return;
+	}
+
+	if (System_Settings_SetUsbMscEnabled(enabled) != SYSTEM_STATUS_OK)
+	{
+		System_Settings.UsbMscEnabled = old_enabled;
+		GUI_Settings_UpdateUsbMscSwitch(context);
+		GUI_Settings_SetStatus(context, "USB setting save failed");
+		return;
+	}
+
+	if (USB_DEVICE_MSC_ApplySetting() != SYSTEM_STATUS_OK)
+	{
+		GUI_Settings_UpdateUsbMscSwitch(context);
+		GUI_Settings_SetStatus(context, "USB MSC apply failed");
+		return;
+	}
+
+	GUI_Settings_UpdateUsbMscSwitch(context);
+	GUI_Settings_SetStatus(context, (enabled != 0U) ? "USB MSC enabled" : "USB MSC disabled");
 }
 
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled)
@@ -724,6 +896,11 @@ static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *paren
 		lv_obj_t *child = lv_obj_get_child(parent, (s32)i);
 
 		if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN))
+		{
+			continue;
+		}
+
+		if (child == s_settings.usb_msc_switch)
 		{
 			continue;
 		}

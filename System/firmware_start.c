@@ -21,6 +21,7 @@
 #include "w25q64.h"
 #include "key.h"
 #include "lvgl.h"
+#include "usb_device.h"
 #include "lv_port_disp_template.h"
 #include "../GUI/GUI_Main.h"
 #include "../GUI/GUI_Start.h"
@@ -828,6 +829,10 @@ static void bsp_init()
 	}else
 	{
 		shellPrintEndLine(&shell,"SystemSettingsInitFailed\r\n");
+	}
+	if (USB_DEVICE_MSC_ApplySetting() != SYSTEM_STATUS_OK)
+	{
+		shellPrintEndLine(&shell,"USBMSCApplyFailed\r\n");
 	}
 }
 

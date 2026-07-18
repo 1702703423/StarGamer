@@ -488,6 +488,7 @@ void System_Settings_SetDefaults(System_Settings_t* settings)
 	memset(settings, 0, sizeof(System_Settings_t));
 	settings->volume = SYSTEM_SETTINGS_DEFAULT_VOLUME;
 	settings->Debug = 1U;
+	settings->UsbMscEnabled = 0U;
 	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
 	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
 	settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
@@ -572,6 +573,27 @@ u8 System_Settings_FontInstalled(void)
 	         System_Settings.FontBpp == 4U || System_Settings.FontBpp == 8U)) ? 1U : 0U;
 }
 
+u8 System_Settings_UsbMscEnabled(void)
+{
+	return (System_Settings.UsbMscEnabled != 0U) ? 1U : 0U;
+}
+
+int System_Settings_SetUsbMscEnabled(u8 enabled)
+{
+	u8 old_enabled;
+	int code;
+
+	old_enabled = System_Settings.UsbMscEnabled;
+	System_Settings.UsbMscEnabled = (enabled != 0U) ? 1U : 0U;
+	code = System_Settings_Save();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		System_Settings.UsbMscEnabled = old_enabled;
+	}
+
+	return code;
+}
+
 static u32 System_Settings_Checksum(const u8* data, u16 length)
 {
 	u16 i;
@@ -601,6 +623,7 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 	}
 
 	settings->Debug = (settings->Debug != 0U) ? 1U : 0U;
+	settings->UsbMscEnabled = (settings->UsbMscEnabled != 0U) ? 1U : 0U;
 	valid_font = (settings->FontInstalled != 0U &&
 	              settings->FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&
 	              settings->FontSize > 0U &&

@@ -41,6 +41,7 @@ typedef StaticTask_t osStaticThreadDef_t;
 
 static int GUI_NES_PageBuild(Page_Struct_t *page);
 static int GUI_NES_PageLoaded(Page_Struct_t *page, void *user_data);
+static GUI_NES_Context_t *GUI_NES_GetContext(void);
 static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data);
 static int GUI_NES_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_NES_RunTask(void *argument);
@@ -48,9 +49,8 @@ static void GUI_NES_PollTimer(lv_timer_t *timer);
 static void GUI_NES_CleanupThread(GUI_NES_Context_t *context);
 static int GUI_NES_EnsureTimer(void);
 static const char *GUI_NES_ResultText(u8 result);
-static u8 GUI_NES_CopyText(char *dst, u32 dst_size, const char *src);
 
-static GUI_NES_Context_t s_nes;
+static GUI_NES_Context_t *s_nes;
 static const char * const s_nes_extensions[] =
 {
 	".nes"
@@ -64,12 +64,17 @@ static osThreadAttr_t s_nes_thread_attr =
 	.cb_size = sizeof(s_nes_thread_cb),
 	.stack_mem = NULL,
 	.stack_size = GUI_NES_THREAD_STACK_SIZE,
-	.priority = (osPriority_t)osPriorityNormal,
+	.priority = (osPriority_t)osPriorityAboveNormal,
 };
 
 int GUI_NES_Register(void)
 {
 	int code;
+
+	if (GUI_NES_GetContext() == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
 
 	if (Page_Find(GUI_PAGE_NES) != NULL)
 	{
@@ -103,6 +108,7 @@ int GUI_NES_Show(void)
 
 static int GUI_NES_PageBuild(Page_Struct_t *page)
 {
+	GUI_NES_Context_t *context;
 	GUI_FileManageConfig_t config;
 
 	if (page == NULL || page->screen == NULL)
@@ -110,7 +116,13 @@ static int GUI_NES_PageBuild(Page_Struct_t *page)
 		return OPERATE_FAILED;
 	}
 
-	memset(&s_nes, 0, sizeof(s_nes));
+	context = GUI_NES_GetContext();
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	memset(context, 0, sizeof(*context));
 	memset(&config, 0, sizeof(config));
 
 	config.title = "NES";
@@ -122,20 +134,41 @@ static int GUI_NES_PageBuild(Page_Struct_t *page)
 	config.accent_color = 0xE84E40U;
 	config.open = GUI_NES_OpenRom;
 	config.back = GUI_NES_Back;
-	config.user_data = &s_nes;
+	config.user_data = context;
 
-	s_nes.state = GUI_NES_STATE_IDLE;
-	s_nes.result = GUI_NES_RESULT_PENDING;
+	context->state = GUI_NES_STATE_IDLE;
+	context->result = GUI_NES_RESULT_PENDING;
 
-	return GUI_FileManage_Create(&s_nes.file_manage, page, &config);
+	return GUI_FileManage_Create(&context->file_manage, page, &config);
 }
 
 static int GUI_NES_PageLoaded(Page_Struct_t *page, void *user_data)
 {
+	GUI_NES_Context_t *context = s_nes;
+
 	(void)page;
 	(void)user_data;
 
-	return GUI_FileManage_PageLoaded(&s_nes.file_manage);
+	if (context == NULL)
+	{
+		return OPERATE_FAILED;
+	}
+
+	return GUI_FileManage_PageLoaded(&context->file_manage);
+}
+
+static GUI_NES_Context_t *GUI_NES_GetContext(void)
+{
+	if (s_nes == NULL)
+	{
+		s_nes = (GUI_NES_Context_t *)sys_malloc(SRAMEX, sizeof(GUI_NES_Context_t));
+		if (s_nes != NULL)
+		{
+			memset(s_nes, 0, sizeof(GUI_NES_Context_t));
+		}
+	}
+
+	return s_nes;
 }
 
 static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data)
@@ -154,7 +187,7 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 		return OPERATE_FAILED;
 	}
 
-	if (GUI_NES_CopyText(context->rom_path, GUI_FILEMANAGE_PATH_SIZE, item->path) == 0U)
+	if (GUI_FileManage_BuildItemPath(manager, item, context->rom_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
 	{
 		GUI_FileManage_SetStatus(manager, "Path too long");
 		return OPERATE_FAILED;
@@ -251,40 +284,44 @@ static void GUI_NES_RunTask(void *argument)
 
 static void GUI_NES_PollTimer(lv_timer_t *timer)
 {
+	GUI_NES_Context_t *context = (GUI_NES_Context_t *)timer->user_data;
 	u8 state;
 	u8 result;
 
-	(void)timer;
+	if (context == NULL)
+	{
+		context = s_nes;
+	}
 
-	if (s_nes.file_manage.screen == NULL)
+	if (context == NULL || context->file_manage.screen == NULL)
 	{
 		return;
 	}
 
-	GUI_NES_CleanupThread(&s_nes);
-	state = s_nes.state;
+	GUI_NES_CleanupThread(context);
+	state = context->state;
 	if (state == GUI_NES_STATE_STARTING)
 	{
-		GUI_FileManage_SetLocked(&s_nes.file_manage, 1U);
-		GUI_FileManage_SetStatus(&s_nes.file_manage, "Starting NES");
+		GUI_FileManage_SetLocked(&context->file_manage, 1U);
+		GUI_FileManage_SetStatus(&context->file_manage, "Starting NES");
 	}
 	else if (state == GUI_NES_STATE_RUNNING)
 	{
-		GUI_FileManage_SetLocked(&s_nes.file_manage, 1U);
-		GUI_FileManage_SetStatus(&s_nes.file_manage, "NES running");
+		GUI_FileManage_SetLocked(&context->file_manage, 1U);
+		GUI_FileManage_SetStatus(&context->file_manage, "NES running");
 	}
 	else if (state == GUI_NES_STATE_FINISHED || state == GUI_NES_STATE_ERROR)
 	{
-		result = s_nes.result;
-		GUI_FileManage_SetLocked(&s_nes.file_manage, 0U);
-		GUI_FileManage_SetStatus(&s_nes.file_manage, GUI_NES_ResultText(result));
-		GUI_NES_CleanupThread(&s_nes);
-		s_nes.state = GUI_NES_STATE_IDLE;
+		result = context->result;
+		GUI_FileManage_SetLocked(&context->file_manage, 0U);
+		GUI_FileManage_SetStatus(&context->file_manage, GUI_NES_ResultText(result));
+		GUI_NES_CleanupThread(context);
+		context->state = GUI_NES_STATE_IDLE;
 
 		if (Page_GetCurrent() == GUI_PAGE_NES)
 		{
-			(void)GUI_FileManage_PageLoaded(&s_nes.file_manage);
-			lv_obj_invalidate(s_nes.file_manage.screen);
+			(void)GUI_FileManage_PageLoaded(&context->file_manage);
+			lv_obj_invalidate(context->file_manage.screen);
 		}
 	}
 }
@@ -315,13 +352,20 @@ static void GUI_NES_CleanupThread(GUI_NES_Context_t *context)
 
 static int GUI_NES_EnsureTimer(void)
 {
-	if (s_nes.poll_timer != NULL)
+	GUI_NES_Context_t *context = GUI_NES_GetContext();
+
+	if (context == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	if (context->poll_timer != NULL)
 	{
 		return SYSTEM_STATUS_OK;
 	}
 
-	s_nes.poll_timer = lv_timer_create(GUI_NES_PollTimer, 100U, NULL);
-	if (s_nes.poll_timer == NULL)
+	context->poll_timer = lv_timer_create(GUI_NES_PollTimer, 100U, context);
+	if (context->poll_timer == NULL)
 	{
 		return OUT_OF_HEAP_MEMORY;
 	}
@@ -348,23 +392,4 @@ static const char *GUI_NES_ResultText(u8 result)
 		default:
 			return "NES error";
 	}
-}
-
-static u8 GUI_NES_CopyText(char *dst, u32 dst_size, const char *src)
-{
-	u32 len;
-
-	if (dst == NULL || dst_size == 0U || src == NULL)
-	{
-		return 0U;
-	}
-
-	len = (u32)strlen(src);
-	if (len >= dst_size)
-	{
-		return 0U;
-	}
-
-	memcpy(dst, src, len + 1U);
-	return 1U;
 }

@@ -32,6 +32,7 @@
 #include "usbd_def.h"
 
 /* USER CODE BEGIN INCLUDE */
+#include "sys.h"
 
 /* USER CODE END INCLUDE */
 
@@ -81,6 +82,9 @@ void MX_USB_DEVICE_Init(void);
  * -- Insert functions declaration here --
  */
 /* USER CODE BEGIN FD */
+int USB_DEVICE_MSC_Stop(void);
+int USB_DEVICE_MSC_ApplySetting(void);
+u8 USB_DEVICE_MSC_IsStarted(void);
 
 /* USER CODE END FD */
 /**
