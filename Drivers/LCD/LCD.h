@@ -126,6 +126,10 @@ void LCD_NesBeginFrame(void);
 int LCD_NesWriteAsync(u8* buf, u16 len);
 void LCD_NesWaitTransfer(void);
 void LCD_NesEndFrame(void);
+u8 LCD_StreamBegin(u16 x, u16 y, u16 width, u16 height);
+u8 LCD_StreamWriteAsync(const u16 *pixels, u32 pixel_count);
+u8 LCD_StreamWait(void);
+void LCD_StreamEnd(void);
 
 u16 LCD_RD_DATA(void);//读取LCD数据									    
 void LCD_WriteReg(u8 LCD_Reg, u16 LCD_RegValue);

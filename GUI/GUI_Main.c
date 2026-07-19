@@ -2,6 +2,7 @@
 #include "GUI_NES.h"
 #include "GUI_Arduboy.h"
 #include "GUI_Player.h"
+#include "GUI_Video.h"
 #include "GUI_Image.h"
 #include "GUI_Text.h"
 #include "GUI_Settings.h"
@@ -425,6 +426,7 @@ int GUI_Main_Init(void)
 		if (s_menu_items[i].page_id == GUI_PAGE_NES ||
 		    s_menu_items[i].page_id == GUI_PAGE_ARDUBOY ||
 		    s_menu_items[i].page_id == GUI_PAGE_MUSIC ||
+		    s_menu_items[i].page_id == GUI_PAGE_VIDEO ||
 		    s_menu_items[i].page_id == GUI_PAGE_IMAGE ||
 		    s_menu_items[i].page_id == GUI_PAGE_TEXT ||
 		    s_menu_items[i].page_id == GUI_PAGE_SETTINGS)
@@ -457,6 +459,8 @@ static int GUI_Main_ShowPage(Page_ID_t id)
 			return GUI_Arduboy_Show();
 		case GUI_PAGE_MUSIC:
 			return GUI_Player_Show();
+		case GUI_PAGE_VIDEO:
+			return GUI_Video_Show();
 		case GUI_PAGE_IMAGE:
 			return GUI_Image_Show();
 		case GUI_PAGE_TEXT:

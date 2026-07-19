@@ -774,21 +774,6 @@ void HardFault_Handler_C(u32 *stack_pointer, u32 lr_value, u32 msp_value, u32 ps
 	}
 }
 
-/* ---- LCD test ---- */
-void lcd_test()
-{
-	uint8_t *p = ((Frame_Buffer_Status_t *)(SRT.frame_buffer_table->next->next->data))->pointer;
-
-	LCD_Fill(0, 0, 320, 120, BLUE, p);
-	LCD_Fill(0, 120, 320, 240, RED, p);
-	LCD_DrawBox(1, 1, 120, 60, YELLOW, GRAY, p);
-	LCD_ShowFloat(10, 10, 18.372f, 2, YELLOW, GRAY, 16, 0, p);
-	LCD_ShowString(1, 220, (const u8 *)"HelloWorld", YELLOW, RED, 16, 0, p);
-	LCD_DrawFillCircle(160, 20, 20, YELLOW, p);
-	LCD_DrawCircle(220, 20, 20, GREEN, p);
-	LCD_Flush(p);
-}
-
 /* ---- GPIO init ---- */
 static void gpio_init(void)
 {

@@ -3,6 +3,14 @@
 
 SPI_HandleTypeDef *lcd_spi;
 static int LCD_WaitForSPI(void);
+static u8 LCD_IsDmaBuffer(const void *buffer, u32 size);
+
+#define LCD_CCM_START_ADDRESS       0x10000000UL
+#define LCD_CCM_END_ADDRESS         0x10010000UL
+#define LCD_DMA_MAX_BYTES           0xFFFFU
+
+static u8 s_lcd_stream_active;
+static u32 s_lcd_stream_remaining;
 
 //管理LCD重要参数
 //默认为竖屏
@@ -435,6 +443,99 @@ void LCD_NesEndFrame(void)
 {
 	(void)LCD_WaitForSPI();
 	LCD_CS_SET;
+}
+
+u8 LCD_StreamBegin(u16 x, u16 y, u16 width, u16 height)
+{
+	if(s_lcd_stream_active != 0U || width == 0U || height == 0U)
+	{
+		return 1U;
+	}
+	if(x >= lcddev.width || y >= lcddev.height ||
+	   width > (u16)(lcddev.width - x) ||
+	   height > (u16)(lcddev.height - y))
+	{
+		return 1U;
+	}
+	if(LCD_WaitForSPI() != 0)
+	{
+		return 1U;
+	}
+
+	LCD_SetWindows(x, y, (u16)(x + width - 1U), (u16)(y + height - 1U));
+	LCD_CS_CLR;
+	LCD_RS_SET;
+	s_lcd_stream_remaining = (u32)width * (u32)height;
+	s_lcd_stream_active = 1U;
+	return 0U;
+}
+
+u8 LCD_StreamWriteAsync(const u16 *pixels, u32 pixel_count)
+{
+	u32 byte_count;
+
+	if(s_lcd_stream_active == 0U || pixels == NULL || pixel_count == 0U ||
+	   pixel_count > s_lcd_stream_remaining ||
+	   pixel_count > (LCD_DMA_MAX_BYTES / (u32)sizeof(u16)))
+	{
+		return 1U;
+	}
+
+	byte_count = pixel_count * (u32)sizeof(u16);
+	if(LCD_IsDmaBuffer(pixels, byte_count) == 0U || LCD_WaitForSPI() != 0)
+	{
+		return 1U;
+	}
+
+	if(HAL_SPI_Transmit_DMA(lcd_spi, (u8 *)pixels, (u16)byte_count) != HAL_OK)
+	{
+		return 1U;
+	}
+
+	s_lcd_stream_remaining -= pixel_count;
+	return 0U;
+}
+
+u8 LCD_StreamWait(void)
+{
+	return (LCD_WaitForSPI() == 0) ? 0U : 1U;
+}
+
+void LCD_StreamEnd(void)
+{
+	if(s_lcd_stream_active == 0U)
+	{
+		return;
+	}
+
+	(void)LCD_WaitForSPI();
+	LCD_CS_SET;
+	s_lcd_stream_remaining = 0U;
+	s_lcd_stream_active = 0U;
+}
+
+static u8 LCD_IsDmaBuffer(const void *buffer, u32 size)
+{
+	u32 start;
+	u32 end;
+
+	if(buffer == NULL || size == 0U)
+	{
+		return 0U;
+	}
+
+	start = (u32)buffer;
+	if((start & 1U) != 0U || size > (0xFFFFFFFFUL - start))
+	{
+		return 0U;
+	}
+	end = start + size;
+	if(start < LCD_CCM_END_ADDRESS && end > LCD_CCM_START_ADDRESS)
+	{
+		return 0U;
+	}
+
+	return 1U;
 }
 
 static int LCD_WaitForSPI(void)

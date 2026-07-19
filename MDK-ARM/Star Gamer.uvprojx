@@ -1556,6 +1556,46 @@
               <FilePath>..\Media\Player_MP3.h</FilePath>
             </File>
             <File>
+              <FileName>Video.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\Video.c</FilePath>
+            </File>
+            <File>
+              <FileName>Video.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Video.h</FilePath>
+            </File>
+            <File>
+              <FileName>Video_Memory.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\Video_Memory.c</FilePath>
+            </File>
+            <File>
+              <FileName>Video_Memory.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Video_Memory.h</FilePath>
+            </File>
+            <File>
+              <FileName>AVI_Parser.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\AVI_Parser.c</FilePath>
+            </File>
+            <File>
+              <FileName>AVI_Parser.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\AVI_Parser.h</FilePath>
+            </File>
+            <File>
+              <FileName>Video_MJPEG.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\Video_MJPEG.c</FilePath>
+            </File>
+            <File>
+              <FileName>Video_MJPEG.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Video_MJPEG.h</FilePath>
+            </File>
+            <File>
               <FileName>Arduboy_Games.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\APP\Arduboy\Arduboy_Games.c</FilePath>
@@ -1847,6 +1887,11 @@
                   </Cads>
                 </FileArmAds>
               </FileOption>
+            </File>
+            <File>
+              <FileName>jpeg_memory_provider.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../LIBJPEG/Target/jpeg_memory_provider.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -4557,6 +4602,16 @@
               <FileName>GUI_Player.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\GUI\GUI_Player.h</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Video.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Video.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Video.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Video.h</FilePath>
             </File>
             <File>
               <FileName>GUI_Settings.c</FileName>

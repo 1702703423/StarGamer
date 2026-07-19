@@ -19,6 +19,40 @@
 #include "jinclude.h"
 #include "jpeglib.h"
 #include "jmemsys.h"		/* import the system-dependent declarations */
+#include "jpeg_memory_provider.h"
+
+LOCAL(void *)
+jpeg_context_malloc (j_common_ptr cinfo, size_t sizeofobject)
+{
+  JPEG_MemoryProvider_t *provider;
+
+  if (cinfo != NULL) {
+    provider = (JPEG_MemoryProvider_t *) cinfo->client_data;
+    if (provider != NULL &&
+	provider->magic == JPEG_MEMORY_PROVIDER_MAGIC &&
+	provider->alloc != NULL) {
+      return provider->alloc(provider->user_data, sizeofobject);
+    }
+  }
+  return (void *) JMALLOC(sizeofobject);
+}
+
+LOCAL(void)
+jpeg_context_free (j_common_ptr cinfo, void * object)
+{
+  JPEG_MemoryProvider_t *provider;
+
+  if (cinfo != NULL) {
+    provider = (JPEG_MemoryProvider_t *) cinfo->client_data;
+    if (provider != NULL &&
+	provider->magic == JPEG_MEMORY_PROVIDER_MAGIC &&
+	provider->free != NULL) {
+      provider->free(provider->user_data, object);
+      return;
+    }
+  }
+  JFREE(object);
+}
 
 /*
  * Memory allocation and freeing are controlled by the regular library
@@ -28,13 +62,13 @@
 GLOBAL(void *)
 jpeg_get_small (j_common_ptr cinfo, size_t sizeofobject)
 {
-  return (void *) JMALLOC(sizeofobject);
+  return jpeg_context_malloc(cinfo, sizeofobject);
 }
 
 GLOBAL(void)
 jpeg_free_small (j_common_ptr cinfo, void * object, size_t sizeofobject)
 {
-  JFREE(object);
+  jpeg_context_free(cinfo, object);
 }
 
 
@@ -48,13 +82,13 @@ jpeg_free_small (j_common_ptr cinfo, void * object, size_t sizeofobject)
 GLOBAL(void FAR *)
 jpeg_get_large (j_common_ptr cinfo, size_t sizeofobject)
 {
-  return (void FAR *) JMALLOC(sizeofobject);
+  return (void FAR *) jpeg_context_malloc(cinfo, sizeofobject);
 }
 
 GLOBAL(void)
 jpeg_free_large (j_common_ptr cinfo, void FAR * object, size_t sizeofobject)
 {
-  JFREE(object);
+  jpeg_context_free(cinfo, (void *) object);
 }
 
 
