@@ -3,7 +3,7 @@
 > 调研日期：2026-07-15
 > 目标平台：STM32F407ZGT6 / Cortex-M4F 168 MHz / Keil ARMCLANG 6.19 / CMSIS-RTOS2
 
-> 实施更新（2026-07-18）：首版已完成集成和链接。上板复测排除了 DMA 欠载，但发现首版 wrapper 的 4096 B 窗口、手工帧长判断和严格参数返回会造成可恢复帧被丢弃。现已按参考工程改为 5120 B 窗口和 `2 * MAINBUF_SIZE` 补数阈值；decoder、压缩输入、PCM 帧及 I2S DMA 双缓冲均使用 48 KiB `SRAMMAIN` 专用池。上板日志还显示原 8 KiB Audio task 栈无剩余，已增至 12 KiB，并由 `audiostat` 实时报告余量。
+> 实施更新（2026-07-18）：首版已完成集成和链接。上板复测排除了 DMA 欠载，但发现首版 wrapper 的 4096 B 窗口、手工帧长判断和严格参数返回会造成可恢复帧被丢弃。现已按参考工程改为 5120 B 窗口和 `2 * MAINBUF_SIZE` 补数阈值；decoder、压缩输入、PCM 帧及 I2S DMA 双缓冲均从 `SRAMEX` 动态分配。上板日志还显示原 8 KiB Audio task 栈无剩余，已增至 12 KiB，并由 `audiostat` 实时报告余量。
 
 > 故障修复（2026-07-18）：`audiostat` 显示输出误锁为 22050 Hz/单声道，而后续真实帧为 44100 Hz/双声道。原因是 `MP3FindSyncWord()` 只检查同步位，wrapper 又把欠主数据的假帧当成首个有效帧，并在恢复时把读取位置强制跳到窗口固定偏移。现改为相邻帧头确认、成功解码后锁定格式、显式输入游标和逐字节有界重同步；EOF 补零也不再计入有效压缩数据。
 
@@ -110,11 +110,11 @@ void helix_free(void *ptr);
 适配原则：
 
 - `helix_memcpy()` / `helix_memmove()` 委托 C 库 `memcpy()` / `memmove()`。
-- `helix_malloc()` 使用 `sys_malloc(SRAMMAIN, (u32)size)`。
-- `helix_free()` 使用 `sys_free(SRAMMAIN, ptr)`。
+- `helix_malloc()` 使用 `sys_malloc(SRAMEX, (u32)size)`。
+- `helix_free()` 使用 `sys_free(SRAMEX, ptr)`。
 - 不在中断中调用 Helix 或分配内存；解码和释放均在 Player 线程中完成。
-- Helix 的 Huffman/IMDCT 工作集会被高频随机访问，不能放在 FSMC SRAMEX；使用内部主 SRAM 的独立池，避免占用承载 RTOS 栈的 CCM。
-- STM32F407 没有 D-Cache，不需要 cache clean/invalidate；I2S DMA 使用可直接访问的内部主 SRAM，不能放 CCM。
+- Helix 的 Huffman/IMDCT 工作集统一从 `SRAMEX` 分配，不再占用内部主 SRAM。
+- STM32F407 没有 D-Cache，不需要 cache clean/invalidate；I2S DMA 缓冲区使用 DMA 可访问的 `SRAMEX`，不能放 CCM。
 
 不建议直接把下载示例中的 `mem_malloc()` / `mem2_malloc()` 实现复制进来，因为它不符合本项目分配器和并发模型。
 
@@ -158,7 +158,7 @@ flowchart LR
     I --> H["Helix MP3Decode"]
     H --> P["PCM frame buffer max 4608 B"]
     P --> A["audio_card_write_to_buffer"]
-    A --> D["SRAMMAIN I2S DMA double buffer"]
+    A --> D["SRAMEX I2S DMA double buffer"]
     D -->|"half/full callback"| T["Audio task flags"]
     T --> H
 ```
@@ -250,14 +250,14 @@ MP3 接入前应满足以下任一方案：
 
 | 项目 | 最坏占用 | 建议内存池 |
 |---|---:|---|
-| Helix decoder state | 23,968 B（含块取整） | SRAMMAIN |
-| MP3 压缩输入 | 5,120 B | SRAMMAIN，SDIO DMA 可访问 |
-| PCM 临时帧 | 4,608 B | SRAMMAIN |
-| I2S 双半缓冲 | 9,216 B | SRAMMAIN，DMA 可访问 |
+| Helix decoder state | 23,968 B（含块取整） | SRAMEX |
+| MP3 压缩输入 | 5,120 B | SRAMEX，SDIO DMA 可访问 |
+| PCM 临时帧 | 4,608 B | SRAMEX |
+| I2S 双半缓冲 | 9,216 B | SRAMEX，DMA 可访问 |
 | Audio task stack | 12,288 B | SRAMCCM |
-| 合计 | 约 43 KiB SRAMMAIN + 12 KiB CCM | 约 55 KiB |
+| 合计 | 约 43 KiB SRAMEX + 12 KiB CCM | 约 55 KiB |
 
-`SRAMMAIN` 池固定预留 48 KiB。MP3 播放时 decoder、输入、PCM 和 DMA 最大实用约 43 KiB，Stop 和自然 EOF 后释放块。
+MP3 播放时 decoder、输入、PCM 和 DMA 最大实用约 43 KiB，统一从共享 `SRAMEX` 池动态分配，Stop 和自然 EOF 后释放块。
 
 原 8 KiB Audio task 栈在上板错误路径中测得 `task_stack_free=0`，因此提高为 12 KiB。`audiostat` 在任务运行时通过 CMSIS-RTOS2 读取实时 high-water 余量；需要在最重的 320 kbps/48 kHz/stereo 文件上继续验证。不要未经测量把 decoder state 放进 CCM；当前 CCM 还承担 default、LVGL、key、timer、Player 等线程栈。
 

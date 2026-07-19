@@ -12,24 +12,9 @@
 
 #define SRAMCCM                    0U
 #define SRAMEX                     1U
-#define SRAMMAIN                   2U
-#define SRAMMAIN_TEST              SRAMMAIN
 #define LVGL_MEM_POOL              SRAMEX
 
-#ifndef MALLOC_SRAM_TEST_HEAP_ENABLE
-#define MALLOC_SRAM_TEST_HEAP_ENABLE  1U
-#endif
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-#define MALLOC_SRAM_TEST_HEAP_BANKS   1U
-#else
-#define MALLOC_SRAM_TEST_HEAP_BANKS   0U
-#endif
-
-#define SRAMBANK                   (2U + MALLOC_SRAM_TEST_HEAP_BANKS)
-
-#define MEM1_BLOCK_SIZE            32U
-#define MEM1_MAX_SIZE              (48UL * 1024UL)
-#define MEM1_ALLOC_TABLE_SIZE      (MEM1_MAX_SIZE / MEM1_BLOCK_SIZE)
+#define SRAMBANK                   2U
 
 #define MEM2_BLOCK_SIZE            32U
 #define MEM2_MAX_SIZE              CCMRAMSize

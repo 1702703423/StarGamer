@@ -9,7 +9,7 @@
 #define PLAYER_MP3_REFILL_THRESHOLD      (MAINBUF_SIZE * 2U)
 #define PLAYER_MP3_MAX_PCM_SAMPLES       2304U
 #define PLAYER_MP3_MAX_RECOVERY_ATTEMPTS 32U
-#define PLAYER_MP3_MEM_POOL              SRAMMAIN
+#define PLAYER_MP3_MEM_POOL              SRAMEX
 
 typedef struct Player_MP3_Context
 {

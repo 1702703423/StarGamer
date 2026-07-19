@@ -3,7 +3,7 @@
 
 extern I2S_HandleTypeDef hi2s3;
 
-#define AUDIO_CARD_MEM_POOL      SRAMMAIN
+#define AUDIO_CARD_MEM_POOL      SRAMEX
 #define AUDIO_CARD_MAX_VOLUME    100U
 #define AUDIO_CARD_MIN_PKG_SIZE  16U
 

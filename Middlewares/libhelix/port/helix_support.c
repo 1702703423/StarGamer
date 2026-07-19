@@ -16,10 +16,10 @@ void *helix_memmove(void *dst, const void *src, size_t size)
 
 void *helix_malloc(unsigned int size)
 {
-    return sys_malloc(SRAMMAIN, (u32)size);
+    return sys_malloc(SRAMEX, (u32)size);
 }
 
 void helix_free(void *ptr)
 {
-    sys_free(SRAMMAIN, ptr);
+    sys_free(SRAMEX, ptr);
 }

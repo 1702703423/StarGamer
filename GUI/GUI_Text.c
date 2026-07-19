@@ -14,6 +14,7 @@
 #define GUI_TEXT_HISTORY_DEPTH          16U
 #define GUI_TEXT_SCROLL_STEP            56
 #define GUI_TEXT_STATUS_LEN             80U
+#define GUI_TEXT_FALLBACK_UNICODE       0x53E3U
 
 #define GUI_TEXT_READ_OK                0U
 #define GUI_TEXT_READ_EOF               1U
@@ -112,6 +113,7 @@ static u8 GUI_Text_DecodeUtf8(GUI_TextReader_t *reader, u8 lead, u32 *unicode);
 static u8 GUI_Text_DecodeGbk(GUI_TextReader_t *reader, u8 lead, u32 *unicode);
 static u8 GUI_Text_ReadContinuation(GUI_TextReader_t *reader, u8 *value);
 static u8 GUI_Text_UnicodeToUtf8(u32 unicode, u8 *dst, u8 *len);
+static u8 GUI_Text_MatchGlyphOrFallback(u32 *unicode);
 static u8 GUI_Text_FontSupports(u32 unicode);
 static u8 GUI_Text_IsAllowedControl(u32 unicode);
 static void GUI_Text_PushHistory(GUI_TextContext_t *context, u32 offset);
@@ -825,6 +827,10 @@ static int GUI_Text_LoadPage(GUI_TextContext_t *context, u32 offset)
 		{
 			break;
 		}
+		if (status == GUI_TEXT_DECODE_FONT)
+		{
+			status = GUI_TEXT_DECODE_OK;
+		}
 		if (status != GUI_TEXT_DECODE_OK)
 		{
 			(void)f_close(file);
@@ -1009,10 +1015,6 @@ static GUI_TextOpenResult_t GUI_Text_DetectEncoding(const char *path, u32 *file_
 		*encoding = GUI_TEXT_ENCODING_UTF8;
 		return GUI_TEXT_OPEN_OK;
 	}
-	if (result == GUI_TEXT_OPEN_FONT_RANGE)
-	{
-		return result;
-	}
 
 	result = GUI_Text_ValidateEncoding(path, size, 0U, GUI_TEXT_ENCODING_GBK);
 	if (result == GUI_TEXT_OPEN_OK)
@@ -1069,8 +1071,7 @@ static GUI_TextOpenResult_t GUI_Text_ValidateEncoding(const char *path, u32 file
 		}
 		if (status == GUI_TEXT_DECODE_FONT)
 		{
-			result = GUI_TEXT_OPEN_FONT_RANGE;
-			break;
+			status = GUI_TEXT_DECODE_OK;
 		}
 		if (status != GUI_TEXT_DECODE_OK)
 		{
@@ -1248,7 +1249,7 @@ static u8 GUI_Text_DecodeUtf8(GUI_TextReader_t *reader, u8 lead, u32 *unicode)
 	if (lead < 0x80U)
 	{
 		*unicode = lead;
-		return GUI_Text_FontSupports(*unicode) ? GUI_TEXT_DECODE_OK : GUI_TEXT_DECODE_FONT;
+		return GUI_Text_MatchGlyphOrFallback(unicode);
 	}
 
 	if (lead >= 0xC2U && lead <= 0xDFU)
@@ -1258,7 +1259,7 @@ static u8 GUI_Text_DecodeUtf8(GUI_TextReader_t *reader, u8 lead, u32 *unicode)
 			return GUI_TEXT_DECODE_INVALID;
 		}
 		*unicode = (((u32)lead & 0x1FU) << 6U) | ((u32)c1 & 0x3FU);
-		return GUI_Text_FontSupports(*unicode) ? GUI_TEXT_DECODE_OK : GUI_TEXT_DECODE_FONT;
+		return GUI_Text_MatchGlyphOrFallback(unicode);
 	}
 
 	if (lead >= 0xE0U && lead <= 0xEFU)
@@ -1275,7 +1276,7 @@ static u8 GUI_Text_DecodeUtf8(GUI_TextReader_t *reader, u8 lead, u32 *unicode)
 		*unicode = (((u32)lead & 0x0FU) << 12U) |
 		           (((u32)c1 & 0x3FU) << 6U) |
 		           ((u32)c2 & 0x3FU);
-		return GUI_Text_FontSupports(*unicode) ? GUI_TEXT_DECODE_OK : GUI_TEXT_DECODE_FONT;
+		return GUI_Text_MatchGlyphOrFallback(unicode);
 	}
 
 	if (lead >= 0xF0U && lead <= 0xF4U)
@@ -1290,7 +1291,11 @@ static u8 GUI_Text_DecodeUtf8(GUI_TextReader_t *reader, u8 lead, u32 *unicode)
 		{
 			return GUI_TEXT_DECODE_INVALID;
 		}
-		return GUI_TEXT_DECODE_FONT;
+		*unicode = (((u32)lead & 0x07U) << 18U) |
+		           (((u32)c1 & 0x3FU) << 12U) |
+		           (((u32)c2 & 0x3FU) << 6U) |
+		           ((u32)c3 & 0x3FU);
+		return GUI_Text_MatchGlyphOrFallback(unicode);
 	}
 
 	return GUI_TEXT_DECODE_INVALID;
@@ -1309,7 +1314,7 @@ static u8 GUI_Text_DecodeGbk(GUI_TextReader_t *reader, u8 lead, u32 *unicode)
 	if (lead < 0x80U)
 	{
 		*unicode = lead;
-		return GUI_Text_FontSupports(*unicode) ? GUI_TEXT_DECODE_OK : GUI_TEXT_DECODE_FONT;
+		return GUI_Text_MatchGlyphOrFallback(unicode);
 	}
 
 	if (lead < 0x81U || lead > 0xFEU)
@@ -1333,7 +1338,7 @@ static u8 GUI_Text_DecodeGbk(GUI_TextReader_t *reader, u8 lead, u32 *unicode)
 		return GUI_TEXT_DECODE_INVALID;
 	}
 
-	return GUI_Text_FontSupports(*unicode) ? GUI_TEXT_DECODE_OK : GUI_TEXT_DECODE_FONT;
+	return GUI_Text_MatchGlyphOrFallback(unicode);
 }
 
 static u8 GUI_Text_ReadContinuation(GUI_TextReader_t *reader, u8 *value)
@@ -1373,6 +1378,22 @@ static u8 GUI_Text_UnicodeToUtf8(u32 unicode, u8 *dst, u8 *len)
 	}
 
 	return 1U;
+}
+
+static u8 GUI_Text_MatchGlyphOrFallback(u32 *unicode)
+{
+	if (unicode == NULL)
+	{
+		return GUI_TEXT_DECODE_INVALID;
+	}
+
+	if (GUI_Text_FontSupports(*unicode) != 0U)
+	{
+		return GUI_TEXT_DECODE_OK;
+	}
+
+	*unicode = GUI_TEXT_FALLBACK_UNICODE;
+	return GUI_TEXT_DECODE_FONT;
 }
 
 static u8 GUI_Text_FontSupports(u32 unicode)

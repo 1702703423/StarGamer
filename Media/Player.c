@@ -704,8 +704,7 @@ int player_audio_stats_cmd(int argc, char *argv[])
                     (unsigned long)mp3_stats.last_bad_sample_rate,
                     (unsigned int)mp3_stats.last_bad_channels,
                     (unsigned long)mp3_stats.last_bad_output_samps);
-  shellPrintEndLine(&shell, "  mem main=%u/1000 ccm=%u/1000 ex=%u/1000\r\n",
-                    (unsigned int)sys_mem_perused(SRAMMAIN),
+  shellPrintEndLine(&shell, "  mem ccm=%u/1000 ex=%u/1000\r\n",
                     (unsigned int)sys_mem_perused(SRAMCCM),
                     (unsigned int)sys_mem_perused(SRAMEX));
   return 0;

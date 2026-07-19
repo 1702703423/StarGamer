@@ -4,10 +4,6 @@
 #define SYS_MEM_INVALID 0xFFU
 #define SYS_ALIGN8(size) (((size) + 7U) & ~7U)
 
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-static u8 mem1base[MEM1_MAX_SIZE] __ALIGNED(8);
-static MT_TYPE mem1mapbase[MEM1_ALLOC_TABLE_SIZE];
-#endif
 static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE];
 #define mem3mapbase ((MT_TYPE *)MEM3_MAP_BASE)
 
@@ -15,27 +11,18 @@ const u32 memtblsize[SRAMBANK] =
 {
     MEM2_ALLOC_TABLE_SIZE,
     MEM3_ALLOC_TABLE_SIZE,
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-    MEM1_ALLOC_TABLE_SIZE,
-#endif
 };
 
 const u32 memblksize[SRAMBANK] =
 {
     MEM2_BLOCK_SIZE,
     MEM3_BLOCK_SIZE,
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-    MEM1_BLOCK_SIZE,
-#endif
 };
 
 const u32 memsize[SRAMBANK] =
 {
     MEM2_MAX_SIZE,
     MEM3_MAX_SIZE,
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-    MEM1_MAX_SIZE,
-#endif
 };
 
 struct _m_mallco_dev mallco_dev =
@@ -45,23 +32,14 @@ struct _m_mallco_dev mallco_dev =
     {
         (u8 *)CCM_HEAP_BASE,
         (u8 *)SRAMEX_BASE,
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-        mem1base,
-#endif
     },
     {
         mem2mapbase,
         mem3mapbase,
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-        mem1mapbase,
-#endif
     },
     {
         0U,
         0U,
-#if (MALLOC_SRAM_TEST_HEAP_ENABLE != 0U)
-        0U,
-#endif
     },
 };
 
