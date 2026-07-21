@@ -12,6 +12,7 @@ extern "C" {
 #define AVI_MAX_STREAMS         8U
 #define AVI_MAX_CHUNK_SIZE      (2UL * 1024UL * 1024UL)
 #define AVI_STREAM_INDEX_NONE   0xFFU
+#define AVI_AUDIO_FORMAT_PCM    0x0001U
 
 #define AVI_FOURCC(a, b, c, d) \
 	((u32)(u8)(a) | ((u32)(u8)(b) << 8U) | \

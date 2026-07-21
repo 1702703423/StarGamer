@@ -1,5 +1,6 @@
 #include "LCD.h"
 #include "LCD_Font.h"
+#include "cmsis_os2.h"
 
 SPI_HandleTypeDef *lcd_spi;
 static int LCD_WaitForSPI(void);
@@ -8,6 +9,19 @@ static u8 LCD_IsDmaBuffer(const void *buffer, u32 size);
 #define LCD_CCM_START_ADDRESS       0x10000000UL
 #define LCD_CCM_END_ADDRESS         0x10010000UL
 #define LCD_DMA_MAX_BYTES           0xFFFFU
+#define LCD_DMA_TIMEOUT_TICKS       100U
+#define LCD_DMA_POLL_LIMIT          16000000UL
+
+typedef StaticSemaphore_t osStaticSemaphoreDef_t;
+
+static osSemaphoreId_t s_lcd_dma_semaphore;
+static osStaticSemaphoreDef_t s_lcd_dma_semaphore_cb;
+static const osSemaphoreAttr_t s_lcd_dma_semaphore_attr =
+{
+	.name = "LCD DMA",
+	.cb_mem = &s_lcd_dma_semaphore_cb,
+	.cb_size = sizeof(s_lcd_dma_semaphore_cb),
+};
 
 static u8 s_lcd_stream_active;
 static u32 s_lcd_stream_remaining;
@@ -161,8 +175,13 @@ void LCD_RESET(void)
  * @retvalue   :None
 ******************************************************************************/	 	 
 void LCD_Init(SPI_HandleTypeDef *spi)
-{ 									 
+{
 	lcd_spi = spi;
+	if(s_lcd_dma_semaphore == NULL && osKernelGetState() == osKernelRunning)
+	{
+		s_lcd_dma_semaphore = osSemaphoreNew(1U, 0U,
+			&s_lcd_dma_semaphore_attr);
+	}
  	LCD_RESET(); //LCD 复位
 //************* ST7789初始化**********//	
 	LCD_WR_REG(0x36); 
@@ -538,20 +557,64 @@ static u8 LCD_IsDmaBuffer(const void *buffer, u32 size)
 	return 1U;
 }
 
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+	if(hspi == lcd_spi && s_lcd_dma_semaphore != NULL)
+	{
+		(void)osSemaphoreRelease(s_lcd_dma_semaphore);
+	}
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+	if(hspi == lcd_spi && s_lcd_dma_semaphore != NULL)
+	{
+		(void)osSemaphoreRelease(s_lcd_dma_semaphore);
+	}
+}
+
 static int LCD_WaitForSPI(void)
 {
-	u32 count = 65536000;
-	
+	u32 started;
+	u32 elapsed;
+	u32 remaining;
+	u32 poll_remaining = LCD_DMA_POLL_LIMIT;
+	osStatus_t wait_result;
+
+	if(lcd_spi == NULL)
+	{
+		return 1;
+	}
+	started = HAL_GetTick();
 	while (HAL_SPI_GetState(lcd_spi) != HAL_SPI_STATE_READY)
 	{
-		count --;
-		
-		if(!count)
+		elapsed = HAL_GetTick() - started;
+		if(elapsed >= LCD_DMA_TIMEOUT_TICKS)
 		{
 			return 1;
 		}
+		if(s_lcd_dma_semaphore != NULL && __get_IPSR() == 0U &&
+		   osKernelGetState() == osKernelRunning)
+		{
+			remaining = LCD_DMA_TIMEOUT_TICKS - elapsed;
+			wait_result = osSemaphoreAcquire(s_lcd_dma_semaphore, remaining);
+			if(wait_result != osOK &&
+			   HAL_SPI_GetState(lcd_spi) != HAL_SPI_STATE_READY)
+			{
+				return 1;
+			}
+		}
+		else
+		{
+			if(poll_remaining == 0U)
+			{
+				return 1;
+			}
+			poll_remaining--;
+			__NOP();
+		}
 	}
-	
+
 	return 0;
 }
 

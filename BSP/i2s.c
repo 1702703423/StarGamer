@@ -189,6 +189,10 @@ static int audio_card_start_dma(void)
 	uint32_t total_size = apif.WAV_PLAY_BUFF_SIZE * 2U;
 	uint16_t total_halfwords = (uint16_t)(total_size / 2U);
 
+	/* DMA errors are reported by the DMA callback. Enabling I2S_IT_ERR here
+	 * lets a transient UDR force the HAL state to READY during circular DMA. */
+	__HAL_I2S_DISABLE_IT(&hi2s3, I2S_IT_ERR);
+	__HAL_I2S_CLEAR_UDRFLAG(&hi2s3);
 	if (HAL_I2S_Init(&hi2s3) != HAL_OK)
 	{
 		return -1;
@@ -198,13 +202,15 @@ static int audio_card_start_dma(void)
 	{
 		return -2;
 	}
-	__HAL_I2S_ENABLE_IT(&hi2s3, I2S_IT_ERR);
 
 	return 0;
 }
 
 static void audio_card_notify(uint8_t current_buf_index)
 {
+	u8 idle_index;
+	u32 sequence;
+
 	if (!audio_card_opened)
 	{
 		return;
@@ -221,7 +227,14 @@ static void audio_card_notify(uint8_t current_buf_index)
 	}
 
 	apif.curr_buf_index = current_buf_index;
+	idle_index = audio_card_get_idle_buffer_index();
+	apif.tx_sequence++;
+	sequence = apif.tx_sequence;
 
+	if (apif.tx_index_callback != NULL)
+	{
+		apif.tx_index_callback(idle_index, sequence);
+	}
 	if (apif.tx_callback != NULL)
 	{
 		apif.tx_callback();
@@ -284,7 +297,8 @@ int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_s
 	uint32_t i2s_freq;
 	uint32_t pcm_size;
 	uint32_t total_size;
-	void (*saved_callback)(void) = apif.tx_callback;
+	audio_card_tx_callback_t saved_callback = apif.tx_callback;
+	audio_card_tx_index_callback_t saved_index_callback = apif.tx_index_callback;
 
 	if (audio_card_opened)
 	{
@@ -339,12 +353,15 @@ int audio_card_open_prepare(int sample_rate, int deepth, int channels, int pkg_s
 	apif.WAV_PLAY_BUFF_SIZE = pcm_size;
 	apif.curr_buf_index = 0;
 	apif.tx_callback = saved_callback;
+	apif.tx_index_callback = saved_index_callback;
+	apif.tx_sequence = 0U;
 
 	apif.wav_buffer = (uint8_t *)sys_malloc(AUDIO_CARD_MEM_POOL, total_size);
 	if (apif.wav_buffer == NULL)
 	{
 		memset(&apif, 0, sizeof(apif));
 		apif.tx_callback = saved_callback;
+		apif.tx_index_callback = saved_index_callback;
 		apif.volume = audio_card_volume;
 		return -8;
 	}
@@ -378,11 +395,13 @@ int audio_card_open(int sample_rate, int deepth, int channels, int pkg_size)
 
 	if (audio_card_start() != 0)
 	{
-		void (*saved_callback)(void) = apif.tx_callback;
+		audio_card_tx_callback_t saved_callback = apif.tx_callback;
+		audio_card_tx_index_callback_t saved_index_callback = apif.tx_index_callback;
 
 		sys_free(AUDIO_CARD_MEM_POOL, apif.wav_buffer);
 		memset(&apif, 0, sizeof(apif));
 		apif.tx_callback = saved_callback;
+		apif.tx_index_callback = saved_index_callback;
 		apif.volume = audio_card_volume;
 		return -9;
 	}
@@ -446,13 +465,26 @@ int audio_card_get_volume(void)
 
 int audio_card_register_feeder(void (*feeding_func)(void))
 {
-	apif.tx_callback = feeding_func;
+	audio_card_register_tx(feeding_func);
 	return 0;
 }
 
 void audio_card_register_tx(void (*callback)(void))
 {
 	apif.tx_callback = callback;
+	if (callback != NULL)
+	{
+		apif.tx_index_callback = NULL;
+	}
+}
+
+void audio_card_register_tx_index(audio_card_tx_index_callback_t callback)
+{
+	apif.tx_index_callback = callback;
+	if (callback != NULL)
+	{
+		apif.tx_callback = NULL;
+	}
 }
 
 int audio_card_write_to_buffer(uint8_t index, void *pkg_buff, int pkg_size)

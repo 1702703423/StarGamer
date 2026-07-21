@@ -4,6 +4,9 @@
 #include "stm32f4xx.h"
 #include "sys.h"
 
+typedef void (*audio_card_tx_callback_t)(void);
+typedef void (*audio_card_tx_index_callback_t)(u8 idle_index, u32 sequence);
+
 typedef struct audio_play_info
 {
 	uint32_t sample;
@@ -18,7 +21,9 @@ typedef struct audio_play_info
 	volatile uint8_t curr_buf_index;
 
 	void *file;
-	void (*tx_callback)(void);
+	audio_card_tx_callback_t tx_callback;
+	audio_card_tx_index_callback_t tx_index_callback;
+	volatile u32 tx_sequence;
 } audio_play_info_t;
 
 typedef struct audio_card_stats
@@ -45,6 +50,7 @@ int audio_card_chg_volume(int volume);
 int audio_card_get_volume(void);
 int audio_card_register_feeder(void (*feeding_func)(void));
 void audio_card_register_tx(void (*callback)(void));
+void audio_card_register_tx_index(audio_card_tx_index_callback_t callback);
 int audio_card_write_to_buffer(uint8_t index, void *pkg_buff, int pkg_size);
 int audio_card_write_silence(uint8_t index);
 int audio_card_write(void *pkg_buff, int pkg_size);

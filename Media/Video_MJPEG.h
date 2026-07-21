@@ -7,7 +7,8 @@
 extern "C" {
 #endif
 
-#define VIDEO_MJPEG_SOURCE_BUFFER_SIZE  4096U
+#define VIDEO_MJPEG_SOURCE_BUFFER_SIZE  (8UL * 1024UL)
+#define VIDEO_MJPEG_ARENA_SIZE          (38UL * 1024UL)
 #define VIDEO_MJPEG_STRIPE_LINES        8U
 #define VIDEO_MJPEG_MAX_WIDTH           320U
 
@@ -28,8 +29,19 @@ typedef struct Video_MJPEG
 	u16 *stripe[2];
 	void *jpeg_context;
 	void *jpeg_error;
+	void *jpeg_provider;
+	u8 *jpeg_arena;
+	u32 jpeg_arena_position;
+	u32 jpeg_arena_frame_base;
+	u32 jpeg_arena_peak_bytes;
+	u32 jpeg_arena_allocation_failures;
 	u32 jpeg_eoi_injected;
 	u32 fatfs_read_errors;
+	u32 fatfs_read_calls;
+	u32 fatfs_read_bytes;
+	u32 lcd_wait_ticks;
+	u32 max_lcd_wait_ticks;
+	u8 jpeg_created;
 } Video_MJPEG_t;
 
 int Video_MJPEG_Init(Video_MJPEG_t *decoder);

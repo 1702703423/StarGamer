@@ -16,10 +16,11 @@
 #define AVI_FOURCC_MJPG       AVI_FOURCC('M', 'J', 'P', 'G')
 #define AVI_FOURCC_REC        AVI_FOURCC('r', 'e', 'c', ' ')
 
-#define AVI_MP3_FORMAT_TAG    0x0055U
 #define AVI_VIDEO_MAX_WIDTH   320U
 #define AVI_VIDEO_MAX_HEIGHT  240U
 #define AVI_VIDEO_MAX_FPS     120U
+#define AVI_AUDIO_MIN_RATE    2000U
+#define AVI_AUDIO_MAX_RATE    192000U
 #define AVI_STRH_MIN_SIZE     48U
 #define AVI_VIDEO_STRF_SIZE   40U
 #define AVI_AUDIO_STRF_SIZE   16U
@@ -322,7 +323,8 @@ static int avi_read_at(AVI_Parser_t *parser, u32 offset, void *buffer, u32 size)
 	{
 		return AVI_PARSER_BAD_CHUNK;
 	}
-	if(f_lseek(parser->file, offset) != FR_OK)
+	if((u32)f_tell(parser->file) != offset &&
+	   f_lseek(parser->file, offset) != FR_OK)
 	{
 		return AVI_PARSER_IO_ERROR;
 	}
@@ -526,6 +528,14 @@ static int avi_parse_audio_stream(AVI_Parser_t *parser, u32 strf_offset,
 	u32 strf_size, u8 stream_index)
 {
 	u8 strf[AVI_AUDIO_STRF_SIZE];
+	u32 sample_rate;
+	u32 average_bytes_per_second;
+	u32 expected_bytes_per_second;
+	u16 format_tag;
+	u16 channels;
+	u16 block_align;
+	u16 bits_per_sample;
+	u16 expected_block_align;
 	int result;
 
 	parser->info.has_audio = 1U;
@@ -539,27 +549,48 @@ static int avi_parse_audio_stream(AVI_Parser_t *parser, u32 strf_offset,
 		return result;
 	}
 
+	format_tag = avi_read_le16(&strf[0]);
+	channels = avi_read_le16(&strf[2]);
+	sample_rate = avi_read_le32(&strf[4]);
+	average_bytes_per_second = avi_read_le32(&strf[8]);
+	block_align = avi_read_le16(&strf[12]);
+	bits_per_sample = avi_read_le16(&strf[14]);
 	if(parser->info.audio_format_tag == 0U)
 	{
-		parser->info.audio_format_tag = avi_read_le16(&strf[0]);
-		parser->info.audio_channels = avi_read_le16(&strf[2]);
-		parser->info.audio_sample_rate = avi_read_le32(&strf[4]);
-		parser->info.audio_average_bytes_per_second = avi_read_le32(&strf[8]);
-		parser->info.audio_block_align = avi_read_le16(&strf[12]);
-		parser->info.audio_bits_per_sample = avi_read_le16(&strf[14]);
+		parser->info.audio_format_tag = format_tag;
+		parser->info.audio_channels = channels;
+		parser->info.audio_sample_rate = sample_rate;
+		parser->info.audio_average_bytes_per_second = average_bytes_per_second;
+		parser->info.audio_block_align = block_align;
+		parser->info.audio_bits_per_sample = bits_per_sample;
 	}
 
-	if(parser->info.audio_stream_index == AVI_STREAM_INDEX_NONE &&
-	   avi_read_le16(&strf[0]) == AVI_MP3_FORMAT_TAG)
+	if(format_tag != AVI_AUDIO_FORMAT_PCM ||
+	   (channels != 1U && channels != 2U) ||
+	   (bits_per_sample != 8U && bits_per_sample != 16U) ||
+	   sample_rate < AVI_AUDIO_MIN_RATE || sample_rate > AVI_AUDIO_MAX_RATE)
+	{
+		return AVI_PARSER_OK;
+	}
+
+	expected_block_align = (u16)(channels * (bits_per_sample / 8U));
+	expected_bytes_per_second = sample_rate * (u32)expected_block_align;
+	if(block_align != expected_block_align ||
+	   average_bytes_per_second != expected_bytes_per_second)
+	{
+		return AVI_PARSER_OK;
+	}
+
+	if(parser->info.audio_stream_index == AVI_STREAM_INDEX_NONE)
 	{
 		parser->info.audio_stream_index = stream_index;
 		parser->info.audio_supported = 1U;
-		parser->info.audio_format_tag = avi_read_le16(&strf[0]);
-		parser->info.audio_channels = avi_read_le16(&strf[2]);
-		parser->info.audio_sample_rate = avi_read_le32(&strf[4]);
-		parser->info.audio_average_bytes_per_second = avi_read_le32(&strf[8]);
-		parser->info.audio_block_align = avi_read_le16(&strf[12]);
-		parser->info.audio_bits_per_sample = avi_read_le16(&strf[14]);
+		parser->info.audio_format_tag = format_tag;
+		parser->info.audio_channels = channels;
+		parser->info.audio_sample_rate = sample_rate;
+		parser->info.audio_average_bytes_per_second = average_bytes_per_second;
+		parser->info.audio_block_align = block_align;
+		parser->info.audio_bits_per_sample = bits_per_sample;
 	}
 
 	return AVI_PARSER_OK;

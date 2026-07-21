@@ -314,7 +314,7 @@
           </ArmAdsMisc>
           <Cads>
             <interw>1</interw>
-            <Optim>2</Optim>
+            <Optim>4</Optim>
             <oTime>0</oTime>
             <SplitLS>0</SplitLS>
             <OneElfS>1</OneElfS>
@@ -1515,6 +1515,16 @@
               <FileType>1</FileType>
               <FilePath>..\System\firmware_start.c</FilePath>
             </File>
+            <File>
+              <FileName>kfifo.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\System\kfifo.c</FilePath>
+            </File>
+            <File>
+              <FileName>kfifo.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\System\kfifo.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1594,6 +1604,16 @@
               <FileName>Video_MJPEG.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Media\Video_MJPEG.h</FilePath>
+            </File>
+            <File>
+              <FileName>Video_PCM.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Media\Video_PCM.c</FilePath>
+            </File>
+            <File>
+              <FileName>Video_PCM.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Media\Video_PCM.h</FilePath>
             </File>
             <File>
               <FileName>Arduboy_Games.c</FileName>

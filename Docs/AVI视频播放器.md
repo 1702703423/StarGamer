@@ -2,7 +2,7 @@
 
 ## 1. 结论
 
-参考工程已经实现了一条可运行的 AVI 播放链路，但其容器解析、定位、调度和资源管理都与 Star Gamer 当前架构不兼容。建议复用其“AVI 分块读取 + MJPEG 解码 + MP3 解码 + I2S DMA”的总体思路，不直接复制代码。
+参考工程已经实现了一条可运行的 AVI 播放链路，但其容器解析、定位、调度和资源管理都与 Star Gamer 当前架构不兼容。Star Gamer 复用其“AVI 分块读取 + MJPEG 解码 + I2S DMA + 音频时钟驱动”的总体思路，但音频只接收未压缩 PCM，不移植 MP3 解码链路。
 
 Star Gamer 首版播放器建议明确限定为：
 
@@ -12,22 +12,22 @@ Star Gamer 首版播放器建议明确限定为：
 | 视频编码 | MJPEG/MJPG |
 | 视频尺寸 | 最大 320×240，不旋转、不放大 |
 | 像素输出 | RGB565 |
-| 音频编码 | 可选 MP3，单音轨 |
+| 音频编码 | 可选 PCM（格式码 `0x0001`），8/16-bit、单/双声道、单音轨 |
 | 流数量 | 单视频流，最多单音频流 |
 | 播放方式 | 顺序播放、暂停/恢复、停止，提供粗略跳转 |
 | 显示方式 | 播放期间独占 LCD，暂停 LVGL |
-| 不承诺支持 | H.264、MPEG-4 Part 2、AAC、任意 OpenDML、多音轨、字幕、任意分辨率缩放 |
+| 不承诺支持 | MP3、AAC、H.264、MPEG-4 Part 2、任意 OpenDML、多音轨、字幕、任意分辨率缩放 |
 
 推荐采用以下关键设计：
 
-1. 由单个 `VideoTask` 串行执行 FatFs 读取、AVI demux、MJPEG 解码和 MP3 解码，避免多个任务竞争 SDIO。
+1. 由单个 `VideoTask` 串行执行 FatFs 读取、AVI demux、MJPEG 解码和 PCM 入队，避免多个任务竞争 SDIO。
 2. AVI 解析使用显式小端读取和 RIFF 边界遍历，不使用 C 结构体直接映射文件数据。
 3. MJPEG 使用带 chunk 边界的 LibJPEG `jpeg_source_mgr` 从 `FIL` 流式读取，取消参考工程的 48 KB 整帧压缩缓冲。
 4. JPEG 按扫描行解码为 RGB565，以双行或小条带缓冲通过 SPI DMA 输出，不分配完整视频帧。
 5. 播放开始时通过现有 `lvgl_stop_ui()` 取得 LCD/SPI1 所有权，结束后通过 `lvgl_start_ui()` 恢复 GUI。
 6. 有音频时以已播放 PCM sample 数作为主时钟；无音频时使用 RTOS tick 的绝对时间点调度视频。
 7. 视频落后时只丢视频帧，不丢音频数据，也不通过加速音频追赶。
-8. 视频子系统独占片上 SRAM `0x2000C000..0x2001FFFF` 的 80 KB 对齐内存池；任务栈、FatFs/JPEG 对象、工作缓冲和 LCD DMA 条带均从该池分配，不经过 `sys_malloc`。
+8. 视频任务栈、FatFs/JPEG 对象和 LCD DMA 条带使用片上 SRAM `0x2000C000..0x2001FFFF` 的 80 KB 对齐内存池；32 KB PCM FIFO、4 KB PCM I/O 缓冲和 I2S DMA 双缓冲使用 DMA 可访问的 `SRAMEX`，绝不放入 CCM。
 
 该方案适合 STM32F407ZGT6、SPI LCD 和现有 1 MB 外部 SRAM 的资源条件。实际可稳定达到的帧率和 JPEG 质量必须在真机上测量后确定，首版不应预先承诺 25/30 fps。
 
@@ -231,14 +231,9 @@ void LCD_StreamEnd(void);
 
 AVI MJPEG 可复用这些配置，但不能直接使用“读到 JPEG 文件 EOF”的普通 source。每个 MJPEG chunk 都是同一 AVI 文件中的一个有界 JPEG 数据段，因此必须新增带剩余长度的 source manager。
 
-### 3.4 MP3 和 I2S
+### 3.4 PCM 和 I2S
 
-现有 `Media/Player_MP3.c` 和 Helix 适配已经具备：
-
-- MP3 同步字恢复。
-- 输出格式锁定。
-- 错误 conceal 和统计。
-- PCM 输出到现有音频卡接口。
+AVI 音频直接使用 `WAVE_FORMAT_PCM (0x0001)`。解析器从 `strf` 读取并交叉校验格式码、声道、采样率、平均字节率、块对齐和位深；只有 8/16-bit、单/双声道且 `nAvgBytesPerSec == nSamplesPerSec * nBlockAlign` 的音轨会被标记为可播放。MP3 格式码 `0x0055` 会得到明确的 unsupported audio 结果。
 
 `BSP/i2s.c` 已具备：
 
@@ -248,14 +243,14 @@ AVI MJPEG 可复用这些配置，但不能直接使用“读到 JPEG 文件 EOF
 - 常用采样率映射。
 - 播放统计。
 
-AVI 中的 MP3 数据由多个 `##wb` chunk 提供，不能直接调用当前面向独立文件和 EOF 的 `Player_MP3_Open(FIL *)`。应从 `Player_MP3.c` 抽取一个公共的“分段输入 MP3 解码器”，同时供独立 MP3 播放器和 AVI 适配层使用。
+`Media/Video_PCM.c` 将多个 `##wb` payload 按 `nBlockAlign` 分段读入 32 KB FIFO，再由 `VideoTask` 填充 I2S 空闲半缓冲。DMA ISR 只累计已输出 sample frame 并设置线程标志，不读取 FatFs、不搬运 PCM。
 
 ### 3.5 FatFs 和 SDIO
 
 FatFs 已启用 `_FS_REENTRANT=1`，同一卷访问受 CMSIS mutex 保护。但底层 SDIO 仍是单队列、同步等待 DMA，因此：
 
 - 不应让视频、音频分别建立读取任务。
-- `VideoTask` 应串行完成 demux 和两个 codec 的输入。
+- `VideoTask` 应串行完成 demux、MJPEG 输入和 PCM 入队。
 - 播放期间应避免其他高流量 SD 卡操作。
 - 每次读取应尽量使用连续、适度大小的块，减少小块 I/O。
 
@@ -284,7 +279,7 @@ STM32F407 没有 D-cache，因此不需要 cache clean/invalidate；但 DMA 控�
 | `Media/Video.c/.h` | 公共 API、状态机、播放任务、命令、A/V 调度、统一清理、统计 |
 | `Media/AVI_Parser.c/.h` | RIFF/AVI 安全解析、流信息、`movi` chunk 迭代、可选索引 |
 | `Media/Video_MJPEG.c/.h` | 有界 FatFs JPEG source、LibJPEG 配置、扫描行 RGB565 转换和 LCD 输出 |
-| `Media/Video_MP3.c/.h` | AVI 音频 chunk 到公共 Helix 解码层的适配 |
+| `Media/Video_PCM.c/.h` | PCM chunk 分段读取、SRAMEX FIFO、I2S 双缓冲和音频主时钟统计 |
 | `GUI/GUI_Video.c/.h` | AVI 文件浏览、启动、状态显示、按键命令和退出 |
 | `Drivers/LCD/LCD.c/.h` | 通用流式区域输出接口，SPI DMA 等待和所有权约束 |
 
@@ -305,10 +300,10 @@ flowchart TD
     TASK --> AVI["AVI_Parser"]
     AVI --> FAT["FatFs / SDIO"]
     AVI -->|视频 chunk 范围| MJPEG["Video_MJPEG"]
-    AVI -->|音频 chunk 范围| MP3["Video_MP3 / Helix"]
+    AVI -->|PCM chunk 范围| PCM_FIFO["Video_PCM / 32 KB FIFO"]
     MJPEG --> RGB["RGB565 双行缓冲"]
     RGB --> LCD["SPI1 LCD DMA"]
-    MP3 --> PCM["I2S 双缓冲"]
+    PCM_FIFO --> PCM["I2S 双缓冲"]
     PCM --> I2S["I2S3 DMA"]
     I2S -->|ISR: thread flag| TASK
     LCD -->|DMA 完成等待| TASK
@@ -337,6 +332,8 @@ typedef enum Video_Result {
     VIDEO_RESULT_EOF,
     VIDEO_RESULT_OPEN_FAILED,
     VIDEO_RESULT_UNSUPPORTED,
+    VIDEO_RESULT_UNSUPPORTED_AUDIO,
+    VIDEO_RESULT_AUDIO_FAILED,
     VIDEO_RESULT_BAD_CONTAINER,
     VIDEO_RESULT_DECODE_FAILED,
     VIDEO_RESULT_IO_FAILED,
@@ -389,9 +386,7 @@ stateDiagram-v2
 u8 file_opened;
 u8 lcd_owned;
 u8 jpeg_opened;
-u8 mp3_opened;
-u8 audio_opened;
-u8 audio_callback_registered;
+u8 pcm_opened;
 ```
 
 清理只处理已经成功取得的资源，避免半初始化失败时重复关闭。
@@ -403,7 +398,7 @@ u8 audio_callback_registered;
 - FatFs 读取。
 - AVI chunk 迭代。
 - MJPEG 解码。
-- MP3 解码。
+- PCM chunk 分段读取和 FIFO 补充。
 - A/V 调度。
 - 播放命令处理。
 
@@ -427,7 +422,7 @@ I2S 和 SPI DMA ISR 只能：
 ISR 中禁止：
 
 - FatFs 文件操作。
-- JPEG/MP3 解码。
+- JPEG 解码或 PCM 搬运。
 - 动态内存分配。
 - 调用 LVGL。
 - 执行 seek 或关闭播放器。
@@ -442,7 +437,7 @@ ISR 中禁止：
 2. 注销 I2S 回调，防止回调继续访问播放器上下文。
 3. 停止 I2S DMA。
 4. 等待 LCD SPI DMA 完成。
-5. 关闭 MP3/JPEG 解码器。
+5. 释放 PCM FIFO 并关闭 JPEG 解码器。
 6. 关闭 `FIL`。
 7. 释放所有视频池临时块；播放器和 GUI 的常驻上下文保留到系统复位。
 8. 释放 LCD 所有权并调用 `lvgl_start_ui()`。
@@ -534,7 +529,7 @@ next = data_start + chunk_size + (chunk_size & 1)
 首版选择：
 
 - 第一个 `vids` 且 handler/compression 为 `MJPG` 的视频流。
-- 第一个 `auds` 且 format tag 为 `0x0055` 的音频流。
+- 第一个 `auds` 且 format tag 为 `0x0001`、WAVEFORMAT 字段自洽的 PCM 音频流。
 
 视频 chunk ID 必须根据实际流序号生成，不能硬编码为 `00dc`。例如视频流序号 1 时允许 `01dc`。音频同理。
 
@@ -547,7 +542,7 @@ next = data_start + chunk_size + (chunk_size & 1)
 - JPEG 输出采样或颜色格式无法由当前 LibJPEG 路径处理。
 - 多段 RIFF/OpenDML 文件超出首版遍历能力。
 
-没有 MP3 音频流时允许纯视频播放。
+没有音频流时允许纯视频播放；存在 MP3/AAC 等不支持音轨时明确拒绝。
 
 ### 6.4 `movi` chunk 迭代
 
@@ -616,7 +611,9 @@ typedef struct Video_JpegSource {
 5. `skip_input_data()` 同样受 `remaining` 限制。
 6. 解码结束后将 `FIL` 位置校正到 AVI chunk 末尾。
 
-建议 source I/O 缓冲先取 4 KB。若 SDIO 吞吐统计显示小块读取开销明显，再在 4 KB、8 KB、16 KB 中实测选择，不使用固定 48 KB 整帧缓冲。
+当前实现使用 8 KB source I/O 缓冲，并记录 `fatfs_read_calls` 与
+`fatfs_read_bytes`。它仍是受 chunk 边界约束的流式缓冲，不使用固定
+48 KB 整帧压缩缓冲；后续应根据真机平均单次读取量和丢帧率决定是否调整。
 
 ### 7.2 解码配置
 
@@ -636,22 +633,30 @@ cinfo.out_color_space = JCS_RGB;
 
 不能相信 AVI 头声明的尺寸而跳过 JPEG 帧内尺寸检查。
 
+LibJPEG 解码对象在一次播放期间只创建一次。其 permanent pool 保留，
+每帧结束或异常中止后释放 image pool，并将 38 KB、8 字节对齐的 arena
+位置复位到 permanent pool 末尾。这样每次分配为 O(1)，释放为指针复位，
+同时避免通用视频堆的扫描、合并和碎片。`jpeg_arena_peak_bytes` 与
+`jpeg_arena_allocation_failures` 用于验证 38 KB 上限，超限时返回明确的
+内存错误，不回退到系统堆。
+
 ### 7.3 RGB565 行缓冲
 
-JPEG 扫描行输出通常为 RGB888。建议使用两组 DMA 可访问的 RGB565 行缓冲：
+JPEG 扫描行输出通常为 RGB888。当前实现使用两组 DMA 可访问的 8 行
+RGB565 条带：
 
 ```text
-line565[0]: 320 × 2 = 640 B
-line565[1]: 320 × 2 = 640 B
+stripe565[0]: 320 × 8 × 2 = 5120 B
+stripe565[1]: 320 × 8 × 2 = 5120 B
 ```
 
 流程：
 
 1. LibJPEG 输出一行 RGB888。
 2. CPU 转换到当前 RGB565 行缓冲。
-3. 等待上一行 SPI DMA 完成。
-4. 异步发送当前行。
-5. 交换行缓冲。
+3. 条带填满后等待上一条带 SPI DMA 完成。
+4. 异步发送当前条带。
+5. 交换条带缓冲，CPU 继续解码下一条带。
 
 LibJPEG 的 RGB888 扫描行缓冲也必须计入视频池峰值。若库允许应用提供 scanline 数组，可用 1 至 2 行；不要建立完整 RGB888 帧。
 
@@ -690,49 +695,36 @@ pixel = (u16)(((r & 0xF8U) << 8)
 
 这还不包括 SPI 命令、DMA 间隙、JPEG 解码和 SDIO 读取竞争。因此实际帧率上限取决于 SPI1 时钟、DMA 提交间隙、JPEG 质量和音频负载，必须用统计计数器和示波器/逻辑分析仪验证。
 
-逐行 DMA 会产生较多启动开销。首版稳定后可将输出改为 4 至 16 行小条带，以 SRAM 增量换取更少的 DMA 提交次数。
+LCD DMA 完成由 ISR 释放静态 CMSIS-RTOS 信号量。视频任务追上 DMA 时会
+阻塞并让出 CPU，不再以 `osPriorityAboveNormal` 忙等；非线程上下文保留
+带 100 ms 硬超时的轮询回退。`lcd_wait_ticks` 和 `max_lcd_wait_ticks`
+可区分 JPEG 解码瓶颈与 SPI 带宽瓶颈。
 
 ---
 
-## 8. MP3、I2S 和 A/V 同步
+## 8. PCM、I2S 和 A/V 同步
 
-### 8.1 MP3 分段输入适配
+### 8.1 PCM 分段输入
 
-独立 MP3 文件是连续字节流，AVI MP3 是由多个 `##wb` chunk 组成的逻辑连续流。建议抽取公共接口：
+PCM 不需要 codec，但每个 `##wb` payload 必须独立通过 RIFF 边界验证。`Video_PCM_ReadChunkPart()` 每次最多读取 4 KB，读取长度向 `nBlockAlign` 对齐，再写入 32 KB FIFO；chunk 的 RIFF padding 不进入 FIFO。chunk payload 不是块对齐整数倍时按损坏容器退出。
 
-```c
-typedef struct MP3_StreamDecoder MP3_StreamDecoder_t;
+FIFO 和 I/O 缓冲均由 `sys_malloc(SRAMEX, ...)` 分配。它们不占用 80 KB 片上视频池，也不会落入 DMA 不可访问的 CCM。播放器维护一个只保存 `AVI_Chunk_t` 和音频 deadline 的 32 项视频元数据队列，因此可以在不缓存压缩视频帧的前提下向前 demux 并建立音频预缓冲。
 
-u8 MP3_StreamOpen(MP3_StreamDecoder_t *decoder);
-u8 MP3_StreamFeed(MP3_StreamDecoder_t *decoder,
-                  const u8 *data,
-                  u32 size,
-                  u32 *consumed);
-u8 MP3_StreamDrain(MP3_StreamDecoder_t *decoder);
-void MP3_StreamReset(MP3_StreamDecoder_t *decoder);
-void MP3_StreamClose(MP3_StreamDecoder_t *decoder);
-```
+### 8.2 I2S 输出
 
-AVI 适配层负责：
+继续使用 `audio_card_open_prepare/start/write_to_buffer` 和 SRAMEX 双缓冲。输入包按约 24 ms 音频计算，并限制在 512 B 至 4 KB、`nBlockAlign` 的整数倍。启动前目标水位为 6 包，并至少具备两个 DMA 半缓冲的数据；文件很短且已到 EOF 时允许第二半缓冲补静音。
 
-- 从当前音频 chunk 分批读取压缩数据。
-- 将未消费的尾部字节保留到下一次 feed。
-- 允许一个 MP3 frame 跨越相邻的、属于所选音频流的 AVI audio chunk。
-- 跨 chunk 拼接只发生在独立 staging 缓冲中：parser 先验证并剥离每个 `##wb` 的 RIFF 头和 padding，再追加 payload；Helix 不能直接从当前 payload 读穿到下一个文件 chunk。
-- 发现 seek 后清空残留字节并重新寻找 MP3 sync。
-- 检查采样率和声道是否在当前 I2S 支持范围内。
+播放中维持可观测的 PCM 水位：
 
-不要假设每个 `##wb` chunk 恰好包含整数个 MP3 frame。两个音频 chunk 之间即使夹有视频或未知 chunk，也只能在 demux 分别验证这些 chunk 后保留并继续拼接音频 payload，绝不能把中间的 RIFF header 或非音频 payload 送入 Helix。
+- 水位低于 6 包：`VideoTask` 继续 demux，把 PCM chunk 分段写入 FIFO，并把视频 chunk 元数据入队。
+- 视频 PTS 到达：从元数据队列取出应显示的最新帧，落后的旧帧只计数不解码。
+- underrun：空闲半缓冲补静音并记录计数，不在 ISR 中读取文件。
+- EOF：先排空 FIFO 和两个 DMA 半缓冲，再关闭 I2S，避免截断尾音。
 
-### 8.2 PCM 输出
-
-继续使用 `audio_card_init/open/write` 一类现有统一接口和 SRAMEX 双缓冲。播放器不应再建立参考工程的 32 KB PCM FIFO，除非真机测量证明现有双缓冲无法吸收 SDIO/JPEG 抖动。
-
-预缓冲阶段至少填满一个完整 I2S DMA buffer，再启动音频时钟。播放中维持一个可观测的 PCM 水位：
-
-- 水位过低：优先 demux/decode 音频。
-- 水位充足：允许解码并显示下一视频帧。
-- underrun：填静音、记录计数，不重复播放旧数据。
+循环 DMA 播放期间不打开 `I2S_IT_ERR`。STM32 HAL 的 UDR IRQ 路径会把
+`hi2s3.State` 强制改为 `READY`，破坏仍在运行的循环 DMA 状态；播放器改为在
+DMA half/full 回调中读取并清除 UDR，只把 DMA TE、非 UDR I2S 错误或 DMA
+回调超时视为致命错误。这一点与参考工程“仅用 DMA TC/TE 驱动声卡”的行为一致。
 
 ### 8.3 主时钟
 
@@ -835,9 +827,8 @@ seek 前必须：
 
 - 暂停并停止 I2S DMA。
 - 清空 PCM 排队数据。
-- 重置 Helix bit reservoir 和同步状态。
 - abort/重建 JPEG 解码上下文。
-- 清空 MP3 跨 chunk 残留字节。
+- 清空 PCM FIFO、待处理音频 chunk 和视频元数据队列。
 - 清空 A/V 计数器。
 - 重新预缓冲音频。
 - 重新建立媒体时钟。
@@ -853,7 +844,7 @@ seek 前必须：
 - 为视频关键帧建立稀疏索引。
 - 根据目标帧/时间二分定位。
 
-MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧，但音频仍需在目标附近寻找 MP3 sync 并预缓冲。
+MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧；PCM 从目标附近的合法 `##wb` chunk 重新建立块对齐并预缓冲。
 
 索引不必一次完整常驻 RAM。可以：
 
@@ -895,12 +886,14 @@ MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧，但
 | 项目 | 建议初值 | 内存区域 | 说明 |
 |---|---:|---|---|
 | `FIL`、播放器和 GUI 上下文 | 约 4–6 KB | 视频池 | 常驻块，避免重复分配 |
-| AVI/JPEG source I/O 缓冲 | 4 KB | 视频池 | 32 字节对齐，可按峰值实测调整 |
+| AVI/JPEG source I/O 缓冲 | 8 KB | 视频池 | 32 字节对齐，按读取次数和丢帧率实测调整 |
 | RGB565 双 8 行条带 | 10 KB | 视频池 | SPI DMA 源，减少 DMA 提交次数 |
 | RGB888 扫描行 | 960 B | 视频池 | 320 像素、RGB888 |
 | LibJPEG 临时工作区 | 约 38 KB 预算 | 视频池 | 通过 per-instance provider 自动回收 |
 | 命令/路径/统计 | 包含在上下文 | 视频池 | 路径采用固定上限 |
 | VideoTask 栈 | 8 KB | 视频池 | 32 字节对齐，由高水位决定最终值 |
+| PCM FIFO | 32 KB | SRAMEX | demux 前瞻和 JPEG/SDIO 抖动缓冲 |
+| PCM I/O 缓冲 | 4 KB | SRAMEX | FatFs 分段读取及 I2S 半缓冲填充 |
 
 池采用 32 字节对齐、地址有序的一次适配分配器，释放时前后合并。80 KB 是硬上限，分配失败会返回 `VIDEO_RESULT_NO_MEMORY`，不会回退到系统堆。
 
@@ -909,7 +902,7 @@ MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧，但
 仅通过源码不能准确证明以下峰值：
 
 - LibJPEG 在当前配置下的动态内存峰值。
-- Helix decoder 实例和工作区峰值。
+- PCM FIFO、I/O 缓冲和 I2S 双缓冲的 SRAMEX 峰值。
 - I2S 双缓冲的实际配置大小。
 - FatFs/SDIO 并发时的额外对象。
 - VideoTask 的真实栈深，尤其是 LibJPEG 错误处理路径。
@@ -918,11 +911,12 @@ MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧，但
 
 - 视频池当前占用、峰值和最大连续空闲块。
 - 视频池分配失败次数。
+- LibJPEG arena 实际峰值和 arena 分配失败次数。
 - VideoTask 栈高水位。
 - 单帧 JPEG 解码最大耗时。
-- 单帧 LCD DMA 最大耗时。
-- SDIO 单次读取最大耗时。
-- MP3 解码最大耗时。
+- LCD DMA 累计等待和单次最大等待 tick。
+- FatFs source 读取次数和总字节数。
+- PCM FIFO 峰值、DMA 事件数、事件合并次数和 underrun。
 
 验收时必须确认 `memory_allocation_failures == 0`，并为最坏质量 JPEG 保留可解释的最大连续空闲块，不能只验证“恰好能分配成功”。
 
@@ -992,7 +986,7 @@ GUI 删除页面前必须确认播放器已经停止且不再持有路径、time
 - chunk 越界或文件截断。
 - FatFs/SDIO 读取失败。
 - JPEG 解码失败。
-- MP3 解码连续失步。
+- PCM block align 不匹配或 I2S 启动失败。
 - I2S underrun。
 - LCD DMA 超时。
 - 内存不足。
@@ -1010,17 +1004,25 @@ typedef struct Video_Stats {
     u32 video_frames_displayed;
     u32 video_frames_dropped;
     u32 jpeg_errors;
-    u32 jpeg_eoi_injected;
-    u32 mp3_frames_decoded;
-    u32 mp3_sync_losses;
+    u32 pcm_input_bytes;
+    u32 pcm_output_frames;
     u32 audio_underruns;
+    u32 audio_fifo_peak_bytes;
+    u32 audio_dma_events;
+    u32 audio_dma_flag_collisions;
+    u32 jpeg_eoi_injected;
     u32 avi_resync_count;
     u32 fatfs_read_errors;
+    u32 fatfs_read_calls;
+    u32 fatfs_read_bytes;
     u32 lcd_dma_timeouts;
+    u32 lcd_wait_ticks;
+    u32 max_lcd_wait_ticks;
+    u32 jpeg_arena_peak_bytes;
+    u32 jpeg_arena_allocation_failures;
     u32 max_sd_read_us;
     u32 max_jpeg_decode_us;
     u32 max_lcd_transfer_us;
-    u32 max_mp3_decode_us;
 } Video_Stats_t;
 ```
 
@@ -1056,7 +1058,7 @@ typedef struct Video_Stats {
 - 记录当前 SRAMEX 使用量和各任务栈高水位。
 - 为 LCD 抽取通用流式区域 DMA API。
 - 验证 `lvgl_stop_ui()/lvgl_start_ui()` 在重复进入/退出时稳定。
-- 从 MP3 播放器抽取分段输入的 Helix 公共层。
+- 验证 `audio_card_open_prepare()` 的 PCM 位深、声道和采样率组合。
 - 建立视频统计和错误码。
 
 完成条件：独立测试能暂停 LVGL、连续 DMA 输出测试图、恢复 LVGL，无花屏和死锁。
@@ -1072,13 +1074,13 @@ typedef struct Video_Stats {
 
 完成条件：连续播放无音频基线 AVI，画面方向、颜色、居中和节拍正确。
 
-### 阶段 2：MP3 音频和同步
+### 阶段 2：PCM 音频和同步
 
 - 接入 AVI `##wb` chunk。
-- 支持 MP3 frame 跨 chunk。
+- 按 `nBlockAlign` 分段读取 PCM，并建立 SRAMEX FIFO。
 - 接入 I2S 双缓冲和实际 sample 计数。
 - 实现音频主时钟、预缓冲、underrun 处理。
-- 压测 JPEG + MP3 + SDIO 并行负载。
+- 压测 JPEG + PCM + SDIO 并行负载。
 
 完成条件：连续播放 30 分钟无死锁、无内存增长，A/V 不出现持续可感知漂移。
 
@@ -1111,22 +1113,23 @@ typedef struct Video_Stats {
 
 | 用例 | 预期 |
 |---|---|
-| 320×240 MJPEG + 44.1 kHz stereo MP3 | 正常播放 |
+| 320×240 MJPEG + 44.1 kHz 16-bit stereo PCM | 正常播放 |
+| 320×240 MJPEG + 22.05 kHz 8-bit mono PCM | 正常播放 |
 | 320×240 MJPEG，无音频 | 正常播放 |
 | 小于 320×240 | 居中显示并保留黑边 |
 | AVI 中视频流序号不是 0 | 根据实际 stream ID 播放 |
 | 单数长度 chunk | 正确处理 padding |
 | 含未知 `JUNK`/`LIST rec ` | 合法跳过或遍历 |
 | 截断 JPEG frame | 记录错误，按策略跳帧或退出 |
-| 截断 MP3 chunk | 不越界，报告错误 |
+| PCM chunk 不是 `nBlockAlign` 整数倍 | 不越界，报告容器错误 |
 | 损坏超大 chunk length | 打开或播放阶段拒绝 |
 | H.264 AVI | 明确报告 unsupported |
-| AAC AVI | 视频可按产品策略静音播放或明确拒绝 |
+| MP3/AAC AVI | 明确报告 unsupported audio，不静音误播 |
 | 超过 320×240 | 明确报告分辨率不支持 |
 | 多视频流/多音轨 | 只选择首个受支持流或明确拒绝 |
 | OpenDML 多 RIFF | 首版明确报告不支持 |
 
-音频不支持时建议首版采用明确策略：若视频可播，可提示“unsupported audio”后静音播放；若产品体验要求必须有声，则直接拒绝。该策略应在 `GUI_Video` 和错误码中保持一致。
+音频不支持时采用明确拒绝策略，`GUI_Video` 显示“AVI audio must be PCM”。无音轨 AVI 仍按 RTOS tick 正常播放。
 
 ### 14.2 操作稳定性
 
@@ -1157,7 +1160,7 @@ typedef struct Video_Stats {
 - 平均/最大 JPEG 解码时间。
 - 平均/最大 LCD 传输时间。
 - SDIO 吞吐和最大延迟。
-- MP3 解码峰值时间。
+- PCM FIFO 峰值、DMA 事件合并次数和 I2S underrun。
 - 视频丢帧率。
 - 音频 underrun。
 - 视频池峰值和分配失败次数。
@@ -1176,7 +1179,7 @@ typedef struct Video_Stats {
 - 所有 DMA 源/目标地址均不在 CCM。
 - VideoTask 栈保留足够余量，最终栈大小由高水位数据确定。
 
-帧率验收应以真机 profile 结果确定。例如可以将“320×240、15 fps、MJPEG q=7、44.1 kHz stereo MP3”作为首个目标样本，但不能在测量前把它写成最终能力承诺。
+帧率验收应以真机 profile 结果确定。例如可以将“320×240、15 fps、MJPEG q=7、44.1 kHz 16-bit stereo PCM”作为首个目标样本，但不能在测量前把它写成最终能力承诺。
 
 ---
 
@@ -1184,13 +1187,13 @@ typedef struct Video_Stats {
 
 建议为设备建立固定的 FFmpeg 转码预设，减少 AVI 生态中大量不可控组合。
 
-### 15.1 MJPEG + MP3 基线
+### 15.1 MJPEG + PCM 基线
 
 ```bash
 ffmpeg -i input.mp4 \
   -vf "scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:black,fps=15" \
   -c:v mjpeg -q:v 7 -pix_fmt yuvj420p \
-  -c:a libmp3lame -ar 44100 -ac 2 -b:a 96k \
+  -c:a pcm_s16le -ar 44100 -ac 2 \
   -f avi output.avi
 ```
 
@@ -1209,7 +1212,7 @@ ffmpeg -i input.mp4 \
 ffmpeg -i input.mp4 \
   -vf "scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:black,fps=10" \
   -c:v mjpeg -q:v 9 -pix_fmt yuvj420p \
-  -c:a libmp3lame -ar 22050 -ac 1 -b:a 64k \
+  -c:a pcm_s16le -ar 22050 -ac 1 \
   -f avi output_low_load.avi
 ```
 
@@ -1224,13 +1227,13 @@ ffmpeg -i input.mp4 \
 
 ## 16. 最终建议
 
-Star Gamer 复刻 AVI 播放器的主要风险不在“能否调用 JPEG 和 MP3 解码器”，而在以下四个边界：
+Star Gamer AVI 播放器的主要风险不在 PCM 解码，而在以下四个边界：
 
 1. 安全地遍历不可信 AVI chunk。
-2. 在单 SDIO 通道上协调 MJPEG、MP3 和 FatFs。
+2. 在单 SDIO 通道上协调 MJPEG、PCM 预读和 FatFs。
 3. 明确切换 LVGL 与视频播放器之间的 LCD/SPI DMA 所有权。
 4. 用实际 PCM sample 建立不会累积漂移的 A/V 时钟。
 
-首版应先完成无音频 MJPEG AVI，再接入 MP3 和音频主时钟。这样可以分别验证容器、显示带宽和音频调度，出现问题时容易定位。
+当前实现已在无音频 MJPEG 基线上接入 PCM 和音频主时钟；MP3、AAC 等压缩音轨保持明确拒绝，不进入 Helix 或静音兼容分支。
 
-不建议复制参考工程的 48 KB 视频 chunk、32 KB 音频 FIFO、结构体强转解析和自制调度器。采用 bounded streaming、单任务串行 demux、RGB565 行/条带 DMA 和统一 cleanup，可以在更低 SRAM 占用下更好地符合 Star Gamer 当前的 FreeRTOS、FatFs、LVGL、LCD 和 I2S 架构。
+不复制参考工程的 48 KB 视频 chunk、结构体强转解析和自制调度器。32 KB PCM FIFO 单独放在外部 SRAM，用于吸收 SDIO/JPEG 抖动；视频仍采用 bounded streaming、单任务串行 demux、RGB565 条带 DMA 和统一 cleanup，以符合 Star Gamer 当前的 FreeRTOS、FatFs、LVGL、LCD 和 I2S 架构。

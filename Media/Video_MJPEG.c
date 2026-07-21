@@ -5,12 +5,14 @@
 #include "jerror.h"
 #include "jpeg_memory_provider.h"
 #include "libjpeg.h"
+#include "cmsis_os2.h"
 
 #include <setjmp.h>
 #include <string.h>
 
 #define VIDEO_MJPEG_MAX_HEIGHT        240U
 #define VIDEO_MJPEG_RGB_COMPONENTS    3U
+#define VIDEO_MJPEG_ARENA_ALIGNMENT   8U
 typedef struct Video_JpegError
 {
 	struct jpeg_error_mgr pub;
@@ -37,21 +39,19 @@ static void video_mjpeg_term_source(j_decompress_ptr cinfo);
 static void video_mjpeg_set_source(j_decompress_ptr cinfo, Video_JpegSource_t *source,
 	Video_MJPEG_t *decoder, FIL *file, u32 size);
 static void video_mjpeg_convert_row(u16 *destination, const u8 *source, u16 width);
+static void video_mjpeg_reset_frame_arena(Video_MJPEG_t *decoder);
+static void video_mjpeg_update_lcd_wait(Video_MJPEG_t *decoder, u32 started);
 static void *video_mjpeg_memory_alloc(void *user_data, size_t size);
 static void video_mjpeg_memory_free(void *user_data, void *pointer);
 
-static const JPEG_MemoryProvider_t s_video_jpeg_memory_provider =
-{
-	.magic = JPEG_MEMORY_PROVIDER_MAGIC,
-	.alloc = video_mjpeg_memory_alloc,
-	.free = video_mjpeg_memory_free,
-	.user_data = NULL,
-};
-
 int Video_MJPEG_Init(Video_MJPEG_t *decoder)
 {
+	struct jpeg_decompress_struct *cinfo;
+	Video_JpegError_t *jerr;
+	JPEG_MemoryProvider_t *provider;
 	u32 row_size;
 	u32 stripe_size;
+	volatile int jpeg_message_code = 0;
 
 	if(decoder == NULL)
 	{
@@ -68,23 +68,63 @@ int Video_MJPEG_Init(Video_MJPEG_t *decoder)
 	decoder->stripe[1] = (u16 *)Video_Memory_Alloc(stripe_size);
 	decoder->jpeg_context = Video_Memory_Alloc(sizeof(struct jpeg_decompress_struct));
 	decoder->jpeg_error = Video_Memory_Alloc(sizeof(Video_JpegError_t));
+	decoder->jpeg_provider = Video_Memory_Alloc(sizeof(JPEG_MemoryProvider_t));
+	decoder->jpeg_arena = (u8 *)Video_Memory_Alloc(VIDEO_MJPEG_ARENA_SIZE);
 	if(decoder->source_buffer == NULL || decoder->row_buffer == NULL ||
 	   decoder->stripe[0] == NULL || decoder->stripe[1] == NULL ||
-	   decoder->jpeg_context == NULL || decoder->jpeg_error == NULL)
+	   decoder->jpeg_context == NULL || decoder->jpeg_error == NULL ||
+	   decoder->jpeg_provider == NULL || decoder->jpeg_arena == NULL)
 	{
 		Video_MJPEG_Close(decoder);
 		return 1;
 	}
 
+	cinfo = (struct jpeg_decompress_struct *)decoder->jpeg_context;
+	jerr = (Video_JpegError_t *)decoder->jpeg_error;
+	provider = (JPEG_MemoryProvider_t *)decoder->jpeg_provider;
+	memset(cinfo, 0, sizeof(*cinfo));
+	memset(jerr, 0, sizeof(*jerr));
+	provider->magic = JPEG_MEMORY_PROVIDER_MAGIC;
+	provider->alloc = video_mjpeg_memory_alloc;
+	provider->free = video_mjpeg_memory_free;
+	provider->user_data = decoder;
+	cinfo->err = jpeg_std_error(&jerr->pub);
+	cinfo->client_data = provider;
+	jerr->pub.error_exit = video_mjpeg_error_exit;
+	jerr->message_code = &jpeg_message_code;
+
+	if(setjmp(jerr->jump_buffer) != 0)
+	{
+		if(cinfo->mem != NULL)
+		{
+			jpeg_destroy_decompress(cinfo);
+		}
+		jerr->message_code = NULL;
+		Video_MJPEG_Close(decoder);
+		return 1;
+	}
+
+	jpeg_create_decompress(cinfo);
+	decoder->jpeg_created = 1U;
+	decoder->jpeg_arena_frame_base = decoder->jpeg_arena_position;
+	jerr->message_code = NULL;
 	return 0;
 }
 
 void Video_MJPEG_Close(Video_MJPEG_t *decoder)
 {
+	struct jpeg_decompress_struct *cinfo;
+
 	if(decoder == NULL)
 	{
 		return;
 	}
+	cinfo = (struct jpeg_decompress_struct *)decoder->jpeg_context;
+	if(decoder->jpeg_created != 0U && cinfo != NULL && cinfo->mem != NULL)
+	{
+		jpeg_destroy_decompress(cinfo);
+	}
+	decoder->jpeg_created = 0U;
 	if(decoder->source_buffer != NULL)
 	{
 		Video_Memory_Free(decoder->source_buffer);
@@ -109,6 +149,14 @@ void Video_MJPEG_Close(Video_MJPEG_t *decoder)
 	{
 		Video_Memory_Free(decoder->jpeg_error);
 	}
+	if(decoder->jpeg_provider != NULL)
+	{
+		Video_Memory_Free(decoder->jpeg_provider);
+	}
+	if(decoder->jpeg_arena != NULL)
+	{
+		Video_Memory_Free(decoder->jpeg_arena);
+	}
 	memset(decoder, 0, sizeof(*decoder));
 }
 
@@ -126,19 +174,23 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 	u8 stripe_index = 0U;
 	u16 x;
 	u16 y;
+	u32 lcd_wait_started;
 	volatile int jpeg_message_code = 0;
 	volatile u8 stream_started = 0U;
-	Video_MJPEGResult_t result = VIDEO_MJPEG_FORMAT_ERROR;
+	volatile Video_MJPEGResult_t result = VIDEO_MJPEG_FORMAT_ERROR;
 
 	if(decoder == NULL || file == NULL || chunk == NULL ||
 	   decoder->source_buffer == NULL || decoder->row_buffer == NULL ||
 	   decoder->stripe[0] == NULL || decoder->stripe[1] == NULL ||
 	   decoder->jpeg_context == NULL || decoder->jpeg_error == NULL ||
+	   decoder->jpeg_provider == NULL || decoder->jpeg_arena == NULL ||
+	   decoder->jpeg_created == 0U ||
 	   chunk->data_size == 0U)
 	{
 		return VIDEO_MJPEG_FORMAT_ERROR;
 	}
-	if(f_lseek(file, chunk->data_offset) != FR_OK)
+	if((u32)f_tell(file) != chunk->data_offset &&
+	   f_lseek(file, chunk->data_offset) != FR_OK)
 	{
 		decoder->fatfs_read_errors++;
 		return VIDEO_MJPEG_IO_ERROR;
@@ -146,12 +198,7 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 
 	cinfo = (struct jpeg_decompress_struct *)decoder->jpeg_context;
 	jerr = (Video_JpegError_t *)decoder->jpeg_error;
-	memset(cinfo, 0, sizeof(*cinfo));
-	memset(jerr, 0, sizeof(*jerr));
 	memset(&source, 0, sizeof(source));
-	cinfo->err = jpeg_std_error(&jerr->pub);
-	cinfo->client_data = (void *)&s_video_jpeg_memory_provider;
-	jerr->pub.error_exit = video_mjpeg_error_exit;
 	jerr->message_code = &jpeg_message_code;
 
 	if(setjmp(jerr->jump_buffer) != 0)
@@ -171,7 +218,6 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 		goto cleanup;
 	}
 
-	jpeg_create_decompress(cinfo);
 	video_mjpeg_set_source(cinfo, &source, decoder, file, chunk->data_size);
 	if(jpeg_read_header(cinfo, TRUE) != JPEG_HEADER_OK)
 	{
@@ -226,21 +272,27 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 		if(stripe_rows >= VIDEO_MJPEG_STRIPE_LINES ||
 		   cinfo->output_scanline == cinfo->output_height)
 		{
+			lcd_wait_started = osKernelGetTickCount();
 			if(LCD_StreamWriteAsync(stripe, (u32)stripe_rows * width) != 0U)
 			{
+				video_mjpeg_update_lcd_wait(decoder, lcd_wait_started);
 				result = VIDEO_MJPEG_DISPLAY_ERROR;
 				goto cleanup;
 			}
+			video_mjpeg_update_lcd_wait(decoder, lcd_wait_started);
 			stripe_index ^= 1U;
 			stripe_rows = 0U;
 		}
 	}
 
+	lcd_wait_started = osKernelGetTickCount();
 	if(LCD_StreamWait() != 0U)
 	{
+		video_mjpeg_update_lcd_wait(decoder, lcd_wait_started);
 		result = VIDEO_MJPEG_DISPLAY_ERROR;
 		goto cleanup;
 	}
+	video_mjpeg_update_lcd_wait(decoder, lcd_wait_started);
 	if(jpeg_finish_decompress(cinfo) == FALSE)
 	{
 		result = VIDEO_MJPEG_FORMAT_ERROR;
@@ -253,10 +305,13 @@ cleanup:
 	{
 		LCD_StreamEnd();
 	}
-	if(cinfo->mem != NULL)
+	if(result != VIDEO_MJPEG_OK && decoder->jpeg_created != 0U &&
+	   cinfo->mem != NULL)
 	{
-		jpeg_destroy_decompress(cinfo);
+		jpeg_abort_decompress(cinfo);
 	}
+	video_mjpeg_reset_frame_arena(decoder);
+	jerr->message_code = NULL;
 	return result;
 }
 
@@ -307,6 +362,7 @@ static boolean video_mjpeg_fill_input_buffer(j_decompress_ptr cinfo)
 
 	read_size = (source->remaining < source->buffer_size) ?
 		source->remaining : source->buffer_size;
+	source->decoder->fatfs_read_calls++;
 	if(f_read(source->file, source->buffer, (UINT)read_size, &bytes_read) != FR_OK ||
 	   bytes_read == 0U || bytes_read > read_size)
 	{
@@ -314,6 +370,7 @@ static boolean video_mjpeg_fill_input_buffer(j_decompress_ptr cinfo)
 		ERREXIT(cinfo, JERR_FILE_READ);
 	}
 
+	source->decoder->fatfs_read_bytes += (u32)bytes_read;
 	source->remaining -= (u32)bytes_read;
 	source->pub.next_input_byte = (const JOCTET *)source->buffer;
 	source->pub.bytes_in_buffer = (size_t)bytes_read;
@@ -375,18 +432,61 @@ static void video_mjpeg_convert_row(u16 *destination, const u8 *source, u16 widt
 	}
 }
 
+static void video_mjpeg_reset_frame_arena(Video_MJPEG_t *decoder)
+{
+	if(decoder != NULL)
+	{
+		decoder->jpeg_arena_position = decoder->jpeg_arena_frame_base;
+	}
+}
+
+static void video_mjpeg_update_lcd_wait(Video_MJPEG_t *decoder, u32 started)
+{
+	u32 elapsed;
+
+	if(decoder == NULL)
+	{
+		return;
+	}
+	elapsed = osKernelGetTickCount() - started;
+	decoder->lcd_wait_ticks += elapsed;
+	if(elapsed > decoder->max_lcd_wait_ticks)
+	{
+		decoder->max_lcd_wait_ticks = elapsed;
+	}
+}
+
 static void *video_mjpeg_memory_alloc(void *user_data, size_t size)
 {
-	(void)user_data;
-	if(size > (size_t)0xFFFFFFFFUL)
+	Video_MJPEG_t *decoder = (Video_MJPEG_t *)user_data;
+	u32 aligned_size;
+	u32 position;
+
+	if(decoder == NULL || decoder->jpeg_arena == NULL || size == 0U ||
+	   size > (size_t)(VIDEO_MJPEG_ARENA_SIZE -
+	                   (VIDEO_MJPEG_ARENA_ALIGNMENT - 1U)))
 	{
 		return NULL;
 	}
-	return Video_Memory_Alloc((u32)size);
+	aligned_size = ((u32)size + VIDEO_MJPEG_ARENA_ALIGNMENT - 1U) &
+		~(VIDEO_MJPEG_ARENA_ALIGNMENT - 1U);
+	position = decoder->jpeg_arena_position;
+	if(position > (VIDEO_MJPEG_ARENA_SIZE - aligned_size))
+	{
+		decoder->jpeg_arena_allocation_failures++;
+		return NULL;
+	}
+
+	decoder->jpeg_arena_position = position + aligned_size;
+	if(decoder->jpeg_arena_position > decoder->jpeg_arena_peak_bytes)
+	{
+		decoder->jpeg_arena_peak_bytes = decoder->jpeg_arena_position;
+	}
+	return (void *)&decoder->jpeg_arena[position];
 }
 
 static void video_mjpeg_memory_free(void *user_data, void *pointer)
 {
 	(void)user_data;
-	Video_Memory_Free(pointer);
+	(void)pointer;
 }

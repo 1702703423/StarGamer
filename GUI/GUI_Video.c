@@ -90,7 +90,7 @@ static int GUI_Video_PageBuild(Page_Struct_t *page)
 	config.title = "Video";
 	config.root_path = "0:/";
 	config.empty_text = "No AVI files";
-	config.status_text = "MJPEG AVI";
+	config.status_text = "MJPEG / PCM AVI";
 	config.extensions = s_video_extensions;
 	config.extension_count = (u8)(sizeof(s_video_extensions) /
 	                              sizeof(s_video_extensions[0]));
@@ -240,6 +240,6 @@ static const char *GUI_Video_StateText(Video_State_t state)
 		case VIDEO_STATE_STOPPING:
 			return "Stopping video";
 		default:
-			return "MJPEG AVI";
+			return "MJPEG / PCM AVI";
 	}
 }
