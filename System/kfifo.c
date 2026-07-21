@@ -56,13 +56,19 @@ unsigned int __kfifo_in(struct __kfifo *fifo,
                         const void *buf, unsigned int len)
 {
     unsigned int l;
+    unsigned int in;
+    unsigned int out;
 
-    l = kfifo_unused(fifo);
+    in = fifo->in;
+    out = fifo->out;
+    __DMB();
+    l = (fifo->mask + 1U) - (in - out);
     if (len > l)
         len = l;
 
-    kfifo_copy_in(fifo, buf, len, fifo->in);
-    fifo->in += len;
+    kfifo_copy_in(fifo, buf, len, in);
+    __DMB();
+    fifo->in = in + len;
     return len;
 }
 
@@ -89,8 +95,11 @@ unsigned int __kfifo_out_peek(struct __kfifo *fifo,
                               void *buf, unsigned int len)
 {
     unsigned int l;
+    unsigned int in;
 
-    l = fifo->in - fifo->out;
+    in = fifo->in;
+    __DMB();
+    l = in - fifo->out;
     if (len > l)
         len = l;
 
@@ -101,8 +110,11 @@ unsigned int __kfifo_out_peek(struct __kfifo *fifo,
 unsigned int __kfifo_out(struct __kfifo *fifo,
                          void *buf, unsigned int len)
 {
+    unsigned int out = fifo->out;
+
     len = __kfifo_out_peek(fifo, buf, len);
-    fifo->out += len;
+    __DMB();
+    fifo->out = out + len;
     return len;
 }
 

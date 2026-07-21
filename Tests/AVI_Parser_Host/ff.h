@@ -18,6 +18,7 @@ typedef struct
 } FIL;
 
 #define f_size(file) ((file)->size)
+#define f_tell(file) ((unsigned long)ftell((file)->handle))
 
 FRESULT f_lseek(FIL *file, unsigned long offset);
 FRESULT f_read(FIL *file, void *buffer, UINT size, UINT *bytes_read);

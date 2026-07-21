@@ -11,6 +11,9 @@ extern "C" {
 #define AVI_MAX_LIST_DEPTH      8U
 #define AVI_MAX_STREAMS         8U
 #define AVI_MAX_CHUNK_SIZE      (2UL * 1024UL * 1024UL)
+#define AVI_RESYNC_SCAN_LIMIT   (256UL * 1024UL)
+#define AVI_RESYNC_BUFFER_SIZE  512U
+#define AVI_HEADER_RETRY_LIMIT  2U
 #define AVI_STREAM_INDEX_NONE   0xFFU
 #define AVI_AUDIO_FORMAT_PCM    0x0001U
 
@@ -42,6 +45,7 @@ typedef struct AVI_Chunk
 	u32 fourcc;
 	u32 data_offset;
 	u32 data_size;
+	u8 oversized;
 } AVI_Chunk_t;
 
 typedef struct AVI_Info
@@ -76,6 +80,17 @@ typedef struct AVI_Parser
 	u32 cursor;
 	u32 list_end[AVI_MAX_LIST_DEPTH];
 	u32 list_resume[AVI_MAX_LIST_DEPTH];
+	u32 last_error_offset;
+	u32 last_error_fourcc;
+	u32 last_error_chunk_size;
+	u32 skipped_index_chunks;
+	u32 oversized_chunks;
+	u32 header_retry_count;
+	u32 resync_count;
+	u32 last_resync_from;
+	u32 last_resync_to;
+	s32 last_error_result;
+	u8 resync_buffer[AVI_RESYNC_BUFFER_SIZE];
 	u8 list_depth;
 	AVI_Info_t info;
 } AVI_Parser_t;

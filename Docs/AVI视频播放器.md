@@ -581,7 +581,20 @@ typedef struct AVI_Chunk {
 #define AVI_RESYNC_SCAN_LIMIT       (256U * 1024U)
 ```
 
-`AVI_MAX_CHUNK_SIZE` 是防止损坏文件导致异常 seek 的容器上限，不表示需要分配同等大小的 RAM。最终上限应结合测试视频的单帧大小调整。
+`AVI_MAX_CHUNK_SIZE` 是单个视频帧的处理上限，不是容器有效性的判据。所有 chunk 仍必须位于当前 `LIST`/`movi` 边界内；边界内的 `ix##`/`indx` 索引块和未知 chunk 按声明长度跳过，超过上限的视频帧只丢弃该帧，PCM chunk 继续按流式方式读取。只有长度溢出或越过父级边界时才报告容器损坏。
+
+### 6.6 播放期容错和诊断
+
+若同一 AVI 在 PC 上可完整解析，但在板上固定时间点报 `Invalid AVI container`，优先按运行期读头或音频并发问题处理，而不是直接判定文件损坏。
+
+当前策略：
+
+- chunk 头长度越过当前 `LIST`/`movi` 边界时，先重读同一 8 字节头，最多 `AVI_HEADER_RETRY_LIMIT` 次。
+- 重读仍失败时，在 `AVI_RESYNC_SCAN_LIMIT` 范围内按 2 字节边界搜索当前视频流的 `##dc`，只接受 payload 以 `0xFFD8` 开始且长度仍在父级边界内的候选。
+- 成功重同步后丢弃失步区间，从找到的视频帧继续播放，并记录 `avi_resync_count/from/to`。
+- `avi_error_result/off/fourcc/size` 记录最后一次致命 parser 错误，便于区分坏容器、I/O 失败和 SDIO/FatFs 瞬时读异常。
+
+这个重同步只用于播放期容错，不改变 `AVI_Parser_Open()` 对头部、流参数和 OpenDML 的严格检查。
 
 ---
 
@@ -706,9 +719,9 @@ LCD DMA 完成由 ISR 释放静态 CMSIS-RTOS 信号量。视频任务追上 DMA
 
 ### 8.1 PCM 分段输入
 
-PCM 不需要 codec，但每个 `##wb` payload 必须独立通过 RIFF 边界验证。`Video_PCM_ReadChunkPart()` 每次最多读取 4 KB，读取长度向 `nBlockAlign` 对齐，再写入 32 KB FIFO；chunk 的 RIFF padding 不进入 FIFO。chunk payload 不是块对齐整数倍时按损坏容器退出。
+PCM 不需要 codec，但每个 `##wb` payload 必须独立通过 RIFF 边界验证。`Video_PCM_ReadChunkPart()` 每次最多读取 4 KB，读取长度向 `nBlockAlign` 对齐，再写入 32 KB FIFO；chunk 的 RIFF padding 不进入 FIFO。若 chunk payload 不是块对齐整数倍，播放器只播放有效前缀并丢弃尾部 1 至 3 字节，同时累计 `pcm_tail_bytes_dropped`，避免少量尾字节把整个容器误判为损坏。
 
-FIFO 和 I/O 缓冲均由 `sys_malloc(SRAMEX, ...)` 分配。它们不占用 80 KB 片上视频池，也不会落入 DMA 不可访问的 CCM。播放器维护一个只保存 `AVI_Chunk_t` 和音频 deadline 的 32 项视频元数据队列，因此可以在不缓存压缩视频帧的前提下向前 demux 并建立音频预缓冲。
+FIFO 和 I/O 缓冲均由 `sys_malloc(SRAMEX, ...)` 分配。它们不占用 80 KB 片上视频池，也不会落入 DMA 不可访问的 CCM。PCM FIFO 是单生产者、单消费者模型：视频任务写入，音频 feed 线程读出；`in/out` 发布点使用 `volatile` 和 `__DMB()`，保证先拷贝数据、再发布长度，先读到长度、再读取数据。
 
 ### 8.2 I2S 输出
 
@@ -1011,7 +1024,16 @@ typedef struct Video_Stats {
     u32 audio_dma_events;
     u32 audio_dma_flag_collisions;
     u32 jpeg_eoi_injected;
+    u32 avi_skipped_index_chunks;
+    u32 avi_oversized_chunks;
+    u32 avi_header_retry_count;
     u32 avi_resync_count;
+    u32 avi_resync_from;
+    u32 avi_resync_to;
+    u32 avi_error_offset;
+    u32 avi_error_fourcc;
+    u32 avi_error_chunk_size;
+    u32 pcm_tail_bytes_dropped;
     u32 fatfs_read_errors;
     u32 fatfs_read_calls;
     u32 fatfs_read_bytes;
@@ -1023,6 +1045,8 @@ typedef struct Video_Stats {
     u32 max_sd_read_us;
     u32 max_jpeg_decode_us;
     u32 max_lcd_transfer_us;
+    s32 avi_error_result;
+    s32 pcm_last_result;
 } Video_Stats_t;
 ```
 
@@ -1035,6 +1059,7 @@ typedef struct Video_Stats {
 - 丢帧率。
 - underrun 次数。
 - 视频池峰值、最大连续空闲块和栈高水位。
+- AVI parser 最后错误、header 重读次数、重同步区间、索引跳过数和 PCM 尾字节丢弃数。
 
 发布版本仍应保留计数器，避免性能问题只能通过主观观察判断。
 
@@ -1121,8 +1146,11 @@ typedef struct Video_Stats {
 | 单数长度 chunk | 正确处理 padding |
 | 含未知 `JUNK`/`LIST rec ` | 合法跳过或遍历 |
 | 截断 JPEG frame | 记录错误，按策略跳帧或退出 |
-| PCM chunk 不是 `nBlockAlign` 整数倍 | 不越界，报告容器错误 |
-| 损坏超大 chunk length | 打开或播放阶段拒绝 |
+| PCM chunk 不是 `nBlockAlign` 整数倍 | 播放有效前缀，丢弃尾部 1 至 3 字节并计数 |
+| chunk length 越过父级边界 | 打开或播放阶段拒绝 |
+| 播放期坏 chunk 头后存在合法 `##dc` | 有界重同步并继续播放，记录 from/to |
+| 边界内超大视频 chunk | 丢弃当前帧并继续播放 |
+| `ix##`/`indx` 索引 chunk | 按声明长度跳过并继续播放 |
 | H.264 AVI | 明确报告 unsupported |
 | MP3/AAC AVI | 明确报告 unsupported audio，不静音误播 |
 | 超过 320×240 | 明确报告分辨率不支持 |

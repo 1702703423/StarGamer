@@ -61,12 +61,37 @@ int main(int argc, char **argv)
 	u32 audio_chunks = 0U;
 	u32 unknown_chunks = 0U;
 	u32 first_video_header = 0U;
+	u32 audio_bytes = 0U;
+	u32 window_video_chunks = 0U;
+	u32 window_audio_chunks = 0U;
+	u32 window_audio_bytes = 0U;
+	u32 window_audio_min = 0xFFFFFFFFUL;
+	u32 window_audio_max = 0U;
+	u32 window_audio_misaligned = 0U;
+	u32 window_bad_soi = 0U;
+	u32 window_bad_eoi = 0U;
+	u32 window_start_us = 0U;
+	u32 window_end_us = 0U;
+	u8 marker[2];
+	u8 trace_window = 0U;
+	UINT marker_read = 0U;
 	int result;
 
-	if(argc != 2)
+	if(argc != 2 && argc != 4)
 	{
-		fprintf(stderr, "usage: avi_parser_host <file.avi>\n");
+		fprintf(stderr, "usage: avi_parser_host <file.avi> [start_sec end_sec]\n");
 		return 2;
+	}
+	if(argc == 4)
+	{
+		window_start_us = (u32)strtoul(argv[2], NULL, 10) * 1000000UL;
+		window_end_us = (u32)strtoul(argv[3], NULL, 10) * 1000000UL;
+		if(window_end_us <= window_start_us)
+		{
+			fprintf(stderr, "invalid time window\n");
+			return 2;
+		}
+		trace_window = 1U;
 	}
 	if(open_host_file(argv[1], &file) == 0)
 	{
@@ -99,6 +124,9 @@ int main(int argc, char **argv)
 
 	while((result = AVI_Parser_Next(&parser, &chunk)) == AVI_PARSER_OK)
 	{
+		u32 chunk_time_us = 0U;
+		u8 in_window = 0U;
+
 		if(chunk.data_offset > parser.file_size ||
 		   chunk.data_size > (parser.file_size - chunk.data_offset))
 		{
@@ -108,14 +136,75 @@ int main(int argc, char **argv)
 		}
 		if(chunk.type == AVI_CHUNK_VIDEO)
 		{
+			chunk_time_us = video_chunks * info->frame_duration_us;
+			in_window = (trace_window != 0U &&
+			             chunk_time_us >= window_start_us &&
+			             chunk_time_us < window_end_us) ? 1U : 0U;
 			if(video_chunks == 0U)
 			{
 				first_video_header = chunk.data_offset - 8U;
+			}
+			if(in_window != 0U)
+			{
+				window_video_chunks++;
+				if(chunk.data_size < 2U ||
+				   f_lseek(&file, chunk.data_offset) != FR_OK ||
+				   f_read(&file, marker, sizeof(marker), &marker_read) != FR_OK ||
+				   marker_read != (UINT)sizeof(marker) || marker[0] != 0xFFU ||
+				   marker[1] != 0xD8U)
+				{
+					window_bad_soi++;
+				}
+				if(chunk.data_size < 2U ||
+				   f_lseek(&file, chunk.data_offset + chunk.data_size - 2U) != FR_OK ||
+				   f_read(&file, marker, sizeof(marker), &marker_read) != FR_OK ||
+				   marker_read != (UINT)sizeof(marker) || marker[0] != 0xFFU ||
+				   marker[1] != 0xD9U)
+				{
+					window_bad_eoi++;
+				}
+				printf("V frame=%lu time_ms=%lu off=0x%08lX size=%lu\n",
+				       (unsigned long)video_chunks,
+				       (unsigned long)(chunk_time_us / 1000U),
+				       (unsigned long)(chunk.data_offset - 8U),
+				       (unsigned long)chunk.data_size);
 			}
 			video_chunks++;
 		}
 		else if(chunk.type == AVI_CHUNK_AUDIO)
 		{
+			if(info->audio_average_bytes_per_second != 0U)
+			{
+				chunk_time_us = (u32)(((unsigned long long)audio_bytes * 1000000ULL) /
+				                      info->audio_average_bytes_per_second);
+			}
+			in_window = (trace_window != 0U &&
+			             chunk_time_us >= window_start_us &&
+			             chunk_time_us < window_end_us) ? 1U : 0U;
+			if(in_window != 0U)
+			{
+				window_audio_chunks++;
+				window_audio_bytes += chunk.data_size;
+				if(chunk.data_size < window_audio_min)
+				{
+					window_audio_min = chunk.data_size;
+				}
+				if(chunk.data_size > window_audio_max)
+				{
+					window_audio_max = chunk.data_size;
+				}
+				if(info->audio_block_align == 0U ||
+				   (chunk.data_size % info->audio_block_align) != 0U)
+				{
+					window_audio_misaligned++;
+					printf("A MISALIGNED time_ms=%lu off=0x%08lX size=%lu align=%u\n",
+					       (unsigned long)(chunk_time_us / 1000U),
+					       (unsigned long)(chunk.data_offset - 8U),
+					       (unsigned long)chunk.data_size,
+					       (unsigned int)info->audio_block_align);
+				}
+			}
+			audio_bytes += chunk.data_size;
 			audio_chunks++;
 		}
 		else
@@ -129,6 +218,18 @@ int main(int argc, char **argv)
 	       (unsigned long)unknown_chunks,
 	       (unsigned long)first_video_header,
 	       result);
+	if(trace_window != 0U)
+	{
+		printf("window video=%lu bad_soi=%lu bad_eoi=%lu audio=%lu bytes=%lu min=%lu max=%lu misaligned=%lu\n",
+		       (unsigned long)window_video_chunks,
+		       (unsigned long)window_bad_soi,
+		       (unsigned long)window_bad_eoi,
+		       (unsigned long)window_audio_chunks,
+		       (unsigned long)window_audio_bytes,
+		       (unsigned long)((window_audio_chunks != 0U) ? window_audio_min : 0U),
+		       (unsigned long)window_audio_max,
+		       (unsigned long)window_audio_misaligned);
+	}
 	fclose(file.handle);
 	return (result == AVI_PARSER_EOF && video_chunks > 0U) ? 0 : 1;
 }

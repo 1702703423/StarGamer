@@ -90,6 +90,18 @@ typedef struct Video_Stats
 	u32 pending_audio_chunks;
 	u32 audio_prebuffer_bytes;
 	u32 audio_deadline_frames;
+	u32 avi_skipped_index_chunks;
+	u32 avi_oversized_chunks;
+	u32 avi_header_retry_count;
+	u32 avi_resync_count;
+	u32 avi_resync_from;
+	u32 avi_resync_to;
+	u32 avi_error_offset;
+	u32 avi_error_fourcc;
+	u32 avi_error_chunk_size;
+	u32 pcm_tail_bytes_dropped;
+	s32 avi_error_result;
+	s32 pcm_last_result;
 } Video_Stats_t;
 
 int Video_Init(void);

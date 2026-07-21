@@ -10,4 +10,8 @@ typedef int8_t s8;
 typedef int16_t s16;
 typedef int32_t s32;
 
+#ifndef __DMB
+#define __DMB() ((void)0)
+#endif
+
 #endif

@@ -106,6 +106,7 @@ static u8 video_pcm_should_drop_frame(Video_Context_t *context,
 static u8 video_clear_display(Video_Context_t *context);
 static void video_wait_key_release(void);
 static void video_update_max(u32 *maximum, u32 value);
+static void video_update_parser_stats(Video_Context_t *context);
 static void video_update_mjpeg_stats(Video_Context_t *context);
 static void video_update_pcm_stats(Video_Context_t *context);
 static void video_update_memory_stats(Video_Context_t *context);
@@ -291,6 +292,7 @@ int Video_GetStats(Video_Stats_t *stats)
 	}
 	video_update_pcm_stats(s_video);
 	video_update_mjpeg_stats(s_video);
+	video_update_parser_stats(s_video);
 	video_update_memory_stats(s_video);
 	if(s_video->thread_id != NULL && s_video->exit_tick == 0U)
 	{
@@ -474,6 +476,12 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 			continue;
 		}
 		context->stats.video_chunks++;
+		if(chunk.oversized != 0U)
+		{
+			context->stats.video_frames_dropped++;
+			video_advance_deadline(context, &deadline);
+			continue;
+		}
 
 		if(video_wait_deadline(context, &deadline) == VIDEO_CONTROL_STOP)
 		{
@@ -582,6 +590,17 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 		}
 
 		context->stats.video_chunks++;
+		if(chunk.oversized != 0U)
+		{
+			context->stats.video_frames_dropped++;
+			video_advance_audio_deadline(context);
+			error = video_skip_chunk_payload(context, &chunk);
+			if(error != VIDEO_RESULT_OK)
+			{
+				return error;
+			}
+			continue;
+		}
 		if(first_frame_displayed == 0U)
 		{
 			error = video_decode_frame(context, &chunk);
@@ -711,6 +730,17 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 		}
 
 		context->stats.video_chunks++;
+		if(chunk.oversized != 0U)
+		{
+			context->stats.video_frames_dropped++;
+			video_advance_audio_deadline(context);
+			error = video_skip_chunk_payload(context, &chunk);
+			if(error != VIDEO_RESULT_OK)
+			{
+				return error;
+			}
+			continue;
+		}
 		error = video_pcm_wait_for_frame(context, context->audio_deadline_frames);
 		if(error != VIDEO_RESULT_OK)
 		{
@@ -805,6 +835,8 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 {
 	u8 control;
 	int result;
+	u32 aligned_size;
+	u32 tail_size;
 
 	if(context == NULL)
 	{
@@ -813,14 +845,18 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 	if(chunk != NULL)
 	{
 		if(context->active_audio_pending != 0U ||
-		   (chunk->data_size % context->pcm.block_align) != 0U)
+		   context->pcm.block_align == 0U)
 		{
-			return VIDEO_RESULT_BAD_CONTAINER;
+			context->stats.pcm_last_result = VIDEO_PCM_FORMAT_ERROR;
+			return VIDEO_RESULT_AUDIO_FAILED;
 		}
+		tail_size = chunk->data_size % context->pcm.block_align;
+		aligned_size = chunk->data_size - tail_size;
+		context->stats.pcm_tail_bytes_dropped += tail_size;
 		context->active_audio_offset = chunk->data_offset;
-		context->active_audio_remaining = chunk->data_size;
+		context->active_audio_remaining = aligned_size;
 		context->active_audio_end = video_chunk_end(chunk);
-		context->active_audio_pending = (chunk->data_size != 0U) ? 1U : 0U;
+		context->active_audio_pending = (aligned_size != 0U) ? 1U : 0U;
 		if(context->active_audio_pending == 0U)
 		{
 			return video_skip_chunk_payload(context, chunk);
@@ -867,8 +903,16 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 		}
 		if(result != VIDEO_PCM_OK)
 		{
-			return (result == VIDEO_PCM_IO_ERROR) ?
-				VIDEO_RESULT_IO_FAILED : VIDEO_RESULT_BAD_CONTAINER;
+			context->stats.pcm_last_result = (s32)result;
+			if(result == VIDEO_PCM_IO_ERROR)
+			{
+				return VIDEO_RESULT_IO_FAILED;
+			}
+			if(result == VIDEO_PCM_FORMAT_ERROR)
+			{
+				return VIDEO_RESULT_BAD_CONTAINER;
+			}
+			return VIDEO_RESULT_AUDIO_FAILED;
 		}
 		if(context->active_audio_remaining == 0U)
 		{
@@ -1055,6 +1099,7 @@ static void video_finish(Video_Context_t *context, Video_Result_t result)
 		return;
 	}
 	context->state = VIDEO_STATE_STOPPING;
+	video_update_parser_stats(context);
 	if(context->pcm_opened != 0U)
 	{
 		video_update_pcm_stats(context);
@@ -1353,6 +1398,25 @@ static void video_update_max(u32 *maximum, u32 value)
 	}
 }
 
+static void video_update_parser_stats(Video_Context_t *context)
+{
+	if(context == NULL)
+	{
+		return;
+	}
+	context->stats.avi_skipped_index_chunks =
+		context->parser.skipped_index_chunks;
+	context->stats.avi_oversized_chunks = context->parser.oversized_chunks;
+	context->stats.avi_header_retry_count = context->parser.header_retry_count;
+	context->stats.avi_resync_count = context->parser.resync_count;
+	context->stats.avi_resync_from = context->parser.last_resync_from;
+	context->stats.avi_resync_to = context->parser.last_resync_to;
+	context->stats.avi_error_offset = context->parser.last_error_offset;
+	context->stats.avi_error_fourcc = context->parser.last_error_fourcc;
+	context->stats.avi_error_chunk_size = context->parser.last_error_chunk_size;
+	context->stats.avi_error_result = context->parser.last_error_result;
+}
+
 static void video_update_mjpeg_stats(Video_Context_t *context)
 {
 	if(context == NULL || context->mjpeg_opened == 0U)
@@ -1440,6 +1504,16 @@ static void video_reset_stats(Video_Context_t *context)
 	context->pcm_fatfs_read_errors = 0U;
 	context->pcm_fatfs_read_calls = 0U;
 	context->pcm_fatfs_read_bytes = 0U;
+	context->parser.last_error_offset = 0U;
+	context->parser.last_error_fourcc = 0U;
+	context->parser.last_error_chunk_size = 0U;
+	context->parser.last_error_result = 0;
+	context->parser.skipped_index_chunks = 0U;
+	context->parser.oversized_chunks = 0U;
+	context->parser.header_retry_count = 0U;
+	context->parser.resync_count = 0U;
+	context->parser.last_resync_from = 0U;
+	context->parser.last_resync_to = 0U;
 	context->mjpeg.jpeg_eoi_injected = 0U;
 	context->mjpeg.fatfs_read_errors = 0U;
 	context->mjpeg.fatfs_read_calls = 0U;
@@ -1518,6 +1592,7 @@ int video_stats_cmd(int argc, char *argv[])
 	AVI_Info_t info;
 	char handler[5];
 	char compression[5];
+	char error_fourcc[5];
 	u32 fps_x1000 = 0U;
 	u32 busy = 0U;
 
@@ -1541,6 +1616,7 @@ int video_stats_cmd(int argc, char *argv[])
 	(void)Video_GetInfo(&info);
 	video_shell_fourcc(handler, info.video_handler);
 	video_shell_fourcc(compression, info.video_compression);
+	video_shell_fourcc(error_fourcc, stats.avi_error_fourcc);
 	if(info.video_scale != 0U)
 	{
 		fps_x1000 = (info.video_rate / info.video_scale) * 1000U;
@@ -1628,6 +1704,20 @@ int video_stats_cmd(int argc, char *argv[])
 	                  (unsigned long)stats.fatfs_read_bytes,
 	                  (unsigned long)stats.fatfs_read_errors,
 	                  (unsigned long)stats.jpeg_eoi_injected);
+	shellPrintEndLine(&shell, "  avi err=%ld off=0x%08lX fourcc=%s size=%lu index_skip=%lu oversize=%lu pcm_tail=%lu\r\n",
+	                  (long)stats.avi_error_result,
+	                  (unsigned long)stats.avi_error_offset,
+	                  error_fourcc,
+	                  (unsigned long)stats.avi_error_chunk_size,
+	                  (unsigned long)stats.avi_skipped_index_chunks,
+	                  (unsigned long)stats.avi_oversized_chunks,
+	                  (unsigned long)stats.pcm_tail_bytes_dropped);
+	shellPrintEndLine(&shell, "  avi retry=%lu resync=%lu from=0x%08lX to=0x%08lX pcm_result=%ld\r\n",
+	                  (unsigned long)stats.avi_header_retry_count,
+	                  (unsigned long)stats.avi_resync_count,
+	                  (unsigned long)stats.avi_resync_from,
+	                  (unsigned long)stats.avi_resync_to,
+	                  (long)stats.pcm_last_result);
 	shellPrintEndLine(&shell, "  jpeg_arena_peak=%lu arena_fail=%lu task_stack_free=%lu\r\n",
 	                  (unsigned long)stats.jpeg_arena_peak_bytes,
 	                  (unsigned long)stats.jpeg_arena_allocation_failures,

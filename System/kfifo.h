@@ -23,8 +23,8 @@
  */
 
 struct __kfifo {
-    unsigned int    in;
-    unsigned int    out;
+    volatile unsigned int in;
+    volatile unsigned int out;
     unsigned int    mask;
     unsigned int    esize;
     void        *data;
