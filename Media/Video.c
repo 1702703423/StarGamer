@@ -23,11 +23,17 @@ extern Shell shell;
 #define VIDEO_KEY_RELEASE_TIMEOUT_TICKS   1000U
 #define VIDEO_MAX_CONSECUTIVE_JPEG_ERRORS 8U
 #define VIDEO_PCM_WAIT_TICKS              2U
+#define VIDEO_HUD_DURATION_MS             800U
+#define VIDEO_HUD_HEIGHT                  VIDEO_MJPEG_STRIPE_LINES
+#define VIDEO_HUD_TEXT_SIZE               16U
 
 #define VIDEO_FLAG_PAUSE                  (1UL << 0)
 #define VIDEO_FLAG_RESUME                 (1UL << 1)
 #define VIDEO_FLAG_STOP                   (1UL << 2)
-#define VIDEO_FLAG_CONTROL_MASK           (VIDEO_FLAG_PAUSE | VIDEO_FLAG_RESUME | VIDEO_FLAG_STOP)
+#define VIDEO_FLAG_SEEK                   (1UL << 3)
+#define VIDEO_FLAG_VOLUME                 (1UL << 4)
+#define VIDEO_FLAG_CONTROL_MASK           (VIDEO_FLAG_PAUSE | VIDEO_FLAG_RESUME | \
+	VIDEO_FLAG_STOP | VIDEO_FLAG_SEEK | VIDEO_FLAG_VOLUME)
 #define VIDEO_FLAG_THREAD_MASK            VIDEO_FLAG_CONTROL_MASK
 
 #define VIDEO_CONTROL_NONE                0U
@@ -35,6 +41,7 @@ extern Shell shell;
 #define VIDEO_CONTROL_RESUME              2U
 #define VIDEO_CONTROL_STOP                3U
 #define VIDEO_CONTROL_ERROR               4U
+#define VIDEO_CONTROL_SEEK                5U
 
 typedef struct Video_Context
 {
@@ -49,6 +56,8 @@ typedef struct Video_Context
 	volatile Video_State_t state;
 	volatile Video_Result_t result;
 	volatile u32 exit_tick;
+	volatile u32 pending_seek_permille;
+	volatile u32 pending_volume;
 	u32 key_previous;
 	u32 deadline_whole_ticks;
 	u32 deadline_fraction_ticks;
@@ -64,12 +73,18 @@ typedef struct Video_Context
 	u32 pcm_fatfs_read_errors;
 	u32 pcm_fatfs_read_calls;
 	u32 pcm_fatfs_read_bytes;
+	u32 hud_until_tick;
+	Video_PCMStats_t pcm_accumulated;
+	char hud_text[VIDEO_HUD_TEXT_SIZE];
 	u8 file_opened;
 	u8 mjpeg_opened;
 	u8 pcm_opened;
 	u8 demux_eof;
 	u8 active_audio_pending;
 	u8 lcd_owned;
+	u8 seek_pending;
+	u8 resume_after_seek;
+	u8 hud_visible;
 } Video_Context_t;
 
 typedef StaticTask_t osStaticThreadDef_t;
@@ -85,6 +100,7 @@ static Video_Result_t video_run_silent(Video_Context_t *context);
 static Video_Result_t video_run_pcm(Video_Context_t *context);
 static Video_Result_t video_decode_frame(Video_Context_t *context,
 	const AVI_Chunk_t *chunk);
+static Video_Result_t video_execute_seek(Video_Context_t *context);
 static Video_Result_t video_skip_chunk_payload(Video_Context_t *context,
 	const AVI_Chunk_t *chunk);
 static u32 video_chunk_end(const AVI_Chunk_t *chunk);
@@ -104,6 +120,10 @@ static Video_Result_t video_pcm_wait_for_frame(Video_Context_t *context,
 static u8 video_pcm_should_drop_frame(Video_Context_t *context,
 	u32 deadline_frames);
 static u8 video_clear_display(Video_Context_t *context);
+static void video_accumulate_pcm_stats(Video_Context_t *context);
+static void video_set_hud_value(Video_Context_t *context,
+	const char *prefix, u32 value);
+static void video_draw_hud(Video_Context_t *context, u8 force);
 static void video_wait_key_release(void);
 static void video_update_max(u32 *maximum, u32 value);
 static void video_update_parser_stats(Video_Context_t *context);
@@ -158,6 +178,8 @@ int Video_Play(const char *path)
 	context->state = VIDEO_STATE_OPENING;
 	context->result = VIDEO_RESULT_OK;
 	context->key_previous = KEY_GetState();
+	context->pending_volume = (u32)Video_GetVolume();
+	context->resume_after_seek = 1U;
 	Video_Memory_ResetStats();
 	__DMB();
 
@@ -218,6 +240,76 @@ int Video_Resume(void)
 int Video_TogglePause(void)
 {
 	return (Video_GetState() == VIDEO_STATE_PAUSED) ? Video_Resume() : Video_Pause();
+}
+
+int Video_SeekPermille(u16 position)
+{
+	u32 flags;
+	Video_Context_t *context = s_video;
+
+	if(context == NULL || context->thread_id == NULL ||
+	   position > VIDEO_SEEK_MAX_PERMILLE ||
+	   (context->state != VIDEO_STATE_PLAYING &&
+	    context->state != VIDEO_STATE_PREBUFFER &&
+	    context->state != VIDEO_STATE_PAUSED))
+	{
+		return OPERATE_FAILED;
+	}
+	context->pending_seek_permille = (u32)position;
+	__DMB();
+	flags = osThreadFlagsSet(context->thread_id, VIDEO_FLAG_SEEK);
+	return ((flags & osFlagsError) == 0U) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
+u16 Video_GetPositionPermille(void)
+{
+	Video_Context_t *context = s_video;
+	u16 position;
+
+	if(context == NULL)
+	{
+		return 0U;
+	}
+	__DMB();
+	position = AVI_Parser_GetPositionPermille(&context->parser);
+	__DMB();
+	return position;
+}
+
+int Video_SetVolume(int volume)
+{
+	u32 flags;
+	Video_Context_t *context = s_video;
+
+	if(volume < 0 || volume > (int)VIDEO_VOLUME_MAX)
+	{
+		return OPERATE_FAILED;
+	}
+	if(context == NULL || context->thread_id == NULL ||
+	   context->exit_tick != 0U)
+	{
+		return (audio_card_chg_volume(volume) == 0) ?
+		       SYSTEM_STATUS_OK : OPERATE_FAILED;
+	}
+	context->pending_volume = (u32)volume;
+	__DMB();
+	flags = osThreadFlagsSet(context->thread_id, VIDEO_FLAG_VOLUME);
+	return ((flags & osFlagsError) == 0U) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
+u8 Video_GetVolume(void)
+{
+	int volume = audio_card_get_volume();
+
+	if(volume < 0)
+	{
+		volume = 0;
+	}
+	if(volume > (int)VIDEO_VOLUME_MAX)
+	{
+		volume = (int)VIDEO_VOLUME_MAX;
+	}
+	return (u8)volume;
 }
 
 int Video_Stop(void)
@@ -294,6 +386,8 @@ int Video_GetStats(Video_Stats_t *stats)
 	video_update_mjpeg_stats(s_video);
 	video_update_parser_stats(s_video);
 	video_update_memory_stats(s_video);
+	s_video->stats.position_permille = (u32)Video_GetPositionPermille();
+	s_video->stats.volume = (u32)Video_GetVolume();
 	if(s_video->thread_id != NULL && s_video->exit_tick == 0U)
 	{
 		s_video->stats.task_stack_space = osThreadGetStackSpace(s_video->thread_id);
@@ -428,10 +522,11 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 {
 	AVI_Chunk_t chunk;
 	Video_Result_t decode_result;
-	u32 deadline = osKernelGetTickCount();
+	u32 deadline;
 	u32 drop_threshold;
 	u32 now;
 	u8 control;
+	u8 pause_after_frame = 0U;
 	int parser_result;
 
 	drop_threshold = context->deadline_whole_ticks +
@@ -440,13 +535,33 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 	{
 		drop_threshold = 1U;
 	}
+	deadline = osKernelGetTickCount();
 	context->state = VIDEO_STATE_PLAYING;
 	while(1)
 	{
+		if(context->seek_pending != 0U)
+		{
+			decode_result = video_execute_seek(context);
+			if(decode_result != VIDEO_RESULT_OK)
+			{
+				return decode_result;
+			}
+			deadline = osKernelGetTickCount();
+			pause_after_frame =
+				(context->resume_after_seek == 0U) ? 1U : 0U;
+			if(pause_after_frame == 0U)
+			{
+				context->state = VIDEO_STATE_PLAYING;
+			}
+		}
 		control = video_process_controls(context, 0U);
 		if(control == VIDEO_CONTROL_STOP)
 		{
 			return VIDEO_RESULT_USER_STOP;
+		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			continue;
 		}
 		if(context->state == VIDEO_STATE_PAUSED ||
 		   control == VIDEO_CONTROL_PAUSE)
@@ -459,6 +574,10 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 			if(control == VIDEO_CONTROL_ERROR)
 			{
 				return VIDEO_RESULT_AUDIO_FAILED;
+			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				continue;
 			}
 		}
 
@@ -483,9 +602,14 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 			continue;
 		}
 
-		if(video_wait_deadline(context, &deadline) == VIDEO_CONTROL_STOP)
+		control = video_wait_deadline(context, &deadline);
+		if(control == VIDEO_CONTROL_STOP)
 		{
 			return VIDEO_RESULT_USER_STOP;
+		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			continue;
 		}
 		now = osKernelGetTickCount();
 		if((s32)(now - deadline) > (s32)drop_threshold)
@@ -501,6 +625,20 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 		{
 			return decode_result;
 		}
+		if(pause_after_frame != 0U)
+		{
+			context->state = VIDEO_STATE_PAUSED;
+			pause_after_frame = 0U;
+			control = video_pause_loop(context, &deadline);
+			if(control == VIDEO_CONTROL_STOP)
+			{
+				return VIDEO_RESULT_USER_STOP;
+			}
+			if(control == VIDEO_CONTROL_ERROR)
+			{
+				return VIDEO_RESULT_AUDIO_FAILED;
+			}
+		}
 	}
 }
 
@@ -514,6 +652,17 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 	u8 first_frame_displayed = 0U;
 	u32 target_bytes;
 
+video_pcm_restart:
+	first_frame_displayed = 0U;
+	if(context->seek_pending != 0U)
+	{
+		error = video_execute_seek(context);
+		if(error != VIDEO_RESULT_OK)
+		{
+			return error;
+		}
+	}
+	context->state = VIDEO_STATE_PREBUFFER;
 	while(context->demux_eof == 0U &&
 	      (first_frame_displayed == 0U ||
 	       Video_PCM_GetBufferedBytes(&context->pcm) < context->pcm.prebuffer_bytes))
@@ -523,12 +672,20 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 		{
 			return VIDEO_RESULT_USER_STOP;
 		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			goto video_pcm_restart;
+		}
 		if(control == VIDEO_CONTROL_PAUSE)
 		{
 			control = video_pause_loop(context, NULL);
 			if(control == VIDEO_CONTROL_STOP)
 			{
 				return VIDEO_RESULT_USER_STOP;
+			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				goto video_pcm_restart;
 			}
 		}
 
@@ -541,6 +698,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 			if(error != VIDEO_RESULT_OK)
 			{
 				return error;
+			}
+			if(context->seek_pending != 0U)
+			{
+				goto video_pcm_restart;
 			}
 			if(context->active_audio_pending != 0U)
 			{
@@ -576,6 +737,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 			if(error != VIDEO_RESULT_OK)
 			{
 				return error;
+			}
+			if(context->seek_pending != 0U)
+			{
+				goto video_pcm_restart;
 			}
 			continue;
 		}
@@ -627,7 +792,9 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 	}
 	if(Video_PCM_GetBufferedBytes(&context->pcm) == 0U)
 	{
-		return VIDEO_RESULT_BAD_CONTAINER;
+		return (context->stats.seek_count != 0U &&
+		        context->demux_eof != 0U) ?
+		       VIDEO_RESULT_EOF : VIDEO_RESULT_BAD_CONTAINER;
 	}
 	start_result = Video_PCM_Start(&context->pcm);
 	if(start_result != VIDEO_PCM_OK)
@@ -636,9 +803,35 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 		       VIDEO_RESULT_BAD_CONTAINER : VIDEO_RESULT_AUDIO_FAILED;
 	}
 	context->state = VIDEO_STATE_PLAYING;
+	if(context->resume_after_seek == 0U)
+	{
+		if(Video_PCM_Pause(&context->pcm) != VIDEO_PCM_OK)
+		{
+			return VIDEO_RESULT_AUDIO_FAILED;
+		}
+		context->state = VIDEO_STATE_PAUSED;
+		control = video_pause_loop(context, NULL);
+		if(control == VIDEO_CONTROL_STOP)
+		{
+			return VIDEO_RESULT_USER_STOP;
+		}
+		if(control == VIDEO_CONTROL_ERROR)
+		{
+			return VIDEO_RESULT_AUDIO_FAILED;
+		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			goto video_pcm_restart;
+		}
+		context->resume_after_seek = 1U;
+	}
 
 	while(1)
 	{
+		if(context->seek_pending != 0U)
+		{
+			goto video_pcm_restart;
+		}
 		if(Video_PCM_CheckHealth(&context->pcm) != VIDEO_PCM_OK)
 		{
 			return VIDEO_RESULT_AUDIO_FAILED;
@@ -647,6 +840,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 		if(control == VIDEO_CONTROL_STOP)
 		{
 			return VIDEO_RESULT_USER_STOP;
+		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			goto video_pcm_restart;
 		}
 		if(context->state == VIDEO_STATE_PAUSED ||
 		   control == VIDEO_CONTROL_PAUSE)
@@ -660,6 +857,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 			{
 				return VIDEO_RESULT_AUDIO_FAILED;
 			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				goto video_pcm_restart;
+			}
 		}
 
 		if(context->active_audio_pending != 0U)
@@ -668,6 +869,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 			if(error != VIDEO_RESULT_OK)
 			{
 				return error;
+			}
+			if(context->seek_pending != 0U)
+			{
+				goto video_pcm_restart;
 			}
 			continue;
 		}
@@ -682,6 +887,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 			{
 				return VIDEO_RESULT_USER_STOP;
 			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				goto video_pcm_restart;
+			}
 			if(control == VIDEO_CONTROL_PAUSE)
 			{
 				control = video_pause_loop(context, NULL);
@@ -692,6 +901,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 				if(control == VIDEO_CONTROL_ERROR)
 				{
 					return VIDEO_RESULT_AUDIO_FAILED;
+				}
+				if(control == VIDEO_CONTROL_SEEK)
+				{
+					goto video_pcm_restart;
 				}
 			}
 			continue;
@@ -716,6 +929,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 			if(error != VIDEO_RESULT_OK)
 			{
 				return error;
+			}
+			if(context->seek_pending != 0U)
+			{
+				goto video_pcm_restart;
 			}
 			continue;
 		}
@@ -745,6 +962,10 @@ static Video_Result_t video_run_pcm(Video_Context_t *context)
 		if(error != VIDEO_RESULT_OK)
 		{
 			return error;
+		}
+		if(context->seek_pending != 0U)
+		{
+			goto video_pcm_restart;
 		}
 		if(video_pcm_should_drop_frame(context, context->audio_deadline_frames) != 0U)
 		{
@@ -787,6 +1008,7 @@ static Video_Result_t video_decode_frame(Video_Context_t *context,
 		context->stats.video_frames_decoded++;
 		context->stats.video_frames_displayed++;
 		context->consecutive_jpeg_errors = 0U;
+		video_draw_hud(context, 0U);
 		return VIDEO_RESULT_OK;
 	}
 
@@ -798,6 +1020,72 @@ static Video_Result_t video_decode_frame(Video_Context_t *context,
 		return VIDEO_RESULT_OK;
 	}
 	return video_map_mjpeg_result(decode_result);
+}
+
+static Video_Result_t video_execute_seek(Video_Context_t *context)
+{
+	u16 target;
+	int pcm_result;
+	int parser_result;
+
+	if(context == NULL || context->seek_pending == 0U)
+	{
+		return VIDEO_RESULT_OK;
+	}
+	__DMB();
+	target = (u16)context->pending_seek_permille;
+	__DMB();
+	context->seek_pending = 0U;
+	context->state = VIDEO_STATE_PREBUFFER;
+
+	if(context->pcm_opened != 0U)
+	{
+		video_accumulate_pcm_stats(context);
+		Video_PCM_Close(&context->pcm);
+		context->pcm_opened = 0U;
+	}
+	if(context->mjpeg_opened == 0U ||
+	   Video_MJPEG_Reset(&context->mjpeg) != 0)
+	{
+		context->stats.seek_failures++;
+		return VIDEO_RESULT_DECODE_FAILED;
+	}
+
+	context->demux_eof = 0U;
+	context->active_audio_pending = 0U;
+	context->active_audio_offset = 0U;
+	context->active_audio_remaining = 0U;
+	context->active_audio_end = 0U;
+	context->consecutive_jpeg_errors = 0U;
+	parser_result = AVI_Parser_SeekPermille(&context->parser, target);
+	if(parser_result != AVI_PARSER_OK)
+	{
+		context->stats.seek_failures++;
+		return video_map_parser_result(parser_result);
+	}
+
+	if((context->info.has_audio != 0U &&
+	    video_prepare_audio_clock(context) == 0U) ||
+	   (context->info.has_audio == 0U && video_prepare_clock(context) == 0U))
+	{
+		context->stats.seek_failures++;
+		return VIDEO_RESULT_UNSUPPORTED;
+	}
+	if(context->info.has_audio != 0U)
+	{
+		pcm_result = Video_PCM_Open(&context->pcm, &context->info);
+		if(pcm_result != VIDEO_PCM_OK)
+		{
+			context->stats.seek_failures++;
+			return (pcm_result == VIDEO_PCM_MEMORY_ERROR) ?
+			       VIDEO_RESULT_NO_MEMORY : VIDEO_RESULT_AUDIO_FAILED;
+		}
+		context->pcm_opened = 1U;
+	}
+	context->stats.seek_count++;
+	context->stats.position_permille =
+		(u32)AVI_Parser_GetPositionPermille(&context->parser);
+	return VIDEO_RESULT_OK;
 }
 
 static Video_Result_t video_skip_chunk_payload(Video_Context_t *context,
@@ -887,6 +1175,10 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 			{
 				return VIDEO_RESULT_USER_STOP;
 			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				return VIDEO_RESULT_OK;
+			}
 			if(control == VIDEO_CONTROL_PAUSE)
 			{
 				control = video_pause_loop(context, NULL);
@@ -897,6 +1189,10 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 				if(control == VIDEO_CONTROL_ERROR)
 				{
 					return VIDEO_RESULT_AUDIO_FAILED;
+				}
+				if(control == VIDEO_CONTROL_SEEK)
+				{
+					return VIDEO_RESULT_OK;
 				}
 			}
 			continue;
@@ -948,6 +1244,10 @@ static Video_Result_t video_pcm_wait_for_frame(Video_Context_t *context,
 		{
 			return VIDEO_RESULT_USER_STOP;
 		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			return VIDEO_RESULT_OK;
+		}
 		if(control == VIDEO_CONTROL_PAUSE)
 		{
 			control = video_pause_loop(context, NULL);
@@ -958,6 +1258,10 @@ static Video_Result_t video_pcm_wait_for_frame(Video_Context_t *context,
 			if(control == VIDEO_CONTROL_ERROR)
 			{
 				return VIDEO_RESULT_AUDIO_FAILED;
+			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				return VIDEO_RESULT_OK;
 			}
 		}
 	}
@@ -1164,6 +1468,8 @@ static u8 video_process_controls(Video_Context_t *context, u32 timeout)
 	u32 flags;
 	u32 keys;
 	u32 pressed;
+	u32 target;
+	u32 volume;
 
 	flags = osThreadFlagsWait(VIDEO_FLAG_THREAD_MASK, osFlagsWaitAny, timeout);
 	if((flags & osFlagsError) != 0U)
@@ -1179,6 +1485,81 @@ static u8 video_process_controls(Video_Context_t *context, u32 timeout)
 	   (pressed & (KEY_GAME_EXIT | KEY_GAME_B)) != 0U)
 	{
 		return VIDEO_CONTROL_STOP;
+	}
+	if((flags & VIDEO_FLAG_VOLUME) != 0U)
+	{
+		__DMB();
+		volume = context->pending_volume;
+		__DMB();
+		if(volume > VIDEO_VOLUME_MAX)
+		{
+			volume = VIDEO_VOLUME_MAX;
+		}
+		(void)audio_card_chg_volume((int)volume);
+		video_set_hud_value(context, "VOL ", volume);
+	}
+	else if((pressed & (KEY_GAME_UP | KEY_GAME_DOWN)) != 0U)
+	{
+		volume = (u32)Video_GetVolume();
+		if((pressed & KEY_GAME_UP) != 0U)
+		{
+			volume += VIDEO_VOLUME_STEP;
+			if(volume > VIDEO_VOLUME_MAX)
+			{
+				volume = VIDEO_VOLUME_MAX;
+			}
+		}
+		else if(volume > VIDEO_VOLUME_STEP)
+		{
+			volume -= VIDEO_VOLUME_STEP;
+		}
+		else
+		{
+			volume = 0U;
+		}
+		context->pending_volume = volume;
+		(void)audio_card_chg_volume((int)volume);
+		video_set_hud_value(context, "VOL ", volume);
+	}
+	if((flags & VIDEO_FLAG_SEEK) != 0U ||
+	   (pressed & (KEY_GAME_LEFT | KEY_GAME_RIGHT)) == KEY_GAME_LEFT ||
+	   (pressed & (KEY_GAME_LEFT | KEY_GAME_RIGHT)) == KEY_GAME_RIGHT)
+	{
+		if((flags & VIDEO_FLAG_SEEK) != 0U)
+		{
+			__DMB();
+			target = context->pending_seek_permille;
+			__DMB();
+		}
+		else
+		{
+			target = (u32)AVI_Parser_GetPositionPermille(&context->parser);
+			if((pressed & KEY_GAME_RIGHT) != 0U &&
+			   (pressed & KEY_GAME_LEFT) == 0U)
+			{
+				target += VIDEO_SEEK_STEP_PERMILLE;
+				if(target > VIDEO_SEEK_MAX_PERMILLE)
+				{
+					target = VIDEO_SEEK_MAX_PERMILLE;
+				}
+			}
+			else if((pressed & KEY_GAME_LEFT) != 0U &&
+			        (pressed & KEY_GAME_RIGHT) == 0U)
+			{
+				target = (target > VIDEO_SEEK_STEP_PERMILLE) ?
+				         target - VIDEO_SEEK_STEP_PERMILLE : 0U;
+			}
+		}
+		if(target > VIDEO_SEEK_MAX_PERMILLE)
+		{
+			target = VIDEO_SEEK_MAX_PERMILLE;
+		}
+		context->pending_seek_permille = target;
+		context->resume_after_seek =
+			(context->state == VIDEO_STATE_PAUSED) ? 0U : 1U;
+		context->seek_pending = 1U;
+		video_set_hud_value(context, "SEEK ", (target + 5U) / 10U);
+		return VIDEO_CONTROL_SEEK;
 	}
 	if(context->state == VIDEO_STATE_PAUSED)
 	{
@@ -1204,7 +1585,8 @@ static u8 video_pause_loop(Video_Context_t *context, u32 *deadline)
 	{
 		resume_state = VIDEO_STATE_PLAYING;
 	}
-	if(context->pcm_opened != 0U && context->pcm.started != 0U)
+	if(context->pcm_opened != 0U && context->pcm.started != 0U &&
+	   context->pcm.paused == 0U)
 	{
 		if(Video_PCM_Pause(&context->pcm) != VIDEO_PCM_OK)
 		{
@@ -1218,6 +1600,10 @@ static u8 video_pause_loop(Video_Context_t *context, u32 *deadline)
 		if(control == VIDEO_CONTROL_STOP)
 		{
 			return VIDEO_CONTROL_STOP;
+		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			return VIDEO_CONTROL_SEEK;
 		}
 		if(control == VIDEO_CONTROL_RESUME)
 		{
@@ -1255,12 +1641,20 @@ static u8 video_wait_deadline(Video_Context_t *context, u32 *deadline)
 		{
 			return VIDEO_CONTROL_STOP;
 		}
+		if(control == VIDEO_CONTROL_SEEK)
+		{
+			return VIDEO_CONTROL_SEEK;
+		}
 		if(control == VIDEO_CONTROL_PAUSE)
 		{
 			control = video_pause_loop(context, deadline);
 			if(control == VIDEO_CONTROL_STOP)
 			{
 				return VIDEO_CONTROL_STOP;
+			}
+			if(control == VIDEO_CONTROL_SEEK)
+			{
+				return VIDEO_CONTROL_SEEK;
 			}
 		}
 	}
@@ -1378,10 +1772,135 @@ static u8 video_clear_display(Video_Context_t *context)
 	return 1U;
 }
 
+static void video_accumulate_pcm_stats(Video_Context_t *context)
+{
+	Video_PCMStats_t current;
+	Video_PCMStats_t *total;
+
+	if(context == NULL || context->pcm_opened == 0U)
+	{
+		return;
+	}
+	Video_PCM_GetStats(&context->pcm, &current);
+	total = &context->pcm_accumulated;
+	total->input_bytes += current.input_bytes;
+	total->output_frames += current.output_frames;
+	video_update_max(&total->fifo_peak_bytes, current.fifo_peak_bytes);
+	total->underruns += current.underruns;
+	total->dma_events += current.dma_events;
+	total->dma_flag_collisions += current.dma_flag_collisions;
+	total->refill_events += current.refill_events;
+	total->refill_missed += current.refill_missed;
+	video_update_max(&total->refill_queue_peak, current.refill_queue_peak);
+	total->media_frames += current.media_frames;
+	total->replayed_frames += current.replayed_frames;
+	total->silence_frames += current.silence_frames;
+	total->dma_half_events += current.dma_half_events;
+	total->dma_full_events += current.dma_full_events;
+	total->dma_errors += current.dma_errors;
+	total->i2s_errors += current.i2s_errors;
+	total->i2s_underruns += current.i2s_underruns;
+	total->late_writes += current.late_writes;
+	if(current.last_audio_error != 0U)
+	{
+		total->last_audio_error = current.last_audio_error;
+	}
+	if(current.last_i2s_status != 0U)
+	{
+		total->last_i2s_status = current.last_i2s_status;
+	}
+	total->fatfs_read_errors += current.fatfs_read_errors;
+	total->fatfs_read_calls += current.fatfs_read_calls;
+	total->fatfs_read_bytes += current.fatfs_read_bytes;
+	context->pcm_fatfs_read_errors = total->fatfs_read_errors;
+	context->pcm_fatfs_read_calls = total->fatfs_read_calls;
+	context->pcm_fatfs_read_bytes = total->fatfs_read_bytes;
+}
+
+static void video_set_hud_value(Video_Context_t *context,
+	const char *prefix, u32 value)
+{
+	u32 index = 0U;
+	u32 divisor = 100U;
+	u32 tick_frequency;
+	u8 started = 0U;
+
+	if(context == NULL || prefix == NULL)
+	{
+		return;
+	}
+	while(prefix[index] != '\0' && index < (VIDEO_HUD_TEXT_SIZE - 2U))
+	{
+		context->hud_text[index] = prefix[index];
+		index++;
+	}
+	if(value > 100U)
+	{
+		value = 100U;
+	}
+	while(divisor != 0U && index < (VIDEO_HUD_TEXT_SIZE - 2U))
+	{
+		if(value >= divisor || started != 0U || divisor == 1U)
+		{
+			context->hud_text[index++] =
+				(char)('0' + (char)((value / divisor) % 10U));
+			started = 1U;
+		}
+		divisor /= 10U;
+	}
+	context->hud_text[index++] = '%';
+	context->hud_text[index] = '\0';
+	tick_frequency = osKernelGetTickFreq();
+	context->hud_until_tick = osKernelGetTickCount() +
+		(tick_frequency * VIDEO_HUD_DURATION_MS + 999U) / 1000U;
+	context->hud_visible = 1U;
+	video_draw_hud(context, 1U);
+}
+
+static void video_draw_hud(Video_Context_t *context, u8 force)
+{
+	u16 *buffer;
+	u16 x;
+	u32 length = 0U;
+	u32 pixels = VIDEO_MJPEG_MAX_WIDTH * VIDEO_HUD_HEIGHT;
+
+	if(context == NULL || context->hud_visible == 0U ||
+	   context->lcd_owned == 0U || context->mjpeg_opened == 0U ||
+	   context->mjpeg.stripe[0] == NULL)
+	{
+		return;
+	}
+	if(force == 0U &&
+	   (s32)(osKernelGetTickCount() - context->hud_until_tick) >= 0)
+	{
+		context->hud_visible = 0U;
+		return;
+	}
+	while(context->hud_text[length] != '\0' &&
+	      length < (VIDEO_HUD_TEXT_SIZE - 1U))
+	{
+		length++;
+	}
+	x = (u16)((VIDEO_MJPEG_MAX_WIDTH - length * 8U) / 2U);
+	buffer = context->mjpeg.stripe[0];
+	memset(buffer, 0, pixels * sizeof(u16));
+	LCD_ShowString(x, 0U, (const u8 *)context->hud_text,
+	               WHITE, BLACK, 16U, 0U, (u8 *)buffer);
+	if(LCD_StreamBegin(0U, 240U - VIDEO_HUD_HEIGHT,
+	                   VIDEO_MJPEG_MAX_WIDTH, VIDEO_HUD_HEIGHT) != 0U ||
+	   LCD_StreamWriteAsync(buffer, pixels) != 0U ||
+	   LCD_StreamWait() != 0U)
+	{
+		context->stats.lcd_dma_timeouts++;
+	}
+	LCD_StreamEnd();
+}
+
 static void video_wait_key_release(void)
 {
 	u32 waited = 0U;
-	u32 mask = KEY_GAME_OK | KEY_GAME_B | KEY_GAME_EXIT;
+	u32 mask = KEY_GAME_OK | KEY_GAME_B | KEY_GAME_EXIT |
+		KEY_GAME_LEFT | KEY_GAME_RIGHT | KEY_GAME_UP | KEY_GAME_DOWN;
 
 	while((KEY_GetRawState() & mask) != 0U && waited < VIDEO_KEY_RELEASE_TIMEOUT_TICKS)
 	{
@@ -1441,35 +1960,66 @@ static void video_update_pcm_stats(Video_Context_t *context)
 {
 	Video_PCMStats_t pcm_stats;
 
-	if(context == NULL || context->pcm_opened == 0U)
+	if(context == NULL)
 	{
 		return;
 	}
-	Video_PCM_GetStats(&context->pcm, &pcm_stats);
-	context->stats.pcm_input_bytes = pcm_stats.input_bytes;
-	context->stats.pcm_output_frames = pcm_stats.output_frames;
-	context->stats.audio_fifo_bytes = Video_PCM_GetBufferedBytes(&context->pcm);
-	context->stats.audio_underruns = pcm_stats.underruns;
+	memset(&pcm_stats, 0, sizeof(pcm_stats));
+	if(context->pcm_opened != 0U)
+	{
+		Video_PCM_GetStats(&context->pcm, &pcm_stats);
+	}
+	context->stats.pcm_input_bytes = context->pcm_accumulated.input_bytes +
+		pcm_stats.input_bytes;
+	context->stats.pcm_output_frames = context->pcm_accumulated.output_frames +
+		pcm_stats.output_frames;
+	context->stats.audio_fifo_bytes = (context->pcm_opened != 0U) ?
+		Video_PCM_GetBufferedBytes(&context->pcm) : 0U;
+	context->stats.audio_underruns = context->pcm_accumulated.underruns +
+		pcm_stats.underruns;
 	context->stats.audio_fifo_peak_bytes = pcm_stats.fifo_peak_bytes;
-	context->stats.audio_dma_events = pcm_stats.dma_events;
-	context->stats.audio_dma_flag_collisions = pcm_stats.dma_flag_collisions;
-	context->stats.audio_refill_events = pcm_stats.refill_events;
-	context->stats.audio_refill_missed = pcm_stats.refill_missed;
+	video_update_max(&context->stats.audio_fifo_peak_bytes,
+	                 context->pcm_accumulated.fifo_peak_bytes);
+	context->stats.audio_dma_events = context->pcm_accumulated.dma_events +
+		pcm_stats.dma_events;
+	context->stats.audio_dma_flag_collisions =
+		context->pcm_accumulated.dma_flag_collisions +
+		pcm_stats.dma_flag_collisions;
+	context->stats.audio_refill_events =
+		context->pcm_accumulated.refill_events + pcm_stats.refill_events;
+	context->stats.audio_refill_missed =
+		context->pcm_accumulated.refill_missed + pcm_stats.refill_missed;
 	context->stats.audio_refill_queue_peak = pcm_stats.refill_queue_peak;
-	context->stats.audio_media_frames = pcm_stats.media_frames;
-	context->stats.audio_replayed_frames = pcm_stats.replayed_frames;
-	context->stats.audio_silence_frames = pcm_stats.silence_frames;
-	context->stats.audio_dma_half_events = pcm_stats.dma_half_events;
-	context->stats.audio_dma_full_events = pcm_stats.dma_full_events;
-	context->stats.audio_dma_errors = pcm_stats.dma_errors;
-	context->stats.audio_i2s_errors = pcm_stats.i2s_errors;
-	context->stats.audio_i2s_underruns = pcm_stats.i2s_underruns;
-	context->stats.audio_late_writes = pcm_stats.late_writes;
-	context->stats.audio_last_error = pcm_stats.last_audio_error;
-	context->stats.audio_last_i2s_status = pcm_stats.last_i2s_status;
-	context->pcm_fatfs_read_errors = pcm_stats.fatfs_read_errors;
-	context->pcm_fatfs_read_calls = pcm_stats.fatfs_read_calls;
-	context->pcm_fatfs_read_bytes = pcm_stats.fatfs_read_bytes;
+	video_update_max(&context->stats.audio_refill_queue_peak,
+	                 context->pcm_accumulated.refill_queue_peak);
+	context->stats.audio_media_frames = context->pcm_accumulated.media_frames +
+		pcm_stats.media_frames;
+	context->stats.audio_replayed_frames =
+		context->pcm_accumulated.replayed_frames + pcm_stats.replayed_frames;
+	context->stats.audio_silence_frames =
+		context->pcm_accumulated.silence_frames + pcm_stats.silence_frames;
+	context->stats.audio_dma_half_events =
+		context->pcm_accumulated.dma_half_events + pcm_stats.dma_half_events;
+	context->stats.audio_dma_full_events =
+		context->pcm_accumulated.dma_full_events + pcm_stats.dma_full_events;
+	context->stats.audio_dma_errors = context->pcm_accumulated.dma_errors +
+		pcm_stats.dma_errors;
+	context->stats.audio_i2s_errors = context->pcm_accumulated.i2s_errors +
+		pcm_stats.i2s_errors;
+	context->stats.audio_i2s_underruns =
+		context->pcm_accumulated.i2s_underruns + pcm_stats.i2s_underruns;
+	context->stats.audio_late_writes = context->pcm_accumulated.late_writes +
+		pcm_stats.late_writes;
+	context->stats.audio_last_error = (pcm_stats.last_audio_error != 0U) ?
+		pcm_stats.last_audio_error : context->pcm_accumulated.last_audio_error;
+	context->stats.audio_last_i2s_status = (pcm_stats.last_i2s_status != 0U) ?
+		pcm_stats.last_i2s_status : context->pcm_accumulated.last_i2s_status;
+	context->pcm_fatfs_read_errors = context->pcm_accumulated.fatfs_read_errors +
+		pcm_stats.fatfs_read_errors;
+	context->pcm_fatfs_read_calls = context->pcm_accumulated.fatfs_read_calls +
+		pcm_stats.fatfs_read_calls;
+	context->pcm_fatfs_read_bytes = context->pcm_accumulated.fatfs_read_bytes +
+		pcm_stats.fatfs_read_bytes;
 	context->stats.pending_video_frames = 0U;
 	context->stats.pending_audio_chunks =
 		(context->active_audio_pending != 0U) ? 1U : 0U;
@@ -1501,6 +2051,7 @@ static void video_reset_stats(Video_Context_t *context)
 	}
 
 	memset(&context->stats, 0, sizeof(context->stats));
+	memset(&context->pcm_accumulated, 0, sizeof(context->pcm_accumulated));
 	context->pcm_fatfs_read_errors = 0U;
 	context->pcm_fatfs_read_calls = 0U;
 	context->pcm_fatfs_read_bytes = 0U;
@@ -1664,6 +2215,11 @@ int video_stats_cmd(int argc, char *argv[])
 	                  (unsigned long)stats.video_frames_displayed,
 	                  (unsigned long)stats.video_frames_dropped,
 	                  (unsigned long)stats.jpeg_errors);
+	shellPrintEndLine(&shell, "  control position=%lu/1000 volume=%lu seek=%lu failed=%lu\r\n",
+	                  (unsigned long)stats.position_permille,
+	                  (unsigned long)stats.volume,
+	                  (unsigned long)stats.seek_count,
+	                  (unsigned long)stats.seek_failures);
 	shellPrintEndLine(&shell, "  timing jpeg_max=%lu lcd_wait=%lu lcd_wait_max=%lu lcd_dma_timeout=%lu\r\n",
 	                  (unsigned long)stats.max_jpeg_decode_ticks,
 	                  (unsigned long)stats.lcd_wait_ticks,

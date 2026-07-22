@@ -158,6 +158,21 @@ void Video_MJPEG_Close(Video_MJPEG_t *decoder)
 	memset(decoder, 0, sizeof(*decoder));
 }
 
+int Video_MJPEG_Reset(Video_MJPEG_t *decoder)
+{
+	struct jpeg_decompress_struct *cinfo;
+
+	if(decoder == NULL || decoder->jpeg_context == NULL ||
+	   decoder->jpeg_created == 0U)
+	{
+		return 1;
+	}
+	cinfo = (struct jpeg_decompress_struct *)decoder->jpeg_context;
+	jpeg_abort_decompress(cinfo);
+	video_mjpeg_reset_frame_arena(decoder);
+	return 0;
+}
+
 Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 	FIL *file, const AVI_Chunk_t *chunk, u16 expected_width, u16 expected_height)
 {

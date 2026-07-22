@@ -231,6 +231,85 @@ static int test_bad_chunk_resync(void)
 	        parser.last_resync_to == (TEST_FIRST_CHUNK + 28U)) ? 1 : 0;
 }
 
+static int test_seek_permille(void)
+{
+	u8 header[TEST_FIRST_CHUNK];
+	u8 chunks[48];
+	FIL file;
+	AVI_Parser_t parser;
+	AVI_Chunk_t chunk;
+	u32 offset;
+	u8 index;
+	int result;
+
+	memset(&file, 0, sizeof(file));
+	file.handle = tmpfile();
+	if(file.handle == NULL)
+	{
+		return 0;
+	}
+	build_header(header, 4U + sizeof(chunks));
+	memset(chunks, 0, sizeof(chunks));
+	for(index = 0U; index < 4U; index++)
+	{
+		offset = (u32)index * 12U;
+		put_fourcc(&chunks[offset], '0', '0', 'd', 'c');
+		put_le32(&chunks[offset + 4U], 4U);
+		chunks[offset + 8U] = 0xFFU;
+		chunks[offset + 9U] = 0xD8U;
+		chunks[offset + 10U] = 0xFFU;
+		chunks[offset + 11U] = 0xD9U;
+	}
+	if(fwrite(header, 1U, sizeof(header), file.handle) != sizeof(header) ||
+	   finish_sparse_file(&file, TEST_FIRST_CHUNK, chunks, sizeof(chunks)) == 0)
+	{
+		fclose(file.handle);
+		return 0;
+	}
+
+	result = AVI_Parser_Open(&parser, &file);
+	if(result == AVI_PARSER_OK)
+	{
+		result = AVI_Parser_SeekPermille(&parser, 500U);
+	}
+	if(result != AVI_PARSER_OK ||
+	   parser.cursor != (TEST_FIRST_CHUNK + 24U) ||
+	   AVI_Parser_GetPositionPermille(&parser) < 500U ||
+	   AVI_Parser_GetPositionPermille(&parser) > 520U)
+	{
+		fclose(file.handle);
+		return 0;
+	}
+	result = AVI_Parser_Next(&parser, &chunk);
+	if(result != AVI_PARSER_OK ||
+	   chunk.data_offset != (TEST_FIRST_CHUNK + 32U))
+	{
+		fclose(file.handle);
+		return 0;
+	}
+
+	result = AVI_Parser_SeekPermille(&parser, 900U);
+	if(result == AVI_PARSER_OK)
+	{
+		result = AVI_Parser_Next(&parser, &chunk);
+	}
+	if(result != AVI_PARSER_OK ||
+	   chunk.data_offset != (TEST_FIRST_CHUNK + 44U))
+	{
+		fclose(file.handle);
+		return 0;
+	}
+
+	result = AVI_Parser_SeekPermille(&parser, 0U);
+	if(result == AVI_PARSER_OK)
+	{
+		result = AVI_Parser_Next(&parser, &chunk);
+	}
+	fclose(file.handle);
+	return (result == AVI_PARSER_OK &&
+	        chunk.data_offset == (TEST_FIRST_CHUNK + 8U)) ? 1 : 0;
+}
+
 int main(void)
 {
 	if(test_large_index_skip() == 0)
@@ -246,6 +325,11 @@ int main(void)
 	if(test_bad_chunk_resync() == 0)
 	{
 		fprintf(stderr, "bad chunk resync failed\n");
+		return 1;
+	}
+	if(test_seek_permille() == 0)
+	{
+		fprintf(stderr, "permille seek failed\n");
 		return 1;
 	}
 	printf("AVI parser regression tests passed\n");

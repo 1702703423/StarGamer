@@ -97,7 +97,9 @@ typedef struct AVI_Parser
 
 int AVI_Parser_Open(AVI_Parser_t *parser, FIL *file);
 int AVI_Parser_Rewind(AVI_Parser_t *parser);
+int AVI_Parser_SeekPermille(AVI_Parser_t *parser, u16 position);
 int AVI_Parser_Next(AVI_Parser_t *parser, AVI_Chunk_t *chunk);
+u16 AVI_Parser_GetPositionPermille(const AVI_Parser_t *parser);
 const AVI_Info_t *AVI_Parser_GetInfo(const AVI_Parser_t *parser);
 
 #ifdef __cplusplus

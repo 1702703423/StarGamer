@@ -9,6 +9,10 @@ extern "C" {
 #endif
 
 #define VIDEO_PATH_SIZE  256U
+#define VIDEO_SEEK_MAX_PERMILLE  1000U
+#define VIDEO_SEEK_STEP_PERMILLE 50U
+#define VIDEO_VOLUME_MAX         100U
+#define VIDEO_VOLUME_STEP        10U
 
 typedef enum Video_State
 {
@@ -96,6 +100,10 @@ typedef struct Video_Stats
 	u32 avi_resync_count;
 	u32 avi_resync_from;
 	u32 avi_resync_to;
+	u32 seek_count;
+	u32 seek_failures;
+	u32 position_permille;
+	u32 volume;
 	u32 avi_error_offset;
 	u32 avi_error_fourcc;
 	u32 avi_error_chunk_size;
@@ -109,6 +117,10 @@ int Video_Play(const char *path);
 int Video_Pause(void);
 int Video_Resume(void);
 int Video_TogglePause(void);
+int Video_SeekPermille(u16 position);
+u16 Video_GetPositionPermille(void);
+int Video_SetVolume(int volume);
+u8 Video_GetVolume(void);
 int Video_Stop(void);
 void Video_Cleanup(void);
 u8 Video_IsBusy(void);

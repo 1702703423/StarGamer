@@ -46,6 +46,7 @@ typedef struct Video_MJPEG
 
 int Video_MJPEG_Init(Video_MJPEG_t *decoder);
 void Video_MJPEG_Close(Video_MJPEG_t *decoder);
+int Video_MJPEG_Reset(Video_MJPEG_t *decoder);
 Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 	FIL *file, const AVI_Chunk_t *chunk, u16 expected_width, u16 expected_height);
 

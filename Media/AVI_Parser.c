@@ -48,6 +48,9 @@ static int avi_parse_audio_stream(AVI_Parser_t *parser, u32 strf_offset,
 static u32 avi_upper_fourcc(u32 value);
 static u8 avi_chunk_stream_index(u32 fourcc);
 static u8 avi_is_index_chunk(u32 fourcc);
+static u32 avi_permille_offset(u32 span, u16 position);
+static int avi_find_video(AVI_Parser_t *parser, u32 scan_start,
+	u32 scan_end, u32 parent_end, u8 prefer_last, u32 *found_offset);
 static int avi_resync_video(AVI_Parser_t *parser, u32 start, u32 parent_end);
 static void avi_record_error(AVI_Parser_t *parser, int result, u32 offset,
 	u32 fourcc, u32 chunk_size);
@@ -204,6 +207,77 @@ int AVI_Parser_Rewind(AVI_Parser_t *parser)
 	return AVI_PARSER_OK;
 }
 
+int AVI_Parser_SeekPermille(AVI_Parser_t *parser, u16 position)
+{
+	u32 span;
+	u32 target;
+	u32 scan_start;
+	u32 scan_end;
+	u32 found_offset;
+	int result;
+
+	if(parser == NULL || parser->file == NULL || position > 1000U ||
+	   parser->movi_data_offset >= parser->movi_end)
+	{
+		return AVI_PARSER_BAD_CONTAINER;
+	}
+	if(position == 0U)
+	{
+		return AVI_Parser_Rewind(parser);
+	}
+
+	span = parser->movi_end - parser->movi_data_offset;
+	target = parser->movi_data_offset + avi_permille_offset(span, position);
+	target &= ~1UL;
+	if(target < parser->movi_data_offset)
+	{
+		target = parser->movi_data_offset;
+	}
+	if(target > parser->movi_end)
+	{
+		target = parser->movi_end;
+	}
+
+	scan_end = parser->movi_end;
+	if(target < scan_end && (scan_end - target) > AVI_RESYNC_SCAN_LIMIT)
+	{
+		scan_end = target + AVI_RESYNC_SCAN_LIMIT;
+	}
+	result = avi_find_video(parser, target, scan_end, parser->movi_end,
+	                        0U, &found_offset);
+	/* Near movi end, fall back to the closest earlier frame in the same bound. */
+	if(result == AVI_PARSER_BAD_CHUNK &&
+	   target > parser->movi_data_offset)
+	{
+		scan_start = parser->movi_data_offset;
+		if((target - scan_start) > AVI_RESYNC_SCAN_LIMIT)
+		{
+			scan_start = target - AVI_RESYNC_SCAN_LIMIT;
+		}
+		scan_end = parser->movi_end;
+		if((scan_end - target) > 10U)
+		{
+			scan_end = target + 10U;
+		}
+		result = avi_find_video(parser, scan_start, scan_end,
+		                        parser->movi_end, 1U, &found_offset);
+	}
+	if(result != AVI_PARSER_OK)
+	{
+		avi_record_error(parser, result, target, 0U, 0U);
+		return result;
+	}
+
+	parser->last_resync_from = target;
+	parser->last_resync_to = found_offset;
+	parser->resync_count++;
+	parser->cursor = found_offset;
+	parser->list_depth = 1U;
+	parser->list_end[0] = parser->movi_end;
+	parser->list_resume[0] = parser->movi_end;
+	return AVI_PARSER_OK;
+}
+
 int AVI_Parser_Next(AVI_Parser_t *parser, AVI_Chunk_t *chunk)
 {
 	AVI_InternalChunk_t current;
@@ -339,6 +413,41 @@ int AVI_Parser_Next(AVI_Parser_t *parser, AVI_Chunk_t *chunk)
 	}
 
 	return AVI_PARSER_EOF;
+}
+
+u16 AVI_Parser_GetPositionPermille(const AVI_Parser_t *parser)
+{
+	u32 span;
+	u32 relative;
+	u16 low = 0U;
+	u16 high = 1000U;
+	u16 middle;
+
+	if(parser == NULL || parser->movi_data_offset >= parser->movi_end ||
+	   parser->cursor <= parser->movi_data_offset)
+	{
+		return 0U;
+	}
+	if(parser->cursor >= parser->movi_end)
+	{
+		return 1000U;
+	}
+
+	span = parser->movi_end - parser->movi_data_offset;
+	relative = parser->cursor - parser->movi_data_offset;
+	while(low < high)
+	{
+		middle = (u16)((low + high + 1U) / 2U);
+		if(avi_permille_offset(span, middle) <= relative)
+		{
+			low = middle;
+		}
+		else
+		{
+			high = (u16)(middle - 1U);
+		}
+	}
+	return low;
 }
 
 const AVI_Info_t *AVI_Parser_GetInfo(const AVI_Parser_t *parser)
@@ -689,6 +798,105 @@ static u8 avi_is_index_chunk(u32 fourcc)
 	suffix3 = (u8)(fourcc >> 24U);
 	return (suffix2 >= (u8)'0' && suffix2 <= (u8)'9' &&
 	        suffix3 >= (u8)'0' && suffix3 <= (u8)'9') ? 1U : 0U;
+}
+
+static u32 avi_permille_offset(u32 span, u16 position)
+{
+	u32 whole = span / 1000U;
+	u32 remainder = span % 1000U;
+
+	return whole * (u32)position +
+	       (remainder * (u32)position) / 1000U;
+}
+
+static int avi_find_video(AVI_Parser_t *parser, u32 scan_start,
+	u32 scan_end, u32 parent_end, u8 prefer_last, u32 *found_offset)
+{
+	u32 scan_offset;
+	u32 scan_size;
+	u32 advance;
+	u32 relative;
+	u32 candidate_offset;
+	u32 data_offset;
+	u32 data_size;
+	u32 padded_size;
+	u32 fourcc;
+	u32 candidate = 0U;
+	u8 stream_index;
+	u8 suffix2;
+	u8 suffix3;
+	int result;
+
+	if(parser == NULL || found_offset == NULL || scan_start > scan_end ||
+	   scan_end > parent_end)
+	{
+		return AVI_PARSER_BAD_CHUNK;
+	}
+	scan_offset = scan_start;
+	while(scan_offset < scan_end)
+	{
+		scan_size = scan_end - scan_offset;
+		if(scan_size > AVI_RESYNC_BUFFER_SIZE)
+		{
+			scan_size = AVI_RESYNC_BUFFER_SIZE;
+		}
+		if(scan_size < 10U)
+		{
+			break;
+		}
+		result = avi_read_at(parser, scan_offset, parser->resync_buffer,
+		                     scan_size);
+		if(result != AVI_PARSER_OK)
+		{
+			return result;
+		}
+
+		for(relative = 0U; (relative + 10U) <= scan_size; relative += 2U)
+		{
+			fourcc = avi_read_le32(&parser->resync_buffer[relative]);
+			stream_index = avi_chunk_stream_index(fourcc);
+			suffix2 = (u8)(fourcc >> 16U);
+			suffix3 = (u8)(fourcc >> 24U);
+			if(stream_index != parser->info.video_stream_index ||
+			   suffix2 != (u8)'d' || suffix3 != (u8)'c' ||
+			   parser->resync_buffer[relative + 8U] != 0xFFU ||
+			   parser->resync_buffer[relative + 9U] != 0xD8U)
+			{
+				continue;
+			}
+
+			candidate_offset = scan_offset + relative;
+			data_offset = candidate_offset + 8U;
+			data_size = avi_read_le32(&parser->resync_buffer[relative + 4U]);
+			padded_size = data_size + (data_size & 1U);
+			if(data_size == 0U || padded_size < data_size ||
+			   data_offset > parent_end ||
+			   padded_size > (parent_end - data_offset))
+			{
+				continue;
+			}
+
+			candidate = candidate_offset;
+			if(prefer_last == 0U)
+			{
+				*found_offset = candidate;
+				return AVI_PARSER_OK;
+			}
+		}
+
+		advance = (scan_size - 8U) & ~1UL;
+		if(advance == 0U)
+		{
+			break;
+		}
+		scan_offset += advance;
+	}
+	if(candidate != 0U)
+	{
+		*found_offset = candidate;
+		return AVI_PARSER_OK;
+	}
+	return AVI_PARSER_BAD_CHUNK;
 }
 
 static int avi_resync_video(AVI_Parser_t *parser, u32 start, u32 parent_end)
