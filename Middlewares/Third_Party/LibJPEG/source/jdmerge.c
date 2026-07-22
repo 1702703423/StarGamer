@@ -359,6 +359,135 @@ h2v2_merged_upsample (j_decompress_ptr cinfo,
 
 
 /*
+ * Video-only RGB565 output.  Bytes are emitted in display wire order so a
+ * little-endian CPU can pass the scanline directly to an 8-bit SPI DMA.
+ */
+
+#if BITS_IN_JSAMPLE == 8
+
+#define PACK_RGB565_MSB_FIRST(outptr, red, green, blue) do { \
+  unsigned int rgb565 = (((unsigned int) (red) & 0xF8U) << 8) | \
+                        (((unsigned int) (green) & 0xFCU) << 3) | \
+                        ((unsigned int) (blue) >> 3); \
+  *(outptr)++ = (JSAMPLE) (rgb565 >> 8); \
+  *(outptr)++ = (JSAMPLE) rgb565; \
+} while (0)
+
+METHODDEF(void)
+h2v1_merged_upsample_rgb565 (j_decompress_ptr cinfo,
+			     JSAMPIMAGE input_buf,
+			     JDIMENSION in_row_group_ctr,
+			     JSAMPARRAY output_buf)
+{
+  my_upsample_ptr upsample = (my_upsample_ptr) cinfo->upsample;
+  register int y, cred, cgreen, cblue;
+  int cb, cr;
+  register JSAMPROW outptr;
+  JSAMPROW inptr0, inptr1, inptr2;
+  JDIMENSION col;
+  register JSAMPLE * range_limit = cinfo->sample_range_limit;
+  int * Crrtab = upsample->Cr_r_tab;
+  int * Cbbtab = upsample->Cb_b_tab;
+  INT32 * Crgtab = upsample->Cr_g_tab;
+  INT32 * Cbgtab = upsample->Cb_g_tab;
+  SHIFT_TEMPS
+
+  inptr0 = input_buf[0][in_row_group_ctr];
+  inptr1 = input_buf[1][in_row_group_ctr];
+  inptr2 = input_buf[2][in_row_group_ctr];
+  outptr = output_buf[0];
+  for (col = cinfo->output_width >> 1; col > 0; col--) {
+    cb = GETJSAMPLE(*inptr1++);
+    cr = GETJSAMPLE(*inptr2++);
+    cred = Crrtab[cr];
+    cgreen = (int) RIGHT_SHIFT(Cbgtab[cb] + Crgtab[cr], SCALEBITS);
+    cblue = Cbbtab[cb];
+
+    y = GETJSAMPLE(*inptr0++);
+    PACK_RGB565_MSB_FIRST(outptr, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+    y = GETJSAMPLE(*inptr0++);
+    PACK_RGB565_MSB_FIRST(outptr, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+  }
+  if (cinfo->output_width & 1) {
+    cb = GETJSAMPLE(*inptr1);
+    cr = GETJSAMPLE(*inptr2);
+    cred = Crrtab[cr];
+    cgreen = (int) RIGHT_SHIFT(Cbgtab[cb] + Crgtab[cr], SCALEBITS);
+    cblue = Cbbtab[cb];
+    y = GETJSAMPLE(*inptr0);
+    PACK_RGB565_MSB_FIRST(outptr, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+  }
+}
+
+
+METHODDEF(void)
+h2v2_merged_upsample_rgb565 (j_decompress_ptr cinfo,
+			     JSAMPIMAGE input_buf,
+			     JDIMENSION in_row_group_ctr,
+			     JSAMPARRAY output_buf)
+{
+  my_upsample_ptr upsample = (my_upsample_ptr) cinfo->upsample;
+  register int y, cred, cgreen, cblue;
+  int cb, cr;
+  register JSAMPROW outptr0, outptr1;
+  JSAMPROW inptr00, inptr01, inptr1, inptr2;
+  JDIMENSION col;
+  register JSAMPLE * range_limit = cinfo->sample_range_limit;
+  int * Crrtab = upsample->Cr_r_tab;
+  int * Cbbtab = upsample->Cb_b_tab;
+  INT32 * Crgtab = upsample->Cr_g_tab;
+  INT32 * Cbgtab = upsample->Cb_g_tab;
+  SHIFT_TEMPS
+
+  inptr00 = input_buf[0][in_row_group_ctr*2];
+  inptr01 = input_buf[0][in_row_group_ctr*2 + 1];
+  inptr1 = input_buf[1][in_row_group_ctr];
+  inptr2 = input_buf[2][in_row_group_ctr];
+  outptr0 = output_buf[0];
+  outptr1 = output_buf[1];
+  for (col = cinfo->output_width >> 1; col > 0; col--) {
+    cb = GETJSAMPLE(*inptr1++);
+    cr = GETJSAMPLE(*inptr2++);
+    cred = Crrtab[cr];
+    cgreen = (int) RIGHT_SHIFT(Cbgtab[cb] + Crgtab[cr], SCALEBITS);
+    cblue = Cbbtab[cb];
+
+    y = GETJSAMPLE(*inptr00++);
+    PACK_RGB565_MSB_FIRST(outptr0, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+    y = GETJSAMPLE(*inptr00++);
+    PACK_RGB565_MSB_FIRST(outptr0, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+    y = GETJSAMPLE(*inptr01++);
+    PACK_RGB565_MSB_FIRST(outptr1, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+    y = GETJSAMPLE(*inptr01++);
+    PACK_RGB565_MSB_FIRST(outptr1, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+  }
+  if (cinfo->output_width & 1) {
+    cb = GETJSAMPLE(*inptr1);
+    cr = GETJSAMPLE(*inptr2);
+    cred = Crrtab[cr];
+    cgreen = (int) RIGHT_SHIFT(Cbgtab[cb] + Crgtab[cr], SCALEBITS);
+    cblue = Cbbtab[cb];
+    y = GETJSAMPLE(*inptr00);
+    PACK_RGB565_MSB_FIRST(outptr0, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+    y = GETJSAMPLE(*inptr01);
+    PACK_RGB565_MSB_FIRST(outptr1, range_limit[y + cred],
+				 range_limit[y + cgreen], range_limit[y + cblue]);
+  }
+}
+
+#undef PACK_RGB565_MSB_FIRST
+#endif
+
+
+/*
  * Module initialization routine for merged upsampling/color conversion.
  *
  * NB: this is called under the conditions determined by use_merged_upsample()
@@ -382,14 +511,24 @@ jinit_merged_upsampler (j_decompress_ptr cinfo)
 
   if (cinfo->max_v_samp_factor == 2) {
     upsample->pub.upsample = merged_2v_upsample;
+#if BITS_IN_JSAMPLE == 8
+    upsample->upmethod = (cinfo->out_color_space == JCS_RGB565_VIDEO) ?
+			 h2v2_merged_upsample_rgb565 : h2v2_merged_upsample;
+#else
     upsample->upmethod = h2v2_merged_upsample;
+#endif
     /* Allocate a spare row buffer */
     upsample->spare_row = (JSAMPROW)
       (*cinfo->mem->alloc_large) ((j_common_ptr) cinfo, JPOOL_IMAGE,
 		(size_t) (upsample->out_row_width * SIZEOF(JSAMPLE)));
   } else {
     upsample->pub.upsample = merged_1v_upsample;
+#if BITS_IN_JSAMPLE == 8
+    upsample->upmethod = (cinfo->out_color_space == JCS_RGB565_VIDEO) ?
+			 h2v1_merged_upsample_rgb565 : h2v1_merged_upsample;
+#else
     upsample->upmethod = h2v1_merged_upsample;
+#endif
     /* No spare row needed */
     upsample->spare_row = NULL;
   }

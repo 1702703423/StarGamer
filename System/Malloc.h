@@ -71,4 +71,17 @@ void *lv_mem_malloc(u32 size);
 void lv__mem_free(void *ptr);
 void *lv__mem_realloc(void *ptr, u32 size);
 
+/* ---- Memory fragmentation analysis ---- */
+typedef struct {
+    u32 total_blocks;         /* 总块数 */
+    u32 used_blocks;          /* 已使用块数 */
+    u32 free_blocks;          /* 空闲块数 */
+    u32 hole_count;           /* 空闲区（空洞）数量 */
+    u32 frag_count;           /* 碎片空洞数（被已使用块夹在中间的空洞） */
+    u32 largest_free_blocks;  /* 最大连续空闲块数 */
+    u32 block_size;           /* 每块字节数 */
+} mem_frag_info_t;
+
+void sys_mem_frag_info(u8 memx, mem_frag_info_t *info);
+
 #endif

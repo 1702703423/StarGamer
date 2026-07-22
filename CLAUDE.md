@@ -1,28 +1,29 @@
 # CLAUDE.md
 
-> 此文件为 Claude Code 提供详细参考。Reasonix 用户请参阅 [`AGENTS.md`](./AGENTS.md)，其中包含精简版的中文项目记忆。
+> 此文件为 Claude Code 提供英文参考。Reasonix 用户请参阅 [`AGENTS.md`](./AGENTS.md)，其中包含最新的中文项目记忆。
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-**Star Gamer** — STM32F407ZG-based handheld game console running a full-featured NES emulator with FreeRTOS, LVGL GUI, I2S audio, and SD card filesystem.
+**Star Gamer** — STM32F407ZG-based handheld game console: NES emulator, Arduboy games, AVI video player, MP3/WAV music player. Integrates FreeRTOS, LVGL, FatFs, LibJPEG, Helix MP3, I2S audio, USB MSC.
 
 - **MCU**: STM32F407ZGT6 (Cortex-M4F @ 168 MHz, 1 MB Flash, 192 KB internal SRAM + 1 MB external SRAM)
 - **Toolchain**: Keil MDK-ARM V5.32 with ARMCLANG (AC6 compiler)
 - **RTOS**: FreeRTOS v10.3.1 with CMSIS-RTOS V2 API
-- **Configuration**: STM32CubeMX-generated (`Star Gamer.ioc`), HAL driver layer
+- **Configuration**: Dual CubeMX projects — main firmware `Star Gamer.ioc` + BootLoader `BootLoader/StarGamerBootLoader/StarGamerBootLoader.ioc`
 
 ## Build Commands
 
 **This project uses Keil uVision IDE — there is no Makefile or command-line build system.**
 
-- **Build**: Open `MDK-ARM/Star Gamer.uvprojx` in Keil uVision5, press **F7** or Project → Build Target
+- **Main firmware build**: Open `MDK-ARM/Star Gamer.uvprojx` in Keil uVision5, press **F7** or Project → Build Target
+- **BootLoader build**: Open `BootLoader/StarGamerBootLoader/MDK-ARM/StarGamerBootLoader.uvprojx`, press **F7**
 - **Flash/Debug**: Press **F8** (Flash → Download) with ST-Link or DAP-Link debugger
 - **Clean**: Project → Clean Targets from the IDE menu
 - **Interactive Debug**: Press **Ctrl+F5** to start a debugging session
 
-The project configuration and build settings are stored in `MDK-ARM/Star Gamer.uvprojx` (XML project file). Post-build actions automatically generate `.bin` files from the ELF output.
+Post-build actions automatically generate `.bin` files from the ELF output.
 
 ## Architecture
 
@@ -30,170 +31,163 @@ The project configuration and build settings are stored in `MDK-ARM/Star Gamer.u
 
 | Path | Purpose |
 |------|---------|
-| `Core/Src/`, `Core/Inc/` | Entry point (`main.c`), peripheral initialization, FreeRTOS task creation (`freertos.c`), interrupt handlers (`stm32f4xx_it.c`), HAL MSP/timebase |
-| `Drivers/` | CMSIS headers, STM32F4xx HAL drivers, **LCD driver** (ILI93xx via FSMC parallel interface) |
-| `System/` | Core utilities: `sys.h` (ubiquitous type definitions, bit-band macros), `Malloc` (multi-bank memory allocator for CCM + external SRAM), `System_Status` (system state, error codes, resource tables), `adt_chain` (linked list ADT) |
-| `BSP/` | Board support: `w25q64` (SPI NOR flash driver), `i2s` (I2S3 audio output via DMA), `at24c02` (I2C EEPROM driver) |
-| `Middlewares/Third_Party/` | External components (see below) |
-| `FATFS/`, `LIBJPEG/` | CubeMX-generated middleware shims (App + Target layers) |
-| `GUI/` | LVGL GUI thread (`GUI_Task.c`) — runs as FreeRTOS task with `osPriorityAboveNormal`, 2048-byte stack |
-| `Media/` | `Player.c` — audio playback orchestration (WAV file handling, I2S feeding) |
-| `Debug/` | **Letter Shell v3.1.2** UART command console, UART1 printf redirect, test harness (`test.c`/`test.h`) |
-| `ELF Loader/` | Dynamic ELF loader (`dl_lib`) for runtime code loading from SD card |
-| `IAP/` | In-Application Programming stubs (currently empty) |
+| `Core/Src/`, `Core/Inc/` | Entry point (`main.c`), peripheral init, FreeRTOS task creation (`freertos.c`), ISRs (`stm32f4xx_it.c`), HAL MSP/timebase |
+| `Drivers/` | CMSIS headers, STM32F4xx HAL drivers, **LCD driver** (ST7789 SPI with RGB565 block transfer/scaling) |
+| `System/` | Core utilities: `sys.h` (ubiquitous types, bit-band macros), `Malloc` (dual-bank CCM+SRAMEX allocator), `System_Status` (state/errors/resources/settings), `firmware_start.c` (init + HardFault LCD dump), `adt_chain` (linked list), `kfifo` (kernel FIFO for PCM audio) |
+| `BSP/` | Board support: `w25q64` (SPI NOR Flash), `i2s` (I2S3 audio+DMA, enhanced API), `at24c02` (I2C EEPROM), `key` (8-button driver) |
+| `Middlewares/` | FreeRTOS, FatFs (SDIO, codepage 936), LibJPEG (custom `jpeg_memory_provider`), LVGL, NES emulator, Arduboy compat layer, **Helix MP3** (ARM Cortex-M4 fixed-point) |
+| `GUI/` | LVGL page manager: `GUI_Manage`, `GUI_Main`, `GUI_NES`, `GUI_Arduboy`, `GUI_Player`, `GUI_Image`, `GUI_Text`, `GUI_Settings`, `GUI_Video`, `GUI_Font`, `GUI_FileManage`, `GUI_Start` |
+| `Media/` | Player subsystem: `Player.c` (orchestration), `Player_Codec.h` (abstraction), `Player_WAV`, `Player_MP3` (Helix wrapper), `Video.c` (AVI state machine), `AVI_Parser`, `Video_MJPEG`, `Video_PCM`, `Video_Memory` |
+| `BootLoader/` | Independent CubeMX project (64 KB bare-metal firmware updater, Flash sectors 0-3) |
+| `USB_DEVICE/` | USB MSC device stack (`App/` + `Target/`), SD card as USB mass storage |
+| `Debug/` | Letter Shell v3.1.2 UART console, `shell_ext.c`, `shell_companion.c`, `fs_support/` |
+| `ELF Loader/` | Dynamic ELF loader (`dl_lib`) for runtime `.axf` loading from SD card |
+| `APP/Arduboy/` | Arduboy game runtime (`Arduboy_Runtime`, `Arduboy_Port`, `Arduboy_Games`) |
+| `FATFS/`, `LIBJPEG/` | CubeMX-generated middleware shims (App + Target) |
+| `IAP/` | In-Application Programming stubs (planned) |
+| `EXTERN API/` | External API interface (planned) |
+| `Docs/` | Design docs: AVI player, BootLoader, Arduboy port, Helix MP3, CCM stack optimization, GUI SRAM optimization |
+| `Tools/` | PC dev tools: `hexdump` (hex viewer, C+Python), `map_analyzer` (ARMCLANG .map memory analyzer, C+Python tkinter) |
+| `Tests/AVI_Parser_Host/` | AVI parser PC-hosted regression tests |
 
-### Middleware Components
+### Boot Sequence
 
-- **FreeRTOS v10.3.1**: CMSIS-RTOS V2 API (`cmsis_os2.h`). Static task allocation is preferred. Config: `Core/Inc/FreeRTOSConfig.h`
-- **FatFs**: SD card filesystem via SDIO + DMA, codepage 936 (GBK Chinese support)
-- **LibJPEG**: JPEG decoding for image assets
-- **LVGL**: Lightweight embedded GUI library. Config: `Middlewares/Third_Party/LVGL/GUI/lvgl/lv_conf.h`. Application code: `Middlewares/Third_Party/LVGL/GUI_APP/`
-- **NES Emulator**: Full NES/Famicom emulator with 6502 CPU, PPU, APU, and **240+ mapper implementations** (in `Middlewares/Third_Party/NES/mapper/`). Core files: `nes_main.c`, `nes_ppu.c`, `nes_apu.c`, `nes_mapper.c`, `nes_crc32.c`. Originally ported from ye781205's work, adapted by ALIENTEK.
+1. `main()` → HAL init, clock config (HSE 8MHz → PLL 168MHz), peripheral init
+2. `osKernelInitialize()` → allocate defaultTask stack from CCM (4096 B) → `osKernelStart()`
+3. `defaultTask` → `init()` (`System/firmware_start.c`): SRAMCCM+SRAMEX pool init, SD card FatFs mount, Shell init, splash screen (`GUI_Start_Show`), subsystem registration
+
+### GUI Page Manager
+
+Unified page architecture based on `GUI_Manage.c/h`:
+
+| Page ID | File | Function |
+|---------|------|----------|
+| `GUI_PAGE_MAIN_MENU` | `GUI_Main.c` | 9-grid main menu |
+| `GUI_PAGE_NES` | `GUI_NES.c` | NES game browser & launcher |
+| `GUI_PAGE_ARDUBOY` | `GUI_Arduboy.c` | Arduboy game list (Buttons/Dino/FlappyBall) |
+| `GUI_PAGE_MUSIC` | `GUI_Player.c` | Music player (WAV/MP3) |
+| `GUI_PAGE_IMAGE` | `GUI_Image.c` | JPEG image viewer |
+| `GUI_PAGE_TEXT` | `GUI_Text.c` | Text viewer (UTF-8/GBK, glyph fallback) |
+| `GUI_PAGE_SETTINGS` | `GUI_Settings.c` | System settings |
+| `GUI_PAGE_VIDEO` | `GUI_Video.c` | AVI video player (MJPEG+PCM) |
+| `GUI_PAGE_FONT` | `GUI_Font.c` | XBF font installation |
+
+- **Splash**: `GUI_Start.c` — startup spinner + status text
+- **File browser**: `GUI_FileManage.c/h` — reusable FatFs browser, async pagination (`GUI_FILEMANAGE_MAX_ITEMS=32`)
+- **Lifecycle**: `Page_Create` → `Page_Show` / `Page_Show_Anim` → `Page_Back` → `Page_Delete`
+- **GUI thread**: 4096 B stack, `osPriorityAboveNormal`
+
+### Media Player Subsystem
+
+| Module | File | Role |
+|--------|------|------|
+| **Player core** | `Player.c/h` | Orchestration, codec registration, audio data pipeline |
+| **Codec interface** | `Player_Codec.h` | Abstract `Player_Codec_Read_t` / `Player_Codec_Close_t` |
+| **WAV decoder** | `Player_WAV.c/h` | PCM WAV parsing & decoding |
+| **MP3 decoder** | `Player_MP3.c/h` | Helix MP3 wrapper |
+| **Video framework** | `Video.c/h` | AVI playback state machine, A/V sync (PCM clock) |
+| **AVI parser** | `AVI_Parser.c/h` | RIFF/AVI container, little-endian reads, stream index |
+| **MJPEG decode** | `Video_MJPEG.c/h` | MJPEG frame decode pipeline, LibJPEG streaming input |
+| **PCM audio** | `Video_PCM.c/h` | AVI PCM decode, kfifo buffering, I2S DMA feed |
+| **Video memory** | `Video_Memory.c/h` | Frame buffer pool (SRAMEX), stripe buffers |
+
+### Memory Architecture
+
+- **Internal SRAM**: 192 KB (128 KB main + 64 KB CCM)
+  - Main SRAM (0x20000000): `.data/.bss`, FreeRTOS `ucHeap`, static globals
+  - CCM (0x10000000): CPU-only, **no DMA**. Managed as `SRAMCCM` (0). Used for RTOS task stacks via `sys_thread_stack_alloc()`
+- **External SRAM**: 1 MB FSMC SRAM (0x68000000–0x680FFFFF). Managed as `SRAMEX` (1) (963 KB usable, 32-byte blocks). LVGL heap, frame buffers, GUI page contexts, video buffers, PCM FIFO
+- **Allocator**: `mymalloc(memx, size)` / `myfree(memx, ptr)`, `memx` = `SRAMCCM` (0) or `SRAMEX` (1). `SRAMBANK` fixed at 2 (deprecated `SRAMMAIN` test heap removed)
+- **Video memory**: 80 KB on-chip SRAM aligned pool (0x2000C000–0x2001FFFF) for Video Task stack, FatFs/JPEG objects, LCD DMA stripes; 32 KB PCM FIFO + 4 KB I/O buffer + I2S DMA double buffer in SRAMEX
 
 ### Key Subsystems
 
-#### Memory Architecture
+- **LCD**: ST7789 240×320 RGB565, **SPI interface** (DMA writes). Driver `Drivers/LCD/LCD.c`, extended RGB565 block transfer & crop/scale. Backlight PWM (TIM12 CH2), `USE_HORIZONTAL = 1`
+- **Audio**: I2S3 (SPI3) + DMA → external DAC. `BSP/i2s.c` "sound card" API: `audio_card_init()`, `audio_card_open_prepare()`, `audio_card_open()`, `audio_card_write()`, double-buffered DMA with callback (`audio_card_register_tx()`)
+- **Storage**: SD card SDIO 4-bit + DMA; W25Q64 8 MB SPI Flash (font 2MB + reserved 4MB + FW staging 1MB + FW backup 1MB); AT24C02 256B I2C EEPROM. FatFs with `ENABLE_SCRATCH_BUFFER` for DMA alignment
+- **NES Emulator**: Entry `nes_main.c`, core `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`, `NES_SKIP_FRAME = 2`, 240+ mappers
+- **Arduboy**: `Middlewares/Third_Party/Arduboy/` compat layer + 3 games. 128×64 1bpp framebuffer, runtime via `APP/Arduboy/Arduboy_Runtime.c`, port layer in `Arduboy_Port.c`
+- **Helix MP3**: `Middlewares/libhelix/` fixed-point Layer III decoder. 14 C files + 2 ARM asm files. Adapted via `Player_MP3.c` and `port/helix_support.c`
+- **USB MSC**: `USB_DEVICE/`, SD card as USB mass storage via CubeMX USB OTG FS
+- **Font**: XBF font loaded from SD to SPI Flash (0x000000, 2 MB reserved). `myFont.c` proxy `lv_font_t`
+- **HardFault**: `firmware_start.c` — standalone handler reinitializes SPI1+LCD GPIO, draws register dump on LCD
+- **Buttons**: `BSP/key.c` 8-button, bitmask macros, game aliases (`KEY_GAME_UP/DOWN/LEFT/RIGHT/OK/A/B/SELECT/START`)
 
-- **Internal SRAM**: 192 KB (128 KB main + 64 KB CCM)
-  - CCM (Core-Coupled Memory): 60 KB dedicated bank at 0x10000000, **CPU-only access** (no DMA). Managed by `Malloc` as `SRAMCCM` bank
-- **External SRAM**: 1 MB FSMC SRAM at 0x68000000–0x680FFFFF. Managed by `Malloc` as `SRAMEX` bank (963 KB usable, 32-byte blocks)
-- **Frame buffers**: 150 KB LCD screen buffer allocated from external SRAM
-- **Memory allocator** (`System/Malloc.c`): Multi-bank allocator with `mymalloc(memx, size)` / `myfree(memx, ptr)`. `memx` selects `SRAMCCM` (0) or `SRAMEX` (1)
+### BootLoader
 
-#### Display System
+Independent CubeMX project at `BootLoader/StarGamerBootLoader/`. Design doc: `Docs/BootLoader-Design.md`.
 
-- **LCD**: ST7789 (240×320 pixels, 16-bit RGB565)
-- **Interface**: FSMC parallel (fast memory-mapped writes)
-- **Driver**: `Drivers/LCD/LCD.c`, header `Drivers/LCD/LCD.h`
-- **Orientation**: `USE_HORIZONTAL` set to 1 (90° rotation, landscape mode)
-- **Backlight**: PWM-controlled via TIM12 CH2
+- **Flash layout**: BootLoader 64 KB (sectors 0-3, 0x08000000–0x0800FFFF), Application 960 KB (sectors 4-11, 0x08010000–0x080FFFFF)
+- **Update flow**: SD `update.bin` → W25Q64 staging (0x600000) → CRC32 verify → erase internal Flash → verify → jump to App
+- **Safety**: Dual backup (W25Q64 backup at 0x700000), power-loss tolerance, CRC throughout
 
-#### Audio System
+### LVGL Integration
 
-- **Hardware**: I2S3 (via SPI3) + DMA streaming to external DAC
-- **Driver**: `BSP/i2s.c` — unified "audio card" API with volume control, sample rate switching, double-buffered DMA
-- **API**: `audio_card_init()`, `audio_card_open()`, `audio_card_write()`, `audio_card_register_tx()` (callback on buffer complete)
-- **Player**: `Media/Player.c` — handles WAV file parsing and feeds PCM data to I2S DMA buffers
-- **NES Audio**: APU channels (pulse, triangle, noise, DMC) rendered in `nes_apu.c`, mixed and pushed to I2S via registered callback
-
-#### Storage
-
-- **SD Card**: SDIO 4-bit mode + DMA (RX: DMA2_Stream3, TX: DMA2_Stream6). FatFs layer in `FATFS/`
-- **SPI Flash**: W25Q64 (8 MB) via SPI1 — available for asset storage, not currently used for filesystem
-- **EEPROM**: AT24C02 (256 bytes) via I2C — suitable for save states, configuration
-
-### NES Emulator Integration
-
-- **Entry**: `Middlewares/Third_Party/NES/nes_main.c` — ROM loading, emulation loop
-- **Frame skipping**: `NES_SKIP_FRAME` defined as 2 (renders every 3rd frame for performance)
-- **Display integration**: PPU renders to internal framebuffer, then copied to LCD via `LCD.c` functions
-- **Audio integration**: APU sample generation synchronized with emulation loop, fed to I2S driver via callback registered in `BSP/i2s.c`
-- **Mappers**: 100+ mapper implementations in `Middlewares/Third_Party/NES/mapper/` (numeric files: `000.cpp`–`255.cpp`). Mapper selected at ROM load based on iNES header
+- **LVGL thread**: `lvgl_timer_task`, 8192 B stack, `osPriorityNormal`, calls `lv_timer_handler()` every 10ms
+- **Display driver**: `lv_port_disp_template.h`, external SRAM frame buffer
+- **Input**: `lv_port_indev_init()` for button input
+- **Video playback**: `lvgl_stop_ui()` / `lvgl_start_ui()` to release/reclaim LCD/SPI1
 
 ## Coding Conventions
 
 ### Type Definitions
 
-**Use the project's custom types exclusively** (defined in `System/sys.h`):
+**Use project custom types exclusively** (defined in `System/sys.h`):
 
 - Unsigned: `u8`, `u16`, `u32` (NOT `uint8_t`, `uint16_t`, etc.)
 - Signed: `s8`, `s16`, `s32`
-- NES emulator: defines its own types (`int8`, `uint8`, `int16`, `uint16`, etc.) in `nes_main.h`
+- NES emulator: defines own types (`int8`, `uint8`, etc.) in `nes_main.h`
 
 ### GPIO Macros
 
 Fast bit-band GPIO access via `sys.h`:
 
-- **Output**: `PAout(n)`, `PBout(n)`, `PCout(n)`, etc. — set pin n of port A/B/C
-- **Input**: `PAin(n)`, `PBin(n)`, `PCin(n)`, etc. — read pin n
-- Example: `PBout(15) = 1;` sets GPIOB pin 15 high
+- **Output**: `PAout(n)`, `PBout(n)`, `PCout(n)`, etc.
+- **Input**: `PAin(n)`, `PBin(n)`, `PCin(n)`, etc.
 
 ### RTOS API
 
 - **Use CMSIS-RTOS V2** (`cmsis_os2.h`), NOT native FreeRTOS API
-- Thread creation: `osThreadNew(func, arg, &attr)` with `osThreadAttr_t` defining stack size, priority, name
-- Prefer **static allocation**: pre-allocate stack buffers and control blocks as shown in `main.c` `defaultTask` example
+- Static allocation: pre-allocate stack buffers and control blocks
+- Thread stacks from CCM via `sys_thread_stack_alloc()`
+- Temporary thread stacks recyclable via `sys_thread_stack_free()` from parent context
 - Synchronization: `osMutexNew()`, `osSemaphoreNew()`, `osMessageQueueNew()`
-- Thread management helper: `SysCreateThread()` in `System/System_Status.c` wraps `osThreadNew()` with resource tracking
 
 ### Memory Allocation
 
-- **Dynamic allocation**: `mymalloc(memx, size)` / `myfree(memx, ptr)` from `System/Malloc.h`
-  - `memx = SRAMCCM` (0): Use for CPU-only data (no DMA buffers!)
-  - `memx = SRAMEX` (1): Use for DMA buffers, large allocations, shared data
-- **Frame buffers**: Call `creat_frame_buffer(&code)` from `System/System_Status.c` — allocates from external SRAM, registers in resource table
+- `mymalloc(memx, size)` / `myfree(memx, ptr)` from `System/Malloc.h`
+  - `memx = SRAMCCM` (0): CPU-only data (task stacks, local buffers) — **no DMA!**
+  - `memx = SRAMEX` (1): DMA buffers, large allocations, shared data, GUI page contexts
 
 ### CubeMX Integration
 
-**Critical**: Respect CubeMX `USER CODE BEGIN` / `USER CODE END` blocks
-
-- All custom code in generated files (`main.c`, `stm32f4xx_it.c`, `*_msp.c`) MUST go inside `/* USER CODE BEGIN X */` / `/* USER CODE END X */` pairs
-- Code outside these blocks will be **overwritten** when CubeMX regenerates
-- Re-generation triggered by editing `Star Gamer.ioc` in CubeMX
-
-### Comments and Encoding
-
-- **Language**: Mix of Chinese (GBK/GB2312) and English throughout codebase
-- **Source encoding**: GBK (Chinese characters present in comments, strings, docstrings)
-- When adding comments, match the surrounding file's style (English preferred for new code, but Chinese acceptable)
+**Critical**: Respect CubeMX `USER CODE BEGIN` / `USER CODE END` blocks. Code outside these blocks is **overwritten** when CubeMX regenerates. Both main firmware and BootLoader have independent CubeMX projects.
 
 ### Naming
 
-- **Files**: Mixed case, descriptive (`Player.c`, `Malloc.c`, `LCD.c`)
-- **Functions**: `snake_case` for system/BSP, `CamelCase` for HAL-related, `nes_lowercase` for NES emulator
-- **Structs**: `typedef struct Name { ... } Name_t;` — always typedef with `_t` suffix
+- **Files**: Mixed case (`Player.c`, `Malloc.c`, `LCD.c`)
+- **Functions**: `snake_case` for system/BSP, `CamelCase` for HAL, `nes_lowercase` for NES emulator
+- **Structs**: `typedef struct Name { ... } Name_t;` — always `_t` suffix
 - **Defines**: `UPPER_SNAKE_CASE`
+- **GUI modules**: `GUI_<Feature>.c/h`, register `GUI_<Feature>_Register()`, show `GUI_<Feature>_Show()`
+- **Media modules**: `Player_<Format>.c/h` or `Video_<Component>.c/h`
 
-## Debug and Utilities
+### Debug and Utilities
 
-### Letter Shell (UART Console)
-
-- **Version**: 3.1.2 (NevermindZZT@gmail.com)
-- **Interface**: UART1 (configured for printf as well)
-- **Files**: `Debug/shell.c`, `Debug/shell.h`, `Debug/shell_cfg.h`
-- **Support**: Filesystem integration in `Debug/fs_support/`, custom command extensions in `Debug/shell_ext.c`
-- **Initialization**: Shell instance declared in `main.c` as `Shell shell;`, initialized in user code
-
-### Printf Redirection
-
-- **Target**: UART1
-- **Implementation**: `MDK-ARM/UART1_Debug.c` (check this directory for the file)
-- **Requirement**: MicroLIB must be enabled in Keil project settings (semihosting disabled)
-
-### Error Handling
-
-System error codes defined in `System/System_Status.h`:
-
-- `SYSTEM_STATUS_OK` (0x00)
-- `RTOS_UNEXPECTION_FATAL`, `STACK_OVERFLOW`, `OUT_OF_HEAP_MEMORY`, `MEMORY_TEST_FAILED`, etc.
-
-Global status structures:
-
-- `System_Status_Information_t SSI` — filesystem mount, fatal errors
-- `System_Core_Information_t SCI` — system config (password, backup, debug mode)
-- `System_Resource_Table_t SRT` — linked lists of allocated frame buffers and task handles
-
-## Working with the NES Emulator
-
-### Adding a New Mapper
-
-1. Create `Middlewares/Third_Party/NES/mapper/XXX.cpp` and `XXX.h` (where XXX is the mapper number, zero-padded to 3 digits)
-2. Follow the pattern from existing mappers (e.g., `000.cpp`, `001.cpp`)
-3. Implement required interface functions: mapper initialization, bank switching, PPU hooks
-4. Add mapper to the dispatch table in `nes_mapper.c`
-
-### Modifying Audio Output
-
-- **APU rendering**: `Middlewares/Third_Party/NES/nes_apu.c` — generates samples per emulation cycle
-- **Buffer feeding**: Register callback via `audio_card_register_tx()` in `BSP/i2s.c`
-- **Sample rate**: Configured in `audio_card_open()` call (typically 44.1 kHz or 48 kHz)
-- **Buffer size**: Double-buffered (1024 bytes × 2), configured via `audio_play_info_t` in `i2s.h`
+- **Letter Shell v3.1.2**: UART1 command console (`Debug/shell.c`)
+- **printf**: UART1 output (`MDK-ARM/UART1_Debug.c`), MicroLIB required, semihosting disabled
+- **System errors**: `SYSTEM_STATUS_OK`, `RTOS_UNEXPECTION_FATAL`, `STACK_OVERFLOW`, `OUT_OF_HEAP_MEMORY`, etc. in `System_Status.h`
+- **PC tools**: `Tools/hexdump` (hex viewer), `Tools/map_analyzer` (.map memory analyzer)
 
 ## Common Pitfalls
 
-1. **CCM SRAM DMA restriction**: Never allocate DMA buffers from `SRAMCCM` bank — DMA controllers cannot access CCM. Always use `SRAMEX` for DMA.
-2. **CubeMX regeneration**: Always place custom code in `USER CODE` blocks in generated files
-3. **Type mismatches**: Use `u8`/`u16`/`u32`, not standard `uint8_t` types, to match project style
-4. **RTOS API**: Use CMSIS-RTOS V2 (`cmsis_os2.h`), not native FreeRTOS calls
-5. **Encoding issues**: Be aware of GBK encoding in source files if editing Chinese comments or strings
-6. **External SRAM**: Remember external SRAM starts at 0x68000000, not 0x20000000 (internal SRAM)
+1. **CCM ≠ DMA**: Never allocate DMA buffers from `SRAMCCM`. Always use `SRAMEX`.
+2. **CubeMX USER CODE blocks**: All custom code must be inside them.
+3. **Types**: Use `u8`/`u16`/`u32`, not `uint8_t`.
+4. **RTOS API**: CMSIS-RTOS V2 only, not native FreeRTOS.
+5. **External SRAM address**: 0x68000000, not 0x20000000.
+6. **GBK encoding**: Source files use GBK for Chinese comments/strings.
+7. **HardFault**: Auto-displayed on LCD (no serial/debugger needed).
+8. **LCD interface**: ST7789 uses **SPI** (not FSMC parallel). Video Task takes exclusive SPI1/LCD ownership during playback.
+9. **SDIO DMA alignment**: `ENABLE_SCRATCH_BUFFER` provides 512 B aligned buffer.
+10. **GUI contexts**: Page-level `static` globals (~13 KB each) consume main SRAM. Prefer SRAMEX `mymalloc` for new pages.

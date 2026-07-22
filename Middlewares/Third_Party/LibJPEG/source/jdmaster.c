@@ -48,11 +48,22 @@ use_merged_upsample (j_decompress_ptr cinfo)
   /* Merging is the equivalent of plain box-filter upsampling */
   if (cinfo->do_fancy_upsampling || cinfo->CCIR601_sampling)
     return FALSE;
-  /* jdmerge.c only supports YCC=>RGB color conversion */
-  if (cinfo->jpeg_color_space != JCS_YCbCr || cinfo->num_components != 3 ||
-      cinfo->out_color_space != JCS_RGB ||
-      cinfo->out_color_components != RGB_PIXELSIZE)
+  /* jdmerge.c only supports YCC=>RGB/RGB565 color conversion */
+  if (cinfo->jpeg_color_space != JCS_YCbCr || cinfo->num_components != 3)
     return FALSE;
+  if (cinfo->out_color_space == JCS_RGB) {
+    if (cinfo->out_color_components != RGB_PIXELSIZE)
+      return FALSE;
+  } else if (cinfo->out_color_space == JCS_RGB565_VIDEO) {
+#if BITS_IN_JSAMPLE == 8
+    if (cinfo->out_color_components != 2)
+      return FALSE;
+#else
+    return FALSE;
+#endif
+  } else {
+    return FALSE;
+  }
   /* and it only handles 2h1v or 2h2v sampling ratios */
   if (cinfo->comp_info[0].h_samp_factor != 2 ||
       cinfo->comp_info[1].h_samp_factor != 1 ||
@@ -159,6 +170,9 @@ jpeg_calc_output_dimensions (j_decompress_ptr cinfo)
     break;
   case JCS_RGB:
     cinfo->out_color_components = RGB_PIXELSIZE;
+    break;
+  case JCS_RGB565_VIDEO:
+    cinfo->out_color_components = 2;
     break;
   case JCS_YCbCr:
     cinfo->out_color_components = 3;

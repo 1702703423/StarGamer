@@ -91,7 +91,13 @@ class MapData:
 
     # MCU capacity hints (extracted from scatter file max sizes)
     flash_capacity: int = 0
-    sram_capacity: int = 0
+    sram_capacity: int = 0       # total SRAM: internal + CCM + external
+    internal_sram_capacity: int = 0
+    ccm_capacity: int = 0
+    external_sram_capacity: int = 0
+
+    # Optional: loaded scatter-file for accurate region metadata
+    sct: Optional["SctFile"] = None
 
     @property
     def flash_used(self) -> int:
@@ -102,6 +108,111 @@ class MapData:
     @property
     def sram_used(self) -> int:
         return self.total_rw_data + self.total_zi_data
+
+
+# ── Scatter-loading file data models ────────────────────────────────────────
+
+@dataclass
+class SctInputSection:
+    """One input-section selector inside an execution region, e.g. '*.o (RESET, +First)'."""
+    module: str = ""       # e.g. "*.o", "video_memory.o", "*", ".ANY"
+    section: str = ""      # e.g. "RESET", ".bss.video_sram", "InRoot$$Sections"
+    attributes: List[str] = field(default_factory=list)  # e.g. ["+First"], ["+RO"], ["+RW","+ZI"]
+
+    def __str__(self) -> str:
+        mod = self.module or "*"
+        if self.section:
+            return f"{mod} ({self.section}{', ' + ', '.join(self.attributes) if self.attributes else ''})"
+        if self.attributes:
+            return f"{mod} ({', '.join(self.attributes)})"
+        return mod
+
+
+@dataclass
+class SctExecRegion:
+    """An execution region parsed from a scatter-loading (.sct) file."""
+    name: str
+    base: int
+    size: int
+    uninit: bool = False       # UNINIT — no load, treated as zero-init reserved area
+    fixed: bool = False        # FIXED — address is absolute, not relocatable
+    empty: bool = False        # EMPTY — reserves space but places nothing
+    overlay: bool = False      # OVERLAY — shares address space with others
+    align: int = 0             # ALIGN constraint (0 = none)
+    input_sections: List[SctInputSection] = field(default_factory=list)
+
+    @property
+    def end_address(self) -> int:
+        return self.base + self.size
+
+
+@dataclass
+class SctLoadRegion:
+    """A load region parsed from a scatter-loading (.sct) file."""
+    name: str
+    base: int
+    size: int
+    exec_regions: List[SctExecRegion] = field(default_factory=list)
+
+    @property
+    def end_address(self) -> int:
+        return self.base + self.size
+
+
+@dataclass
+class SctFile:
+    """Complete scatter-loading description file."""
+    filepath: str = ""
+    load_regions: List[SctLoadRegion] = field(default_factory=list)
+
+    def find_exec_region(self, name: str) -> Optional[SctExecRegion]:
+        """Find an execution region by name (case-insensitive)."""
+        name_lower = name.lower()
+        for lr in self.load_regions:
+            for er in lr.exec_regions:
+                if er.name.lower() == name_lower:
+                    return er
+        return None
+
+    @property
+    def flash_regions(self) -> List[SctExecRegion]:
+        """Return execution regions in internal Flash address space."""
+        result: List[SctExecRegion] = []
+        for lr in self.load_regions:
+            for er in lr.exec_regions:
+                if 0x08000000 <= er.base < 0x10000000:
+                    result.append(er)
+        return result
+
+    @property
+    def sram_regions(self) -> List[SctExecRegion]:
+        """Return non-UNINIT execution regions in on-chip SRAM space (0x20000000)."""
+        result: List[SctExecRegion] = []
+        for lr in self.load_regions:
+            for er in lr.exec_regions:
+                if not er.uninit and 0x20000000 <= er.base < 0x40000000:
+                    result.append(er)
+        return result
+
+    @property
+    def external_sram_regions(self) -> List[SctExecRegion]:
+        """Return execution regions in external-SRAM space (0x68000000)."""
+        result: List[SctExecRegion] = []
+        for lr in self.load_regions:
+            for er in lr.exec_regions:
+                if 0x68000000 <= er.base < 0x70000000:
+                    result.append(er)
+        return result
+
+    @property
+    def uninit_regions(self) -> List[SctExecRegion]:
+        """Return UNINIT execution regions (reserved, zero-init, not loaded)."""
+        result: List[SctExecRegion] = []
+        for lr in self.load_regions:
+            for er in lr.exec_regions:
+                if er.uninit:
+                    result.append(er)
+        return result
 
 
 # ── Parser ──────────────────────────────────────────────────────────────────
@@ -117,6 +228,223 @@ def _parse_size_kb(s: str) -> float:
     """Parse a string like '590.88kB' to float KB."""
     m = re.search(r"([\d.]+)\s*kB", s)
     return float(m.group(1)) if m else 0.0
+
+
+def parse_sct_file(filepath: str) -> SctFile:
+    """Parse an ARM scatter-loading description (.sct) file.
+
+    Handles the standard armlink scatter-file syntax:
+        LR_NAME  base  size  {
+            ER_NAME  base  [UNINIT] [FIXED] [ALIGN n]  size  {
+                module.o  (SECTION,  +attrs)
+                ...
+            }
+            ...
+        }
+    """
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    # Remove C-style comments (both // line comments and / * block comments * /)
+    content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+
+    # Remove preprocessor directives (lines starting with #)
+    content = re.sub(r'^\s*#.*?$', '', content, flags=re.MULTILINE)
+
+    sct = SctFile(filepath=filepath)
+
+    # Tokenize: split on whitespace but keep { } ( ) , as separate tokens
+    tokens: List[str] = []
+    for token in re.findall(r'0x[0-9A-Fa-f]+|\{|\}|\(|\)|,|[^\s\{\}\(\),]+', content):
+        token = token.strip()
+        if token:
+            tokens.append(token)
+
+    idx = 0
+    n = len(tokens)
+
+    def peek() -> str:
+        return tokens[idx] if idx < n else ""
+
+    def advance() -> str:
+        nonlocal idx
+        tok = tokens[idx]
+        idx += 1
+        return tok
+
+    def expect(s: str):
+        tok = advance()
+        if tok != s:
+            raise ValueError(f"Expected '{s}' but got '{tok}' at token {idx}")
+
+    def parse_load_region() -> Optional[SctLoadRegion]:
+        """LR_name base size { ... }"""
+        if idx >= n:
+            return None
+        name = advance()
+        if peek() == "{":
+            # Not a valid LR — probably leftover from comment removal
+            return None
+        base = _parse_hex(advance())
+        size = _parse_hex(advance())
+        expect("{")
+
+        lr = SctLoadRegion(name=name, base=base, size=size)
+        while idx < n and peek() != "}":
+            er = parse_exec_region()
+            if er:
+                lr.exec_regions.append(er)
+        if idx < n:
+            advance()  # skip '}'
+        return lr
+
+    def parse_exec_region() -> Optional[SctExecRegion]:
+        """ER_name base [UNINIT] [FIXED] [ALIGN n] [EMPTY] [OVERLAY] size { ... }"""
+        if idx >= n or peek() == "}":
+            return None
+
+        name = advance()
+        base = _parse_hex(advance())
+
+        # Parse optional attributes before size
+        uninit = False
+        fixed = False
+        empty = False
+        overlay = False
+        align = 0
+
+        while idx < n:
+            tok = peek().upper()
+            if tok == "UNINIT":
+                advance()
+                uninit = True
+            elif tok == "FIXED":
+                advance()
+                fixed = True
+            elif tok == "EMPTY":
+                advance()
+                empty = True
+            elif tok == "OVERLAY":
+                advance()
+                overlay = True
+            elif tok == "ALIGN":
+                advance()
+                align = _parse_hex(advance()) if idx < n and peek().startswith("0x") else int(advance())
+            elif tok == "ABSOLUTE":
+                advance()  # ABSOLUTE is the default, skip
+            elif tok == "NOCOMPRESS":
+                advance()  # attribute only, skip
+            elif tok == "PADVALUE":
+                advance()
+                if idx < n:
+                    advance()  # skip the pad value
+            else:
+                break
+
+        size = _parse_hex(advance())
+
+        er = SctExecRegion(name=name, base=base, size=size,
+                           uninit=uninit, fixed=fixed, empty=empty,
+                           overlay=overlay, align=align)
+
+        # Parse body: either '{' input-sections '}' or just sections at the same level
+        if idx < n and peek() == "{":
+            advance()  # skip '{'
+            er.input_sections = parse_input_sections()
+            if idx < n and peek() == "}":
+                advance()  # skip '}'
+        elif idx < n and peek() not in ("}",):
+            # Input sections without braces (some scatter files omit them for simple ERs)
+            er.input_sections = parse_input_sections()
+
+        return er
+
+    def parse_input_sections() -> List[SctInputSection]:
+        """Parse module.o (SECTION, +attrs) or * (SECTION) or .ANY (+attrs) entries.
+
+        Stops when encountering '}' or a token that looks like a new ER (identifier followed by 0x...).
+        """
+        sections: List[SctInputSection] = []
+        while idx < n and peek() != "}":
+            tok = peek()
+            # Check if this looks like the start of a new ER (name followed by hex base)
+            # We peek ahead: if current is an identifier and next is a hex number
+            # and the one after is '{' or another hex, it's likely a new region.
+            if (re.match(r'^[A-Za-z_\.\*]', tok) and
+                idx + 1 < n and re.match(r'^0x[0-9A-Fa-f]+$', tokens[idx + 1])):
+                # Could be a new ER — but only if preceded by ',' or '{' in context
+                # Heuristic: if tok looks like "ER_*" or "LR_*" or is a known region pattern
+                if not tok.startswith(".") and tok not in (".ANY", "*"):
+                    # Likely a new ER starting; break out
+                    break
+
+            module = advance()
+
+            if module in (".ANY", "*"):
+                # .ANY (+attrs)  or  * (section)
+                if idx < n and peek() == "(":
+                    advance()
+                    sec_parts: List[str] = []
+                    attrs: List[str] = []
+                    while idx < n and peek() != ")":
+                        part = advance()
+                        if part == ",":
+                            continue
+                        if part.startswith("+"):
+                            attrs.append(part)
+                        else:
+                            sec_parts.append(part)
+                    if idx < n:
+                        advance()  # skip ')'
+                    section_name = ", ".join(sec_parts) if sec_parts else ""
+                    sections.append(SctInputSection(
+                        module=module, section=section_name, attributes=attrs))
+                else:
+                    sections.append(SctInputSection(module=module))
+            else:
+                # module.o (SECTION, +attrs)  or  module.o
+                if idx < n and peek() == "(":
+                    advance()
+                    sec_parts: List[str] = []
+                    attrs: List[str] = []
+                    while idx < n and peek() != ")":
+                        part = advance()
+                        if part == ",":
+                            continue
+                        if part.startswith("+"):
+                            attrs.append(part)
+                        else:
+                            sec_parts.append(part)
+                    if idx < n:
+                        advance()  # skip ')'
+                    section_name = ", ".join(sec_parts) if sec_parts else ""
+                    sections.append(SctInputSection(
+                        module=module, section=section_name, attributes=attrs))
+                else:
+                    sections.append(SctInputSection(module=module))
+        return sections
+
+    # Main parsing loop
+    while idx < n:
+        tok = peek()
+        if not tok:
+            break
+        # Skip any stray tokens
+        if tok in ("}", ",", ";"):
+            advance()
+            continue
+        # Start of a load region: name + 0x... + 0x... + {
+        if re.match(r'^[A-Za-z_]', tok) and idx + 2 < n:
+            if (re.match(r'^0x[0-9A-Fa-f]+$', tokens[idx + 1]) and
+                re.match(r'^0x[0-9A-Fa-f]+$', tokens[idx + 2])):
+                lr = parse_load_region()
+                if lr:
+                    sct.load_regions.append(lr)
+                continue
+        advance()  # skip unrecognized token
+
+    return sct
 
 
 def parse_map_file(filepath: str) -> MapData:
@@ -358,24 +686,70 @@ def parse_map_file(filepath: str) -> MapData:
             continue
 
     # ── Phase 3: Derive MCU capacities from max sizes ────────────────────
+    # Strategy:
+    #   Flash  → Load Region max_size (the physical flash storing everything).
+    #   SRAM   → Sum of non-overlapping Execution Region max_sizes within
+    #            each physical address space (internal SRAM, CCM, external SRAM).
+    #   This avoids the old "max per region" approach that broke when multiple
+    #   EXEC regions (e.g. RW_IRAM1 + RW_VIDEO_SRAM) shared the same physical bank.
+
+    # Flash: use the largest Load Region max_size in the 0x08xxxxxx space
     for lr in data.load_regions:
-        for er in lr.exec_regions:
-            # Check name first, then fall back to address range
-            name_up = er.name.upper()
-            if "IRAM" in name_up or "RAM" in name_up or "SRAM" in name_up:
-                if er.max_size > data.sram_capacity:
-                    data.sram_capacity = er.max_size
-            elif "IROM" in name_up or "FLASH" in name_up or "ROM" in name_up:
-                if er.max_size > data.flash_capacity:
-                    data.flash_capacity = er.max_size
-            elif 0x20000000 <= er.exec_base < 0x40000000:
-                # SRAM address range (STM32 internal + external SRAM)
-                if er.max_size > data.sram_capacity:
-                    data.sram_capacity = er.max_size
-            elif 0x08000000 <= er.exec_base < 0x10000000:
-                # FLASH address range (STM32 internal flash)
-                if er.max_size > data.flash_capacity:
-                    data.flash_capacity = er.max_size
+        if 0x08000000 <= lr.base < 0x10000000:
+            if lr.max_size > data.flash_capacity:
+                data.flash_capacity = lr.max_size
+
+    # Fallback: if no load region gave us flash capacity, try exec regions
+    if data.flash_capacity == 0:
+        for lr in data.load_regions:
+            for er in lr.exec_regions:
+                if 0x08000000 <= er.exec_base < 0x10000000:
+                    if er.max_size > data.flash_capacity:
+                        data.flash_capacity = er.max_size
+
+    # SRAM: collect exec regions by physical bank, sum non-overlapping ones
+    # Internal SRAM:  0x20000000–0x2001FFFF (128 KB for STM32F407ZG)
+    # CCM:            0x10000000–0x1000FFFF ( 64 KB)
+    # External SRAM:  0x68000000–0x680FFFFF (  1 MB)
+
+    def _sum_disjoint_max_sizes(regions: List[ExecRegion], phys_base: int, phys_end: int) -> int:
+        """Sum max_size of regions within [phys_base, phys_end), taking the
+        union of their address ranges (non-overlapping by scatter-file design)."""
+        covered: List[Tuple[int, int]] = []  # list of (base, end) ranges
+        total = 0
+        for er in sorted(regions, key=lambda r: r.exec_base):
+            if not (phys_base <= er.exec_base < phys_end):
+                continue
+            er_end = er.exec_base + er.max_size
+            if er_end > phys_end:
+                er_end = phys_end
+            # Check overlap with already-covered ranges
+            overlaps = False
+            for cb, ce in covered:
+                if er.exec_base < ce and er_end > cb:
+                    # Overlapping — use union
+                    overlaps = True
+                    break
+            if not overlaps:
+                total += er.max_size
+                covered.append((er.exec_base, er_end))
+        return total
+
+    all_exec_regions: List[ExecRegion] = []
+    for lr in data.load_regions:
+        all_exec_regions.extend(lr.exec_regions)
+
+    # Internal SRAM (0x20000000–0x20020000 covers both main 128K + aliased area)
+    internal_sram = _sum_disjoint_max_sizes(all_exec_regions, 0x20000000, 0x20020000)
+    # CCM
+    ccm_sram = _sum_disjoint_max_sizes(all_exec_regions, 0x10000000, 0x10010000)
+    # External SRAM
+    external_sram = _sum_disjoint_max_sizes(all_exec_regions, 0x68000000, 0x68100000)
+
+    data.sram_capacity = internal_sram + ccm_sram + external_sram
+    data.internal_sram_capacity = internal_sram
+    data.ccm_capacity = ccm_sram
+    data.external_sram_capacity = external_sram
 
     return data
 
@@ -420,8 +794,10 @@ class MapAnalyzerApp:
         self._build_notebook()
 
         # ── Load file ────────────────────────────────────────────────
+        loaded = False
         if map_path and os.path.isfile(map_path):
             self._load(map_path)
+            loaded = True
         else:
             # Try default path relative to script
             script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -430,8 +806,30 @@ class MapAnalyzerApp:
             ))
             if os.path.isfile(project_map):
                 self._load(project_map)
-            else:
-                self._ask_open()
+                loaded = True
+
+        # Auto-load SCT file alongside the MAP
+        if loaded and self.map_data:
+            # Try <project_root>/System/StarGamer_CCM.sct
+            sct_candidates = [
+                os.path.normpath(os.path.join(script_dir, "..", "System", "StarGamer_CCM.sct")),
+                os.path.normpath(os.path.join(script_dir, "..", "System", "StarGamer.sct")),
+            ]
+            # Also try alongside the MAP file
+            map_dir = os.path.dirname(self.map_data.filepath)
+            for f in os.listdir(map_dir) if os.path.isdir(map_dir) else []:
+                if f.lower().endswith(".sct") or f.lower().endswith(".scf"):
+                    sct_candidates.append(os.path.join(map_dir, f))
+            for sct_path in sct_candidates:
+                if os.path.isfile(sct_path):
+                    try:
+                        self._load_sct(sct_path)
+                    except Exception:
+                        pass  # SCT is optional
+                    break
+
+        if not loaded:
+            self._ask_open()
 
     # ── Menu ──────────────────────────────────────────────────────────
 
@@ -441,6 +839,7 @@ class MapAnalyzerApp:
 
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open MAP File...", command=self._ask_open, accelerator="Ctrl+O")
+        file_menu.add_command(label="Open SCT File...", command=self._ask_open_sct)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -454,9 +853,13 @@ class MapAnalyzerApp:
         toolbar.pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
 
         ttk.Button(toolbar, text="Open MAP...", command=self._ask_open).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Open SCT...", command=self._ask_open_sct).pack(side=tk.LEFT, padx=2)
 
         self.lbl_file = ttk.Label(toolbar, text="No file loaded", foreground="gray")
         self.lbl_file.pack(side=tk.LEFT, padx=8)
+
+        self.lbl_sct = ttk.Label(toolbar, text="", foreground="gray")
+        self.lbl_sct.pack(side=tk.LEFT, padx=4)
 
     # ── Summary frame ─────────────────────────────────────────────────
 
@@ -647,6 +1050,14 @@ class MapAnalyzerApp:
         if path:
             self._load(path)
 
+    def _ask_open_sct(self):
+        path = filedialog.askopenfilename(
+            title="Select ARM Scatter-loading Description file",
+            filetypes=[("SCT files", "*.sct"), ("Scatter files", "*.scf"), ("All files", "*.*")],
+        )
+        if path:
+            self._load_sct(path)
+
     def _load(self, path: str):
         try:
             self.map_data = parse_map_file(path)
@@ -655,7 +1066,54 @@ class MapAnalyzerApp:
             return
 
         self.lbl_file.config(text=os.path.basename(path), foreground="black")
-        self.root.title(f"ARMCLANG MAP Analyzer — {os.path.basename(path)}")
+        title = f"ARMCLANG MAP Analyzer — {os.path.basename(path)}"
+        self.root.title(title)
+        self._refresh_all()
+
+    def _load_sct(self, path: str):
+        """Load a scatter-loading (.sct) file and pair it with already-loaded MAP data."""
+        try:
+            sct = parse_sct_file(path)
+        except Exception as e:
+            messagebox.showerror("Parse Error", f"Failed to parse SCT file:\n{e}")
+            return
+
+        if self.map_data:
+            self.map_data.sct = sct
+            # Override capacity values with authoritative SCT data.
+            # UNINIT regions DO count toward SRAM capacity — they consume physical
+            # SRAM, they're just not initialised from flash.
+            sct_flash = 0
+            sct_internal_sram = 0
+            sct_ccm = 0
+            sct_external_sram = 0
+            for lr in sct.load_regions:
+                for er in lr.exec_regions:
+                    if 0x08000000 <= er.base < 0x10000000:
+                        sct_flash += er.size
+                    elif 0x20000000 <= er.base < 0x20020000:
+                        sct_internal_sram += er.size  # includes UNINIT
+                    elif 0x10000000 <= er.base < 0x10010000:
+                        sct_ccm += er.size
+                    elif 0x68000000 <= er.base < 0x68100000:
+                        sct_external_sram += er.size
+
+            # Only override if SCT provided meaningful values
+            if sct_flash:
+                self.map_data.flash_capacity = sct_flash
+            if sct_internal_sram:
+                self.map_data.internal_sram_capacity = sct_internal_sram
+            if sct_ccm:
+                self.map_data.ccm_capacity = sct_ccm
+            if sct_external_sram:
+                self.map_data.external_sram_capacity = sct_external_sram
+            self.map_data.sram_capacity = (sct_internal_sram + sct_ccm + sct_external_sram
+                                           or self.map_data.sram_capacity)
+
+        self.lbl_sct.config(text=f"SCT: {os.path.basename(path)}", foreground="blue")
+        title = self.root.title()
+        if " + SCT" not in title:
+            self.root.title(title + f" + SCT {os.path.basename(path)}")
         self._refresh_all()
 
     def _refresh_all(self):
@@ -693,14 +1151,36 @@ class MapAnalyzerApp:
         self.lbl_rw.config(text=f"{md.total_rw_data:,} B  ({md.total_rw_data / 1024:.1f} KB)")
         self.lbl_zi.config(text=f"{md.total_zi_data:,} B  ({md.total_zi_data / 1024:.1f} KB)")
 
-        # Regions info
+        # Regions info — enriched with SCT metadata when available
         region_lines = []
+        sct = md.sct
         for lr in md.load_regions:
             for er in lr.exec_regions:
+                # Look up matching SCT exec region for UNINIT/FIXED attributes
+                tags = ""
+                if sct:
+                    ser = sct.find_exec_region(er.name)
+                    if ser:
+                        if ser.uninit:
+                            tags = " [UNINIT — reserved, not loaded]"
+                        elif ser.fixed:
+                            tags = " [FIXED]"
                 region_lines.append(
                     f"  {er.name}: {fmt_bytes(er.size)} / {fmt_bytes(er.max_size)} "
-                    f"({er.usage_pct:.1f}%)  @ 0x{er.exec_base:08X}"
+                    f"({er.usage_pct:.1f}%)  @ 0x{er.exec_base:08X}{tags}"
                 )
+
+        # Show per-bank capacity breakdown if we have detailed info
+        if md.internal_sram_capacity or md.ccm_capacity or md.external_sram_capacity:
+            parts = []
+            if md.internal_sram_capacity:
+                parts.append(f"Internal SRAM: {fmt_bytes(md.internal_sram_capacity)}")
+            if md.ccm_capacity:
+                parts.append(f"CCM: {fmt_bytes(md.ccm_capacity)}")
+            if md.external_sram_capacity:
+                parts.append(f"External SRAM: {fmt_bytes(md.external_sram_capacity)}")
+            region_lines.append("  ── Capacity breakdown: " + " | ".join(parts))
+
         self.lbl_regions.config(text="Regions:\n" + "\n".join(region_lines) if region_lines else "No region data")
 
     # ── Object table refresh ──────────────────────────────────────────
@@ -918,11 +1398,13 @@ class MapAnalyzerApp:
             return
 
         md = self.map_data
-        lines = []
+        sct = md.sct
+        lines: List[str] = []
 
         lines.append(f"Entry Point: 0x{md.entry_point:08X}")
         lines.append("")
 
+        # ── MAP-derived regions ──
         for lr in md.load_regions:
             lines.append(f"Load Region: {lr.name}")
             lines.append(f"  Base: 0x{lr.base:08X}   Size: {fmt_bytes(lr.size)}   Max: {fmt_bytes(lr.max_size)}")
@@ -931,14 +1413,65 @@ class MapAnalyzerApp:
             lines.append("")
 
             for er in lr.exec_regions:
-                lines.append(f"  Execution Region: {er.name}")
+                # Cross-reference with SCT for extra metadata
+                tags = ""
+                sct_er = sct.find_exec_region(er.name) if sct else None
+                if sct_er:
+                    attr_parts = []
+                    if sct_er.uninit:
+                        attr_parts.append("UNINIT — reserved, zero-init, not loaded from flash")
+                    if sct_er.fixed:
+                        attr_parts.append("FIXED")
+                    if sct_er.empty:
+                        attr_parts.append("EMPTY")
+                    if sct_er.overlay:
+                        attr_parts.append("OVERLAY")
+                    if sct_er.align:
+                        attr_parts.append(f"ALIGN {sct_er.align}")
+                    if attr_parts:
+                        tags = "  [" + ", ".join(attr_parts) + "]"
+
+                lines.append(f"  Execution Region: {er.name}{tags}")
                 lines.append(f"    Exec Base: 0x{er.exec_base:08X}   Load Base: 0x{er.load_base:08X}")
                 lines.append(f"    Size: {fmt_bytes(er.size)}   Max: {fmt_bytes(er.max_size)}   "
                              f"Used: {er.usage_pct:.1f}%   Free: {fmt_bytes(er.free)}")
                 if er.compressed_size:
                     lines.append(f"    Compressed: {fmt_bytes(er.compressed_size)}")
+
+                # Show input sections from SCT for this exec region
+                if sct_er and sct_er.input_sections:
+                    lines.append(f"    SCT input sections ({len(sct_er.input_sections)}):")
+                    for sec in sct_er.input_sections[:20]:  # limit to first 20
+                        lines.append(f"      {sec}")
+                    if len(sct_er.input_sections) > 20:
+                        lines.append(f"      ... and {len(sct_er.input_sections) - 20} more")
+
                 lines.append("")
 
+        # ── SCT-only regions (not found in MAP) ──
+        if sct:
+            map_er_names = set()
+            for lr in md.load_regions:
+                for er in lr.exec_regions:
+                    map_er_names.add(er.name.lower())
+
+            orphan_sct_regions = []
+            for sct_lr in sct.load_regions:
+                for sct_er in sct_lr.exec_regions:
+                    if sct_er.name.lower() not in map_er_names:
+                        orphan_sct_regions.append((sct_lr.name, sct_er))
+
+            if orphan_sct_regions:
+                lines.append("─" * 60)
+                lines.append("SCT-defined regions not found in MAP (may be EMPTY or unused):")
+                lines.append("")
+                for lr_name, sct_er in orphan_sct_regions:
+                    attr = " [UNINIT]" if sct_er.uninit else ""
+                    lines.append(f"  {sct_er.name}{attr}  (load region: {lr_name})")
+                    lines.append(f"    Base: 0x{sct_er.base:08X}   Size: {fmt_bytes(sct_er.size)}")
+                    lines.append("")
+
+        # ── Grand totals ──
         lines.append("─" * 60)
         lines.append(f"Grand Totals:")
         lines.append(f"  Code:          {md.total_code:>10,} B  ({md.total_code / 1024:>8.1f} KB)")
@@ -952,6 +1485,18 @@ class MapAnalyzerApp:
         lines.append(f"  SRAM total:    {sram_used:>10,} B  ({sram_used / 1024:>8.1f} KB)")
         lines.append(f"  Object count:  {len(md.objects):>10}")
         lines.append(f"  Library count: {len(md.libraries):>10}")
+
+        # Capacity details
+        if md.flash_capacity:
+            lines.append(f"\n  MCU Flash capacity:  {fmt_bytes(md.flash_capacity)}")
+        if md.internal_sram_capacity:
+            lines.append(f"  Internal SRAM alloc: {fmt_bytes(md.internal_sram_capacity)}")
+        if md.ccm_capacity:
+            lines.append(f"  CCM SRAM alloc:      {fmt_bytes(md.ccm_capacity)}")
+        if md.external_sram_capacity:
+            lines.append(f"  External SRAM alloc: {fmt_bytes(md.external_sram_capacity)}")
+        if md.sram_capacity:
+            lines.append(f"  Total SRAM capacity: {fmt_bytes(md.sram_capacity)}")
 
         self.region_text.insert("1.0", "\n".join(lines))
 

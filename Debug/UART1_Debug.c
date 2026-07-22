@@ -65,10 +65,10 @@ struct __FILE
 
 FILE __stdout;
 
-/* �ض���fputc����, printf�������ջ�ͨ������fputc����ַ��������� */
+/* �ض���fputc����, printf�������ջ�ͨ������fputc����ַ��������ￄ1�7 */
 int fputc(int ch, FILE *f)
 {
-    while ((USART1->SR & 0X40) == 0);               /* �ȴ���һ���ַ�������� */
+    while ((USART1->SR & 0X40) == 0);               /* �ȴ���һ���ַ�������ￄ1�7 */
 
     USART1->DR = (uint8_t)ch;                       /* ��Ҫ���͵��ַ� ch д�뵽DR�Ĵ��� */
     return ch;
@@ -151,7 +151,7 @@ void shellTaskList(void)
 			continue;
 		}
 
-		/* Check if this thread was created via SysCreatThread → USER */
+		/* Check if this thread was created via SysCreatThread ↄ1�7 USER */
 		{
 			adt_chain_t *node = SRT.task_table->next;
 			while (node)
@@ -480,6 +480,121 @@ int shellSysStats(int argc, char *argv[])
 SHELL_EXPORT_CMD(
 SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_CMD_MAIN),
 sysstats, shellSysStats, show CPU and SRAM usage);
+
+/* ---- memfrag: memory fragmentation scanner ---- */
+static void shell_print_frag_info(const char *name, u8 memx)
+{
+    mem_frag_info_t info;
+    u32 used_pct_x10;
+    u32 frag_pct_x10;
+    u32 largest_bytes;
+    u32 total_bytes;
+    u32 i;
+    u32 chars_per_line = 64U;
+    u32 blocks_per_char;
+    u32 pos;
+    u32 used_in_group;
+    u32 group;
+
+    sys_mem_frag_info(memx, &info);
+
+    if (info.total_blocks == 0U)
+    {
+        shellPrintEndLine(&shell, "\n===== %s Pool =====\n", name);
+        shellPrintEndLine(&shell, "  (not initialized)\n");
+        return;
+    }
+
+    total_bytes = info.total_blocks * info.block_size;
+    largest_bytes = info.largest_free_blocks * info.block_size;
+
+    used_pct_x10 = (info.total_blocks > 0U)
+        ? (info.used_blocks * 1000U / info.total_blocks) : 0U;
+
+    /* Fragmentation ratio: 0 = no frag, 1000 = fully fragmented */
+    frag_pct_x10 = (info.free_blocks > 0U)
+        ? (1000U - (info.largest_free_blocks * 1000U / info.free_blocks)) : 0U;
+
+    shellPrintEndLine(&shell, "\n===== %s Pool =====\n", name);
+    shellPrintEndLine(&shell,
+        "Blocks:       %lu total, %lu used, %lu free (%lu.%lu%% used)\n",
+        info.total_blocks, info.used_blocks, info.free_blocks,
+        used_pct_x10 / 10U, used_pct_x10 % 10U);
+    shellPrintEndLine(&shell,
+        "Block size:   %lu B  |  Pool size: %lu KB\n",
+        info.block_size, total_bytes / 1024U);
+    shellPrintEndLine(&shell,
+        "Free holes:   %lu (%lu fragments, i.e. sandwiched free regions)\n",
+        info.hole_count, info.frag_count);
+    shellPrintEndLine(&shell,
+        "Largest free: %lu blocks (%lu.%02lu KB)\n",
+        info.largest_free_blocks,
+        largest_bytes / 1024U,
+        (largest_bytes % 1024U) * 100U / 1024U);
+    shellPrintEndLine(&shell,
+        "Frag ratio:   %lu.%lu%% (0%%=perfect, 100%%=fully scattered)\n",
+        frag_pct_x10 / 10U, frag_pct_x10 % 10U);
+
+    /* Visual fragmentation map (compressed to fit terminal width) */
+    blocks_per_char = (info.total_blocks + chars_per_line - 1U) / chars_per_line;
+    if (blocks_per_char < 1U) blocks_per_char = 1U;
+
+    shellPrintEndLine(&shell, "Map [.%lu blocks/char, #=used .=free -=mixed]:\n  ",
+                      blocks_per_char);
+
+    pos = 0U;
+    for (i = 0U; i < info.total_blocks; i += blocks_per_char)
+    {
+        used_in_group = 0U;
+        for (group = 0U; group < blocks_per_char && (i + group) < info.total_blocks; group++)
+        {
+            if (mallco_dev.memmap[memx][i + group] != 0U)
+            {
+                used_in_group++;
+            }
+        }
+
+        if (used_in_group == 0U)
+            shellWriteString(&shell, ".");
+        else if (used_in_group == group)
+            shellWriteString(&shell, "#");
+        else
+            shellWriteString(&shell, "-");
+
+        pos++;
+        if (pos >= chars_per_line)
+        {
+            shellWriteString(&shell, "\n  ");
+            pos = 0U;
+        }
+    }
+    shellWriteString(&shell, "\n");
+}
+
+int shellMemFrag(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+
+    /* CCM pool (SRAMCCM) */
+    shell_print_frag_info("CCM (SRAMCCM)", SRAMCCM);
+
+    /* External SRAM pool (SRAMEX) */
+    shell_print_frag_info("External SRAM (SRAMEX)", SRAMEX);
+
+    shellPrintEndLine(&shell,
+        "\nLegend: # = fully-used group, . = fully-free, - = mixed (fragmented)\n");
+    shellPrintEndLine(&shell,
+        "Frag ratio = 1 - (largest_free / total_free). Higher = more fragmented.\n");
+    shellPrintEndLine(&shell,
+        "Fragments = free holes trapped between used blocks (pattern: 101).\n");
+
+    return 0;
+}
+
+SHELL_EXPORT_CMD(
+SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_CMD_MAIN),
+memfrag, shellMemFrag, scan memory fragmentation (101 pattern));
 
 #endif
 /***********************************************END*******************************************/

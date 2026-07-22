@@ -38,6 +38,7 @@ static void video_mjpeg_skip_input_data(j_decompress_ptr cinfo, long byte_count)
 static void video_mjpeg_term_source(j_decompress_ptr cinfo);
 static void video_mjpeg_set_source(j_decompress_ptr cinfo, Video_JpegSource_t *source,
 	Video_MJPEG_t *decoder, FIL *file, u32 size);
+static u8 video_mjpeg_supports_rgb565(const struct jpeg_decompress_struct *cinfo);
 static void video_mjpeg_convert_row(u16 *destination, const u8 *source, u16 width);
 static void video_mjpeg_reset_frame_arena(Video_MJPEG_t *decoder);
 static void video_mjpeg_update_lcd_wait(Video_MJPEG_t *decoder, u32 started);
@@ -49,7 +50,6 @@ int Video_MJPEG_Init(Video_MJPEG_t *decoder)
 	struct jpeg_decompress_struct *cinfo;
 	Video_JpegError_t *jerr;
 	JPEG_MemoryProvider_t *provider;
-	u32 row_size;
 	u32 stripe_size;
 	volatile int jpeg_message_code = 0;
 
@@ -58,19 +58,17 @@ int Video_MJPEG_Init(Video_MJPEG_t *decoder)
 		return 1;
 	}
 	memset(decoder, 0, sizeof(*decoder));
-	row_size = VIDEO_MJPEG_MAX_WIDTH * VIDEO_MJPEG_RGB_COMPONENTS;
 	stripe_size = VIDEO_MJPEG_MAX_WIDTH * VIDEO_MJPEG_STRIPE_LINES * sizeof(u16);
 
 	decoder->source_buffer = (u8 *)Video_Memory_Alloc(
 		VIDEO_MJPEG_SOURCE_BUFFER_SIZE);
-	decoder->row_buffer = (u8 *)Video_Memory_Alloc(row_size);
 	decoder->stripe[0] = (u16 *)Video_Memory_Alloc(stripe_size);
 	decoder->stripe[1] = (u16 *)Video_Memory_Alloc(stripe_size);
 	decoder->jpeg_context = Video_Memory_Alloc(sizeof(struct jpeg_decompress_struct));
 	decoder->jpeg_error = Video_Memory_Alloc(sizeof(Video_JpegError_t));
 	decoder->jpeg_provider = Video_Memory_Alloc(sizeof(JPEG_MemoryProvider_t));
 	decoder->jpeg_arena = (u8 *)Video_Memory_Alloc(VIDEO_MJPEG_ARENA_SIZE);
-	if(decoder->source_buffer == NULL || decoder->row_buffer == NULL ||
+	if(decoder->source_buffer == NULL ||
 	   decoder->stripe[0] == NULL || decoder->stripe[1] == NULL ||
 	   decoder->jpeg_context == NULL || decoder->jpeg_error == NULL ||
 	   decoder->jpeg_provider == NULL || decoder->jpeg_arena == NULL)
@@ -175,12 +173,13 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 	u16 x;
 	u16 y;
 	u32 lcd_wait_started;
+	u8 direct_rgb565;
 	volatile int jpeg_message_code = 0;
 	volatile u8 stream_started = 0U;
 	volatile Video_MJPEGResult_t result = VIDEO_MJPEG_FORMAT_ERROR;
 
 	if(decoder == NULL || file == NULL || chunk == NULL ||
-	   decoder->source_buffer == NULL || decoder->row_buffer == NULL ||
+	   decoder->source_buffer == NULL ||
 	   decoder->stripe[0] == NULL || decoder->stripe[1] == NULL ||
 	   decoder->jpeg_context == NULL || decoder->jpeg_error == NULL ||
 	   decoder->jpeg_provider == NULL || decoder->jpeg_arena == NULL ||
@@ -233,13 +232,25 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 		goto cleanup;
 	}
 
-	cinfo->out_color_space = JCS_RGB;
 	cinfo->dct_method = JDCT_IFAST;
 	cinfo->do_fancy_upsampling = FALSE;
+	direct_rgb565 = video_mjpeg_supports_rgb565(cinfo);
+	if(direct_rgb565 == 0U && decoder->row_buffer == NULL)
+	{
+		decoder->row_buffer = (u8 *)Video_Memory_Alloc(
+			VIDEO_MJPEG_MAX_WIDTH * VIDEO_MJPEG_RGB_COMPONENTS);
+		if(decoder->row_buffer == NULL)
+		{
+			result = VIDEO_MJPEG_MEMORY_ERROR;
+			goto cleanup;
+		}
+	}
+	cinfo->out_color_space = (direct_rgb565 != 0U) ? JCS_RGB565_VIDEO : JCS_RGB;
 	if(jpeg_start_decompress(cinfo) == FALSE ||
 	   cinfo->output_width != expected_width ||
 	   cinfo->output_height != expected_height ||
-	   cinfo->output_components != VIDEO_MJPEG_RGB_COMPONENTS)
+	   cinfo->output_components != ((direct_rgb565 != 0U) ? 2 :
+	                                VIDEO_MJPEG_RGB_COMPONENTS))
 	{
 		result = VIDEO_MJPEG_FORMAT_ERROR;
 		goto cleanup;
@@ -255,19 +266,28 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 		goto cleanup;
 	}
 	stream_started = 1U;
-	row_pointer[0] = (JSAMPROW)decoder->row_buffer;
-
 	while(cinfo->output_scanline < cinfo->output_height)
 	{
+		stripe = decoder->stripe[stripe_index];
+		if(direct_rgb565 != 0U)
+		{
+			row_pointer[0] = (JSAMPROW)&stripe[(u32)stripe_rows * width];
+		}
+		else
+		{
+			row_pointer[0] = (JSAMPROW)decoder->row_buffer;
+		}
 		if(jpeg_read_scanlines(cinfo, row_pointer, 1U) != 1U)
 		{
 			result = VIDEO_MJPEG_FORMAT_ERROR;
 			goto cleanup;
 		}
 
-		stripe = decoder->stripe[stripe_index];
-		video_mjpeg_convert_row(&stripe[(u32)stripe_rows * width],
-		                         decoder->row_buffer, width);
+		if(direct_rgb565 == 0U)
+		{
+			video_mjpeg_convert_row(&stripe[(u32)stripe_rows * width],
+			                         decoder->row_buffer, width);
+		}
 		stripe_rows++;
 		if(stripe_rows >= VIDEO_MJPEG_STRIPE_LINES ||
 		   cinfo->output_scanline == cinfo->output_height)
@@ -415,6 +435,24 @@ static void video_mjpeg_set_source(j_decompress_ptr cinfo, Video_JpegSource_t *s
 	source->remaining = size;
 	source->decoder = decoder;
 	cinfo->src = &source->pub;
+}
+
+static u8 video_mjpeg_supports_rgb565(const struct jpeg_decompress_struct *cinfo)
+{
+	if(cinfo == NULL || cinfo->data_precision != 8 ||
+	   cinfo->jpeg_color_space != JCS_YCbCr || cinfo->num_components != 3 ||
+	   cinfo->comp_info == NULL ||
+	   cinfo->comp_info[0].h_samp_factor != 2 ||
+	   cinfo->comp_info[1].h_samp_factor != 1 ||
+	   cinfo->comp_info[2].h_samp_factor != 1 ||
+	   (cinfo->comp_info[0].v_samp_factor != 1 &&
+	    cinfo->comp_info[0].v_samp_factor != 2) ||
+	   cinfo->comp_info[1].v_samp_factor != 1 ||
+	   cinfo->comp_info[2].v_samp_factor != 1)
+	{
+		return 0U;
+	}
+	return 1U;
 }
 
 static void video_mjpeg_convert_row(u16 *destination, const u8 *source, u16 width)

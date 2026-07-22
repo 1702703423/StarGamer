@@ -218,7 +218,8 @@ typedef enum {
 	JCS_RGB,		/* red/green/blue */
 	JCS_YCbCr,		/* Y/Cb/Cr (also known as YUV) */
 	JCS_CMYK,		/* C/M/Y/K */
-	JCS_YCCK		/* Y/Cb/Cr/K */
+	JCS_YCCK,		/* Y/Cb/Cr/K */
+	JCS_RGB565_VIDEO	/* RGB565, MSB first; merged video output only */
 } J_COLOR_SPACE;
 
 /* DCT/IDCT algorithm options. */

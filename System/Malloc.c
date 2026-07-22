@@ -478,3 +478,91 @@ void *lv__mem_realloc(void *ptr, u32 size)
 
     return myrealloc(memx, ptr, size);
 }
+
+/* ---- Memory fragmentation analysis ---- */
+void sys_mem_frag_info(u8 memx, mem_frag_info_t *info)
+{
+    u32 i;
+    u32 in_hole;
+    u32 hole_start;
+    u32 current_free;
+
+    if (info == NULL || memx >= SRAMBANK)
+    {
+        return;
+    }
+
+    /* Zero out the struct */
+    sys_mem_set(info, 0U, sizeof(mem_frag_info_t));
+
+    if (mallco_dev.memrdy[memx] == 0U)
+    {
+        return;
+    }
+
+    info->block_size = memblksize[memx];
+    info->total_blocks = memtblsize[memx];
+
+    /* Count used blocks */
+    for (i = 0U; i < info->total_blocks; i++)
+    {
+        if (mallco_dev.memmap[memx][i] != 0U)
+        {
+            info->used_blocks++;
+        }
+    }
+    info->free_blocks = info->total_blocks - info->used_blocks;
+
+    /* Scan for free holes and fragments */
+    in_hole = 0U;
+    hole_start = 0U;
+    current_free = 0U;
+
+    for (i = 0U; i < info->total_blocks; i++)
+    {
+        if (mallco_dev.memmap[memx][i] == 0U)
+        {
+            if (in_hole == 0U)
+            {
+                /* Entering a new hole */
+                in_hole = 1U;
+                hole_start = i;
+                current_free = 0U;
+            }
+            current_free++;
+        }
+        else
+        {
+            if (in_hole != 0U)
+            {
+                /* Exiting a hole */
+                info->hole_count++;
+
+                /* Fragment: hole has used blocks on BOTH sides */
+                if (hole_start > 0U)
+                {
+                    info->frag_count++;
+                }
+
+                if (current_free > info->largest_free_blocks)
+                {
+                    info->largest_free_blocks = current_free;
+                }
+
+                in_hole = 0U;
+            }
+        }
+    }
+
+    /* Handle trailing hole (not a fragment, but count it) */
+    if (in_hole != 0U)
+    {
+        info->hole_count++;
+        /* Trailing hole is not a fragment (no used block after it) */
+
+        if (current_free > info->largest_free_blocks)
+        {
+            info->largest_free_blocks = current_free;
+        }
+    }
+}
