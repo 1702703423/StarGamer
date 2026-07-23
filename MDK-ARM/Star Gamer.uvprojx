@@ -276,8 +276,8 @@
               </OCR_RVCT3>
               <OCR_RVCT4>
                 <Type>1</Type>
-                <StartAddress>0x8000000</StartAddress>
-                <Size>0x100000</Size>
+                <StartAddress>0x8010000</StartAddress>
+                <Size>0xf0000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -338,9 +338,9 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls>-Wno-deprecated-non-prototype</MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F407xx</Define>
+              <Define>USE_HAL_DRIVER,STM32F407xx,USER_VECT_TAB_ADDRESS,VECT_TAB_OFFSET=0x00010000U</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Middlewares/libhelix;../Middlewares/libhelix/port;../Drivers/LCD;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall;../USB_DEVICE/App;../USB_DEVICE/Target;../Middlewares/ST/STM32_USB_Device_Library/Core/Inc;../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc;..\ELF Loader</IncludePath>
+              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Middlewares/libhelix;../Middlewares/libhelix/port;../Drivers/LCD;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../IAP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall;../USB_DEVICE/App;../USB_DEVICE/Target;../Middlewares/ST/STM32_USB_Device_Library/Core/Inc;../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc;..\ELF Loader</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1649,6 +1649,23 @@
         </Group>
         <Group>
           <GroupName>IAP</GroupName>
+          <Files>
+            <File>
+              <FileName>IAP.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\IAP\IAP.c</FilePath>
+            </File>
+            <File>
+              <FileName>IAP.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\IAP\IAP.h</FilePath>
+            </File>
+            <File>
+              <FileName>IAP_Protocol.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\IAP\IAP_Protocol.h</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>Application/User/LIBJPEG/App</GroupName>

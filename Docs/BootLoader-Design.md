@@ -2,8 +2,17 @@
 
 > **目标平台**: STM32F407ZGT6（Cortex-M4F @ 168 MHz，1 MB 内部 Flash，192 KB 内部 SRAM + 1 MB 外部 SRAM）
 > **设计原则**: 最小侵入、断电容错、双备份兜底、CRC 全程校验
-> **版本**: v1.0
-> **状态**: 设计阶段 — 本文档为纯方案描述，尚未实施代码修改
+> **版本**: v1.1
+> **状态**: 已实现并通过 Keil ARMCLANG 编译；板级掉电/恢复测试待完成
+
+> **实现基线（2026-07-23）**：共享协议位于 `IAP/IAP_Protocol.h`；APP 端由
+> `IAP/IAP.c` 和 `GUI/GUI_Settings.c` 完成 `update.bin` 暂存并自动复位；裸机端位于
+> `BootLoader/StarGamerBootLoader/Boot/`。本文以下流程以当前实现为准。
+
+实际硬件配置：HSE 为 8 MHz；SPI2 SCK 使用 PB13；LCD 使用 SPI1（PC4 CS、PC5 DC、
+PB12 RST、PB15 BL），W25Q64 使用 SPI2（PE6 CS），AT24C02 使用 PB8/PB9 软件 I2C。
+APP 按项目要求保持 APB2 168 MHz、SPI1 84 MHz；BootLoader 使用 APB2 84 MHz、SPI1
+42 MHz。APP 的 APB2 配置高于 STM32F407 数据手册额定 84 MHz，属于明确保留的超频配置。
 
 ---
 
@@ -74,36 +83,33 @@ STM32F407ZG 内部 Flash 共 12 个扇区，物理特性如下：
 
 | 项目 | 值 |
 |------|-----|
-| **页缓冲区大小** | `PAGE_BUFFER_SIZE = 256 KB`（`0x40000`） |
-| **分配来源** | `SRAMEX` 内存池（`mymalloc(SRAMEX, ...)`） |
+| **页缓冲区大小** | `IAP_TRANSFER_BUFFER_SIZE = 4 KB`（`0x1000`） |
+| **分配来源** | `SRAMEX` 内存池（`sys_malloc(SRAMEX, ...)`） |
 | **生命周期** | 更新流程开始时分配，写入 W25Q64 完成后释放 |
-| **并发约束** | 更新期间暂停 LVGL 渲染（帧缓冲可暂时释放以腾出空间） |
+| **并发约束** | 由 GUI 线程同步执行；启用 USB MSC 时禁止开始更新 |
 
-> 256 KB 是权衡后的值：足够大以减少 SD 卡读取次数（约 4 次读完 960 KB 固件），同时不会挤占外部 SRAM 上其他关键数据。若外部 SRAM 碎片化严重，可降级使用 128 KB 或 64 KB 页缓冲。
+> 当前实现使用固定 4 KB 缓冲，避免更新期间额外占用大块连续外部 SRAM，并与 FatFs/W25Q64
+> 分页接口直接配合。BootLoader 使用 1 KB 静态片上 SRAM 缓冲，不依赖外部 SRAM。
 
 ### 1.4 AT24C02 EEPROM 数据布局（256 字节）
 
-当前 EEPROM 仅存储 `System_Settings_Record_t`（Offset 0），占用约 120 字节。BootLoader 信息区紧接其后：
+系统设置记录当前占用 36 字节（Offset 0–35）。BootLoader 使用两个独立校验的 36 字节槽：
 
-| 偏移 | 大小 | 字段 | 说明 |
-|------|------|------|------|
-| `0` | ~120 B | `System_Settings_Record_t` | 已有，系统设置持久化 |
-| `128` | 4 B | `bl_magic` | BootLoader 魔数 `0x424C4942`（"BLIB"） |
-| `132` | 4 B | `bl_fw_size` | 暂存固件大小（字节） |
-| `136` | 4 B | `bl_fw_crc32` | 暂存固件 CRC32 校验值 |
-| `140` | 1 B | `bl_update_flag` | 更新标志：`0xAA`=有新固件待更新 |
-| `141` | 1 B | `bl_restore_flag` | 恢复标志：`0xBB`=需恢复备份 |
-| `142` | 1 B | `bl_backup_flag` | 备份状态：`0x00`=无备份，`0xCC`=有效备份 |
-| `143` | 1 B | `bl_reserved` | 保留 |
-| `144` | 4 B | `bl_checksum` | 以上 16 字节的简单校验和（32-bit 累加） |
+| 偏移 | 大小 | 用途 |
+|------|------|------|
+| `0` | 36 B | `System_Settings_Record_t` |
+| `128` | 36 B | BootLoader 状态槽 0（128–163） |
+| `168` | 36 B | BootLoader 状态槽 1（168–203） |
 
-> EEPROM 总容量 256 字节，BootLoader 信息区占用 20 字节（128–147），总使用量 ≤ 148 字节，余量充分。
+每槽包含魔数 `0x424C4932`（"BLI2"）、版本、记录长度、单调序号、暂存大小/CRC、备份
+大小/CRC、更新/恢复/备份状态和 FNV-1a 校验。保存时只覆盖较旧槽，写后立即回读验证；断电
+撕裂写会因校验失败被丢弃，另一槽仍可用。完整字段见附录 B。
 
 ---
 
 ## 2. 更新流程
 
-更新流程分为两大阶段：**APP 端预处理**（在 RTOS 环境下完成 SD 卡读取与 CRC 计算）和 **BootLoader 端烧写**（裸机环境完成内部 Flash 编程）。两个阶段之间通过**用户手动重启**衔接。
+更新流程分为两大阶段：**APP 端预处理**（在 RTOS 环境下完成 SD 卡读取与 CRC 计算）和 **BootLoader 端烧写**（裸机环境完成内部 Flash 编程）。APP 成功提交双槽状态记录后调用 `NVIC_SystemReset()`，自动进入 BootLoader。
 
 ### 2.1 整体时序
 
@@ -114,15 +120,15 @@ STM32F407ZG 内部 Flash 共 12 个扇区，物理特性如下：
     │
     ├─→ 阶段 A: APP 端预处理
     │       1. 检测 SD 卡 update.bin
-    │       2. 分页读取 → 外部 SRAM 256KB 缓冲 → 写入 W25Q64 暂存区
-    │       3. 计算 CRC32 并写入 EEPROM
-    │       4. 设置 bl_update_flag = 0xAA
-    │       5. GUI 提示"更新已就绪，请重启以完成升级"
+    │       2. 分页读取 → 外部 SRAM 4KB 缓冲 → 写入 W25Q64 暂存区
+    │       3. 比对 SD 源数据 CRC 与 W25Q64 回读 CRC
+    │       4. 双槽提交 update_state = 0xAA
+    │       5. GUI 显示完成状态并自动复位
     │
     ├── 用户重启设备
     │
     ├─→ 阶段 B: BootLoader 启动检查
-    │       1. 读取 EEPROM bl_update_flag
+    │       1. 读取 EEPROM 双槽 update_state
     │       2. 若 = 0xAA → 进入更新模式
     │       3. 若 ≠ 0xAA → 直接跳转 APP
     │
@@ -131,7 +137,7 @@ STM32F407ZG 内部 Flash 共 12 个扇区，物理特性如下：
     │       2. 擦除内部 Flash Sector 4–11（Application 区）
     │       3. 分页写入内部 Flash
     │       4. 回读校验
-    │       5. 清除 bl_update_flag，写入 bl_backup_flag = 0xCC（新固件生效即视为有效备份）
+    │       5. 清除更新状态，保留上一版有效备份
     │       6. 跳转 APP
     │
     └── APP 正常启动（新固件运行）
@@ -151,9 +157,8 @@ STM32F407ZG 内部 Flash 共 12 个扇区，物理特性如下：
 #### Step A2: 分配页缓冲区并分页传输
 
 ```
-1. pbuf = mymalloc(SRAMEX, PAGE_BUFFER_SIZE)  // 256 KB
-   若分配失败 → 降级尝试 128KB / 64KB
-   若仍失败 → 提示内存不足退出
+1. pbuf = sys_malloc(SRAMEX, IAP_TRANSFER_BUFFER_SIZE)  // 4 KB
+   若分配失败 → 提示内存不足退出
 
 2. f_open(&fil, "0:/update.bin", FA_READ)
 
@@ -162,23 +167,27 @@ STM32F407ZG 内部 Flash 共 12 个扇区，物理特性如下：
 
 4. 循环传输:
    while (remaining > 0) {
-       chunk = min(remaining, PAGE_BUFFER_SIZE);
+       chunk = min(remaining, IAP_TRANSFER_BUFFER_SIZE);
        f_read(&fil, pbuf, chunk, &br);      // SD → 外部 SRAM
+       source_crc = crc32_update(source_crc, pbuf, chunk);
        W25Q64_WriteData(addr, pbuf, chunk); // 外部 SRAM → W25Q64
        addr += chunk;
        remaining -= chunk;
        更新 GUI 进度条;
    }
 
-5. f_close(&fil); myfree(SRAMEX, pbuf);
+5. f_close(&fil); sys_free(SRAMEX, pbuf);
 ```
 
 #### Step A3: CRC32 计算
 
-对 W25Q64 暂存区中刚写入的固件数据 **回读计算 CRC32**（非对 SD 卡源文件计算），确保写入过程无位错误：
+写入过程中计算 SD 源文件 CRC，并对 W25Q64 暂存区回读计算第二份 CRC；两者必须一致，确保
+暂存内容与 `update.bin` 完全一致：
 
 ```
-crc = crc32_w25q64(W25Q64_FW_STAGING_ADDR, fw_size)
+source_crc  = crc32_finish(source_crc)
+staging_crc = crc32_w25q64(W25Q64_FW_STAGING_ADDR, fw_size)
+if (source_crc != staging_crc) 取消更新
 ```
 
 > CRC32 算法详情见第 4 章。
@@ -186,37 +195,38 @@ crc = crc32_w25q64(W25Q64_FW_STAGING_ADDR, fw_size)
 #### Step A4: 写入 EEPROM 更新信息
 
 ```
-AT24C02_Write(128, &bl_info, sizeof(BootLoader_Info_t))
-// bl_info.bl_magic       = 0x424C4942
-// bl_info.bl_fw_size     = fw_size
-// bl_info.bl_fw_crc32    = crc
-// bl_info.bl_update_flag = 0xAA
-// bl_info.bl_backup_flag = 不变（保留已有备份状态）
-// bl_info.bl_checksum    = 计算前 16 字节累加和
+IAP_RecordLoad(&record);                 // 取序号最新的有效槽
+record.staging_size  = fw_size;
+record.staging_crc32 = staging_crc;
+record.update_state  = IAP_UPDATE_READY; // 0xAA
+record.restore_state = IAP_RESTORE_IDLE;
+IAP_RecordSave(&record);                 // 写入较旧槽并回读验证
 ```
 
 #### Step A5: 提示用户
 
 ```
-GUI 弹窗: "固件已就绪，请重启设备以完成升级"
-          "如 30 秒内未重启，可选择稍后手动重启"
+设置页状态栏显示 "Update ready"
+延时 500 ms 后调用 NVIC_SystemReset()
 ```
 
-> GUI 实现细节：新增 `GUI_PAGE_BOOTLOADER_PROMPT` 页面，或复用现有设置页面的对话框组件。
+> GUI 已复用 `GUI_Settings.c` 中的 "Install Update" 占位项；USB MSC 开启时拒绝更新，避免
+> FatFs 与主机同时访问 SD 卡。
 
 ### 2.3 阶段 C 详述：BootLoader 烧写
 
 #### Step C1: CRC 校验暂存固件
 
 ```
-从 EEPROM 读取 BootLoader_Info_t
-验证 bl_checksum → 若失败则放弃更新、跳转 APP
+从 EEPROM 双槽读取序号最新的有效 IAP_Record_t
+验证魔数、版本、长度和 FNV-1a 校验 → 无有效记录时按正常启动处理
+读取暂存区前 8 字节，独立验证 MSP 范围、Reset_Handler 的 APP 地址与 Thumb 位
 
-crc_actual = crc32_w25q64(W25Q64_FW_STAGING_ADDR, bl_info.bl_fw_size)
-if (crc_actual != bl_info.bl_fw_crc32) {
+crc_actual = crc32_w25q64(IAP_STAGING_ADDRESS, record.staging_size)
+if (crc_actual != record.staging_crc32) {
     LCD 显示 "CRC 校验失败，更新取消"
-    清除 bl_update_flag
-    跳转 APP
+    若尚未擦除 APP：清除更新状态并保留原 APP
+    若处于 PROGRAMMING 且备份有效：自动恢复上一版备份
 }
 ```
 
@@ -227,10 +237,11 @@ if (crc_actual != bl_info.bl_fw_crc32) {
 ```
 1. 擦除 W25Q64 备份区（0x700000 起 1MB）
 2. 从内部 Flash 0x08010000 读取 APP_MAX_SIZE → 分页写入 W25Q64 备份区
-3. 计算备份 CRC32 → 写入 EEPROM bl_backup_flag = 0xCC
+3. 计算备份 CRC32 → 双槽提交 backup_state = 0xCC、backup_size 和 backup_crc32
 ```
 
-> 若空间紧张可跳过自动备份，但**强烈建议保留**——这是用户"恢复原固件"的唯一数据来源。
+> 当前实现固定执行自动备份。由于 APP 镜像尚无可信的嵌入式长度元数据，备份范围为完整
+> `APP_MAX_SIZE`（960 KB），并记录备份大小与 CRC。
 
 #### Step C3: 擦除 Application 区
 
@@ -251,10 +262,10 @@ for (sector = 4; sector <= 11; sector++) {
 
 addr_src  = W25Q64_FW_STAGING_ADDR;
 addr_dst  = APP_START_ADDR;
-remaining = bl_info.bl_fw_size;
+remaining = record.staging_size;
 
 while (remaining > 0) {
-    chunk = min(remaining, PAGE_BUFFER_SIZE);
+    chunk = min(remaining, BOOT_TRANSFER_BUFFER_SIZE);  // 1 KB
     W25Q64_ReadData(addr_src, pbuf, chunk);
     // 32-bit 对齐写入
     for (i = 0; i < chunk; i += 4) {
@@ -279,8 +290,8 @@ HAL_FLASH_Lock();
 #### Step C6: 清理标志并跳转
 
 ```
-清除 bl_update_flag (写入 0x00)
-设置 bl_backup_flag = 0xCC（标记已有有效备份）
+清除 update_state (写入 0x00)
+保留 backup_state = 0xCC（指向更新前的上一版完整备份）
 跳转 APP：
     - 设置 MSP = *(u32*)APP_START_ADDR
     - 设置 VTOR = APP_START_ADDR
@@ -307,19 +318,19 @@ BootLoader 入口 (0x08000000)
     │     - 按键 GPIO
     │     - SysTick 1ms（用于超时和去抖）
     │
-    ├── 读取 EEPROM BootLoader_Info_t
+    ├── 读取 EEPROM 双槽 IAP_Record_t
     │
-    ├── 检查 bl_restore_flag == 0xBB ?
+    ├── 检查 restore_state == 0xBB ?
     │     ├── 是 → 进入"恢复模式"，跳过菜单直接恢复
     │     └── 否 → 继续
     │
-    ├── 检查 bl_update_flag == 0xAA ?
+    ├── 检查 update_state == 0xAA / 0x55 ?
     │     ├── 是 → LCD 显示 "检测到新固件，正在升级..."
     │     │         自动执行更新流程（第 2.3 节）
     │     │         完成后跳转 APP
     │     └── 否 → 继续
     │
-    ├── 检测"菜单键"是否被按住（例如 KEY_GAME_SELECT，超时 2 秒）
+    ├── 检测菜单键 PB7 是否连续按住 30 ms
     │     ├── 按住 → 进入 BootLoader 主菜单
     │     └── 未按 → 检查 APP 是否有效
     │                 ├── SP 和 PC 合法 → 直接跳转 APP
@@ -352,7 +363,8 @@ LCD 显示四级菜单，按键操作：
 | 确认选择 | OK / START | `KEY_GAME_OK`（PE2） |
 | 返回 / 取消 | SELECT | `KEY_GAME_SELECT`（PB7） |
 
-> BootLoader 阶段不依赖 FreeRTOS 的消息队列，直接轮询 `KEY_GetState()` 读取键值，软件去抖（30ms 间隔采样）。
+> BootLoader 阶段不依赖 FreeRTOS 的消息队列，直接读取 GPIO；按下稳定 25–30 ms 后确认，
+> 等待释放后才接受下一次操作。
 
 #### 菜单交互流程
 
@@ -360,28 +372,21 @@ LCD 显示四级菜单，按键操作：
 主菜单 (4 项)
     │
     ├── 选择 "1. 恢复原固件"
-    │     ├── 检查 bl_backup_flag == 0xCC ?
+    │     ├── 检查 backup_state == 0xCC 并校验备份 CRC
     │     │     ├── 否 → LCD "无有效备份" → 返回
-    │     │     └── 是 → LCD 确认: "确定恢复原固件？[OK]确认 [SELECT]取消"
-    │     │             ├── OK → 执行恢复（第 3.3 节）
-    │     │             └── SELECT → 返回
-    │     └── 恢复完成 → "恢复成功，按任意键重启" → 跳转 APP
+    │     │     └── 是 → 立即执行恢复（第 3.3 节）
+    │     └── 恢复完成 → 短暂显示结果后跳转 APP
     │
     ├── 选择 "2. 更新固件"
-    │     ├── 检查 bl_update_flag == 0xAA ?
+    │     ├── 检查 update_state == 0xAA / 0x55 ?
     │     │     ├── 否 → LCD "无可用更新" → 返回
-    │     │     └── 是 → LCD 确认: "确定更新固件？[OK]确认 [SELECT]取消"
-    │     │             ├── OK → 执行更新（第 2.3 节）
-    │     │             └── SELECT → 返回
-    │     └── 更新完成 → "更新成功，按任意键重启" → 跳转 APP
+    │     │     └── 是 → 立即执行更新（第 2.3 节）
+    │     └── 更新完成 → 短暂显示结果后跳转 APP
     │
     ├── 选择 "3. 备份固件"
     │     ├── 检查 APP 区域是否有有效固件（SP/PC 合法性检查）
     │     │     ├── 否 → LCD "无有效固件可备份" → 返回
-    │     │     └── 是 → LCD 确认: "确定备份当前固件？[OK]确认"
-    │     │             ├── OK → 执行备份（擦除 W25Q64 备份区 → 从内部 Flash 读取 → 写入备份区）
-    │     │             │         写入 bl_backup_flag = 0xCC
-    │     │             └── SELECT → 返回
+    │     │     └── 是 → 立即备份完整 960 KB APP 区并写入 backup_state = 0xCC
     │     └── 备份完成 → "备份成功" → 返回主菜单
     │
     └── 选择 "4. 启动 APP"
@@ -391,13 +396,12 @@ LCD 显示四级菜单，按键操作：
 ### 3.3 恢复原固件流程
 
 ```
-1. 从 EEPROM 读取备份信息（bl_backup_flag 必须 = 0xCC）
-2. 擦除内部 Flash Sector 4–11（Application 区）
-3. 从 W25Q64 备份区（0x700000）逐页读取 → 写入内部 Flash 0x08010000
-4. 回读校验（内部 Flash vs W25Q64 备份区）
-5. 清除 bl_restore_flag（若存在）
-6. LCD 显示结果
-7. 跳转 APP
+1. 检查 `backup_state == 0xCC`、大小范围和 W25Q64 备份 CRC
+2. 提交 `restore_state = 0xBB`，确保断电后会重试
+3. 擦除内部 Flash Sector 4–11（Application 区）
+4. 从 W25Q64 备份区（0x700000）逐页读取 → 写入内部 Flash 0x08010000
+5. 回读校验（内部 Flash vs W25Q64 备份区）
+6. 清除恢复/更新状态，LCD 显示结果并跳转 APP
 ```
 
 ### 3.4 备份固件流程
@@ -406,18 +410,17 @@ LCD 显示四级菜单，按键操作：
 1. 擦除 W25Q64 备份区（0x700000 起 1MB，16 × BlockErase64K）
 2. 从内部 Flash 0x08010000 读取 APP 固件 → 写入 W25Q64 备份区
 3. 回读校验 CRC32
-4. 更新 EEPROM: bl_backup_flag = 0xCC, 记录备份 CRC32
+4. 更新 EEPROM: backup_state = 0xCC，记录备份大小和 CRC32
 5. LCD 显示结果 → 返回主菜单
 ```
 
 ### 3.5 LCD UI 设计原则
 
-BootLoader 的 LCD 显示需**独立于 HAL 和 LVGL**，直接驱动 ST7789：
+BootLoader 的 LCD 显示需**独立于 RTOS、LVGL 和主工程 LCD 驱动**，使用轮询 HAL SPI/GPIO 直接驱动 ST7789：
 
 - 字体：使用内置 5×7 或 8×16 点阵字模（编译进 BootLoader），不依赖 XBF 字库
-- 颜色：黑底白字为主，进度条用蓝色/绿色
-- 无需 LVGL：直接调用 `LCD_ShowString()`、`LCD_Fill()` 等底层函数
-- 参考现有 HardFault LCD 显示逻辑（`firmware_start.c` 中 `hardfault_lcd_show()`）——该函数已能在无 HAL/RTOS 环境下工作
+- 颜色：黑底白字为主，进度条用橙色/绿色
+- 无需 LVGL：内置 ST7789 初始化、矩形填充和 5×7 字符绘制
 
 ---
 
@@ -432,29 +435,33 @@ BootLoader 的 LCD 显示需**独立于 HAL 和 LVGL**，直接驱动 ST7789：
 | **初始值** | `0xFFFFFFFF` |
 | **输出 XOR** | `0xFFFFFFFF` |
 | **数据顺序** | LSB-first（reflected） |
-| **参考实现** | zlib `crc32()`、Linux `crc32_le()`、STM32 CRC 外设（可配置为兼容模式） |
+| **参考实现** | zlib `crc32()`、Linux `crc32_le()`、本项目 16 项 nibble 查表实现 |
 
 > 选用此算法是因为它是业界最广泛使用的 CRC32 变体，zlib、PKZIP、Ethernet 均采用，验证工具丰富。
+> STM32F407 的 CRC 外设固定为非反射输入/输出，不能直接等价计算该字节流算法；APP 与
+> BootLoader 虽均保留硬件 CRC 初始化，更新协议实际使用相同的软件 CRC，避免端序转换歧义。
 
 ### 4.2 软件实现（查表法，适合 BootLoader 64KB 限制）
 
 ```c
-/* CRC-32 lookup table (256 × 4 bytes = 1 KB) */
-static const u32 crc32_table[256] = {
-    0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, /* ... 共 256 项 */
+/* 16-entry reflected nibble table: 64 bytes */
+static const u32 crc32_table[16] = {
+    0x00000000, 0x1DB71064, 0x3B6E20C8, 0x26D930AC, /* ... */
 };
 
 u32 crc32_calculate(const u8 *data, u32 length)
 {
     u32 crc = 0xFFFFFFFF;
     for (u32 i = 0; i < length; i++) {
-        crc = crc32_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+        crc ^= data[i];
+        crc = crc32_table[crc & 0x0F] ^ (crc >> 4);
+        crc = crc32_table[crc & 0x0F] ^ (crc >> 4);
     }
     return crc ^ 0xFFFFFFFF;
 }
 ```
 
-> 查表占用 1 KB Flash（BootLoader 64 KB 内完全可接受）。若需极致压缩，可运行时动态生成表（约 100 字节代码，无需 1 KB 表），但 STM32F407 Flash 充足，查表法更简单可靠。
+> 16 项表仅占 64 字节，APP 与 BootLoader 使用相同参数和逐字节更新顺序。
 
 ### 4.3 对 W25Q64 区域计算 CRC32 的辅助函数
 
@@ -481,11 +488,11 @@ u32 crc32_w25q64(u32 addr, u32 length)
 
 | 序号 | 时机 | 计算对象 | 对比对象 | 失败处理 |
 |------|------|----------|----------|----------|
-| ① | APP 写入 W25Q64 暂存区后 | W25Q64 `[0x600000, +size)` | —（记录到 EEPROM） | 重试写入 |
-| ② | BootLoader 烧写前 | W25Q64 暂存区回读 | EEPROM 中的 `bl_fw_crc32` | 放弃更新、清除标志 |
+| ① | APP 写入 W25Q64 暂存区后 | W25Q64 `[0x600000, +size)` | SD 源文件流式 CRC | 放弃提交更新状态 |
+| ② | BootLoader 烧写前 | W25Q64 暂存区回读 | EEPROM 中的 `staging_crc32` | 未擦除时取消；烧写中恢复备份 |
 | ③ | BootLoader 烧写后 | 内部 Flash `[0x08010000, +size)` | W25Q64 暂存区逐字节比对 | 标记损坏、提示恢复 |
-| ④ | 恢复原固件后 | 内部 Flash 回读 | W25Q64 备份区 | 重试恢复 |
-| ⑤ | 备份固件后 | W25Q64 备份区回读 | 内部 Flash 源数据 | 重试备份 |
+| ④ | 恢复原固件后 | 内部 Flash 回读 | W25Q64 备份区 | 保留恢复状态，重启后可重试 |
+| ⑤ | 备份固件后 | W25Q64 备份区回读 | 内部 Flash 源数据 | 不提交有效备份状态 |
 
 ---
 
@@ -496,18 +503,18 @@ u32 crc32_w25q64(u32 addr, u32 length)
 Flash 写入过程中断电是最危险的场景。采用**标志位驱动的状态机**来保证恢复能力：
 
 ```
-EEPROM 标志位组合含义：
+EEPROM 状态字段组合含义：
 
-bl_update_flag = 0x00, bl_restore_flag = 0x00
+update_state = 0x00, restore_state = 0x00
     → 正常状态，无需操作
 
-bl_update_flag = 0xAA, bl_restore_flag = 0x00
+update_state = 0xAA, restore_state = 0x00
     → 有新固件在暂存区，待烧写
 
-bl_update_flag = 0x00, bl_restore_flag = 0xBB
+update_state = 0x00, restore_state = 0xBB
     → 需要恢复备份（上次更新可能失败）
 
-bl_update_flag = 0x55, ... (任何)
+update_state = 0x55, restore_state = 0x00
     → 烧写进行中（断电后 BootLoader 检测到此值 → 重新执行烧写）
 ```
 
@@ -516,14 +523,14 @@ bl_update_flag = 0x55, ... (任何)
 烧写流程的原子步骤：
 
 ```
-Step 1: 写入 bl_update_flag = 0x55  // "烧写进行中"
-Step 2: 擦除内部 Flash Sector 4–11
-Step 3: 写入新固件 + 回读校验
-Step 4: 写入 bl_update_flag = 0x00  // "完成"
-        写入 bl_backup_flag = 0xCC  // 标记有效备份
+Step 1: 备份完整旧 APP 并提交 backup_state = 0xCC、备份大小和 CRC
+Step 2: 提交 update_state = 0x55  // "烧写进行中"
+Step 3: 擦除内部 Flash Sector 4–11
+Step 4: 写入新固件 + 回读校验
+Step 5: 提交 update_state = 0x00  // "完成"，上一版备份继续有效
 ```
 
-若在 Step 2/3 期间断电，重启后 BootLoader 检测到 `bl_update_flag = 0x55` → 判定上次烧写中断 → 自动从 Step 2 重新开始（因为 Flash 可能处于部分擦除状态，必须重新擦除再写）。
+若在 Step 3/4 期间断电，重启后 BootLoader 检测到 `update_state = 0x55`，会重新校验暂存区并从擦除开始重试。若暂存区已损坏且备份有效，则提交恢复状态并自动恢复上一版。
 
 ### 5.2 双备份兜底
 
@@ -577,12 +584,12 @@ __attribute__((naked)) void bootloader_jump_to_app(u32 app_addr)
 
 ### 5.4 看门狗
 
-BootLoader 整个运行期间**不应使能独立看门狗（IWDG）**，因为：
+当前 APP 和 BootLoader 均未启用 IWDG。BootLoader 更新期间不应新启用独立看门狗，因为：
 
 - Flash 擦除操作可能耗时较长（Sector 4–11 全部擦除约需 4–8 秒）
-- 若 APP 在启动时使能了 IWDG，BootLoader 应在进入时立即禁用或重新配置
+- IWDG 一旦启动不能由软件关闭，且系统复位后仍可能继续运行
 
-若必须使用看门狗，建议：
+若将来 APP 启用 IWDG，必须在 BootLoader 每个长操作内按实际超时配置持续喂狗，并做专门断电测试：
 
 ```c
 // 每个 Sector 擦除后喂狗
@@ -596,34 +603,34 @@ IWDG->KR = 0xAAAA;  // Reload
 |----------|----------|----------|
 | update.bin 不存在 | `f_stat()` 返回错误 | GUI 提示"未找到 update.bin" |
 | update.bin 过大 | 文件大小 > `APP_MAX_SIZE` | GUI 提示"固件超出限制" |
-| SD 卡读取失败 | `f_read()` 返回错误 | 重试 3 次，仍失败则中止 |
-| W25Q64 写入失败 | `W25Q64_WriteData()` 返回错误 | 重试 3 次，标记暂存区无效 |
-| EEPROM 读写失败 | AT24C02 函数返回错误 | 重试 3 次，放弃本次操作 |
-| CRC32 校验失败 | 比对不一致 | 清除更新标志，提示用户 |
-| 烧写中途断电 | `bl_update_flag = 0x55` | 重新执行烧写 |
-| 内部 Flash 擦除失败 | `HAL_FLASHEx_Erase()` 返回错误 | 标记扇区损坏，尝试跳过（若为后部扇区） |
-| 内部 Flash 编程失败 | `HAL_FLASH_Program()` 返回错误 | 重试 3 次，仍失败则进入恢复流程 |
+| SD 卡读取失败 | `f_read()` 返回错误/短读 | 中止，不提交更新状态 |
+| W25Q64 写入失败 | `W25Q64_WriteData()` 返回错误 | 中止，不提交更新状态 |
+| EEPROM 读写失败 | 双槽均不可读或写后校验失败 | 保留旧槽，放弃本次状态转换 |
+| 暂存 CRC32 校验失败 | 源/回读或 EEPROM/回读不一致 | APP 未擦除时取消；烧写中则自动恢复有效备份 |
+| 烧写中途断电 | `update_state = 0x55` | 重新校验并从擦除开始烧写 |
+| 内部 Flash 擦除失败 | `HAL_FLASHEx_Erase()` 返回错误 | 立即锁 Flash；有有效备份则进入恢复流程 |
+| 内部 Flash 编程失败 | `HAL_FLASH_Program()` 返回错误 | 立即锁 Flash；有有效备份则进入恢复流程 |
 | APP 区域无有效固件 | SP/PC 合法性检查失败 | 留在 BootLoader 菜单，不自动跳转 |
 
 ---
 
 ## 6. 实施清单
 
-下表按依赖关系排列，可作为开发路线图。**本文档批准后，后续按此清单逐步实施。**
+软件实施项已完成；最后一项必须在目标板上执行。
 
-| 序号 | 任务 | 涉及文件 | 说明 |
-|------|------|----------|------|
-| 1 | 定义分区宏和 BootLoader_Info_t 结构体 | `System/System_Status.h` | 新增 W25Q64 分区地址、EEPROM 布局偏移、`BootLoader_Info_t` 类型 |
-| 2 | 实现 CRC32 模块 | `System/crc32.c/h` | 查表法 CRC32，提供 `crc32_calculate()` 和 `crc32_w25q64()` |
-| 3 | 实现 APP 端更新预处理 | `IAP/IAP.c/h` | `IAP_PrepareUpdate()` —— SD→W25Q64→CRC→EEPROM |
-| 4 | 扩展 EEPROM 读写 | `System/System_Status.c` | 增加 `BootLoader_Info_Save/Load()` 函数 |
-| 5 | 创建 BootLoader 独立工程 | `BootLoader/` | 基于裸机，复用 W25Q64/LCD/KEY 驱动，无 RTOS |
-| 6 | 编写 BootLoader LCD UI | `BootLoader/bootloader_ui.c` | 菜单显示、进度条、按键交互 |
-| 7 | 实现 BootLoader 核心逻辑 | `BootLoader/bootloader_main.c` | 启动检查、更新、恢复、备份、跳转 |
-| 8 | 修改链接脚本（APP 端） | `System/StarGamer_CCM.sct` | ROM 起始地址改为 `0x08010000`，长度 `0x000F0000` |
-| 9 | 修改 main.c VTOR 设置 | `Core/Src/main.c` | `SCB->VTOR = 0x08010000`（APP 工程） |
-| 10 | 新增 GUI 更新触发页面 | `GUI/GUI_BootLoader.c/h` | 触发更新、进度显示、重启提示 |
-| 11 | 集成测试 | — | 备份→更新→恢复全流程测试，断电测试 |
+| 序号 | 状态 | 任务 | 涉及文件 |
+|------|------|------|----------|
+| 1 | 完成 | 分区与双槽共享协议 | `IAP/IAP_Protocol.h` |
+| 2 | 完成 | APP/BootLoader 软件 CRC32 | `IAP/IAP.c`、`Boot/Src/boot_crc.c` |
+| 3 | 完成 | APP 端 SD→W25Q64→双 CRC→EEPROM | `IAP/IAP.c/h` |
+| 4 | 完成 | AT24C02 双槽掉电安全读写 | APP IAP 与 `Boot/Src/boot_storage.c` |
+| 5 | 完成 | 64 KB 裸机 BootLoader 工程 | `BootLoader/StarGamerBootLoader/` |
+| 6 | 完成 | ST7789 菜单、进度与按键 | `Boot/Src/boot_ui.c` |
+| 7 | 完成 | 更新、完整备份、恢复、断点状态机与安全跳转 | `Boot/Src/bootloader.c` |
+| 8 | 完成 | APP 链接到 `0x08010000` | `System/StarGamer_CCM.sct` |
+| 9 | 完成 | APP VTOR 设置和 Keil 工程地址 | `Core/Src/main.c`、`MDK-ARM/*.uvprojx` |
+| 10 | 完成 | 复用设置页 "Install Update" 占位项 | `GUI/GUI_Settings.c` |
+| 11 | 待板测 | 更新/恢复/跳转及各 EEPROM/Flash 提交点断电测试 | 目标硬件 |
 
 ---
 
@@ -647,14 +654,16 @@ IWDG->KR = 0xAAAA;  // Reload
 #define W25Q64_FW_BACKUP_SIZE       0x100000UL     /* 1 MB */
 
 /* ---- 外部 SRAM ---- */
-#define PAGE_BUFFER_SIZE            (256UL * 1024UL)  /* 256 KB */
+#define IAP_TRANSFER_BUFFER_SIZE     (4UL * 1024UL)    /* APP staging */
+#define BOOT_TRANSFER_BUFFER_SIZE    1024UL            /* BootLoader static buffer */
 
 /* ---- EEPROM ---- */
-#define EEPROM_BOOTLOADER_OFFSET    128
-#define BOOTLOADER_INFO_SIZE        20
+#define IAP_EEPROM_SLOT0_ADDRESS    128
+#define IAP_EEPROM_SLOT1_ADDRESS    168
+#define IAP_RECORD_SIZE             36
 
 /* ---- BootLoader 魔数 ---- */
-#define BL_MAGIC                    0x424C4942UL  /* "BLIB" */
+#define BL_MAGIC                    0x424C4932UL  /* "BLI2" */
 #define BL_UPDATE_FLAG_READY        0xAA
 #define BL_UPDATE_FLAG_INPROGRESS   0x55
 #define BL_RESTORE_FLAG             0xBB
@@ -668,41 +677,47 @@ IWDG->KR = 0xAAAA;  // Reload
 #define THUMB_BIT_MASK              0x00000001UL
 ```
 
-## 附录 B：BootLoader_Info_t 结构体
+## 附录 B：IAP_Record_t / Boot_Record_t 结构体
 
 ```c
-typedef struct BootLoader_Info {
-    u32 magic;            /* 0x424C4942 "BLIB" */
-    u32 fw_size;          /* 暂存固件大小（字节） */
-    u32 fw_crc32;         /* 暂存固件 CRC32 */
-    u8  update_flag;      /* 0xAA=待更新, 0x55=烧写中, 0x00=空闲 */
-    u8  restore_flag;     /* 0xBB=需恢复备份, 0x00=空闲 */
-    u8  backup_flag;      /* 0xCC=有效备份, 0x00=无备份 */
+typedef struct IAP_Record {
+    u32 magic;            /* 0x424C4932 "BLI2" */
+    u16 version;          /* 当前为 2 */
+    u16 record_size;      /* 36 */
+    u32 sequence;         /* 双槽新旧判定，支持回绕比较 */
+    u32 staging_size;     /* 暂存固件大小 */
+    u32 staging_crc32;    /* 暂存固件 CRC32 */
+    u32 backup_size;      /* 当前固定为 0x000F0000 */
+    u32 backup_crc32;     /* 上一版完整 APP 区 CRC32 */
+    u8  update_state;     /* 0xAA=待更新, 0x55=烧写中, 0x00=空闲 */
+    u8  restore_state;    /* 0xBB=需恢复备份, 0x00=空闲 */
+    u8  backup_state;     /* 0xCC=有效备份, 0x00=无备份 */
     u8  reserved;
-    u32 checksum;         /* 前 16 字节的 32-bit 累加和 */
-} BootLoader_Info_t;
+    u32 checksum;         /* 前 32 字节的 FNV-1a */
+} IAP_Record_t;
 ```
 
 ## 附录 C：现有代码中已预留的 IAP 相关字段
 
-`System/System_Status.h` 中已定义但未使用的字段可直接复用：
+`System/System_Status.h` 中保留了早期规划字段，但当前持久化协议不依赖这些运行时字段：
 
 ```c
 /* System_Core_Information_t (运行时) */
-SCI.AvilableUpdateReady   // → 可映射到 bl_update_flag == 0xAA
-SCI.NeedRecovery          // → 可映射到 bl_restore_flag == 0xBB
-SCI.isSystemBackup        // → 可映射到 bl_backup_flag == 0xCC
-SCI.AppBinLength          // → 可映射到 bl_fw_size
+SCI.AvilableUpdateReady
+SCI.NeedRecovery
+SCI.isSystemBackup
+SCI.AppBinLength
 
-/* IAP_Info_t (已定义结构体，IAP.c 为空) */
+/* IAP_Info_t（遗留运行时结构） */
 IAP_Info.NeedBackUpSystem
 IAP_Info.AvilableUpdateReady
 IAP_Info.NeedRecovery
 IAP_Info.AppBinLength
 ```
 
-> 建议：在实施阶段将 `System_Core_Information_t` 中的 IAP 字段与 EEPROM 中的 `BootLoader_Info_t` 同步，使 APP 层能通过 `SCI` 全局变量查询 BootLoader 状态。
+> APP 与 BootLoader 的唯一持久化契约是 `IAP/IAP_Protocol.h`。如后续需要在 UI 查询状态，
+> 应通过 `IAP_RecordLoad()` 映射到运行时展示，避免再定义一套 EEPROM 布局。
 
 ---
 
-> **文档结束** — 本文档为方案设计，未改动任何代码。实施时请依次执行第 6 章的实施清单。
+> **文档结束** — 软件实现与编译验证已完成；第 6 章中的目标板测试仍为发布前必做项。

@@ -1,5 +1,8 @@
 # === Keil MDK-ARM Build Output ===
 MDK-ARM/Star Gamer/
+BootLoader/StarGamerBootLoader/MDK-ARM/StarGamerBootLoader/
+BootLoader/StarGamerBootLoader/MDK-ARM/DebugConfig/
+BootLoader/StarGamerBootLoader/MDK-ARM/RTE/
 
 # === Keil IDE User-Specific Files ===
 *.uvguix.*

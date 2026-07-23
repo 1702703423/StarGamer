@@ -148,7 +148,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  SCB->VTOR = 0x08010000UL;
+  __DSB();
+  __ISB();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/

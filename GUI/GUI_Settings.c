@@ -1,5 +1,6 @@
 #include "GUI_Settings.h"
 #include "GUI_Font.h"
+#include "IAP.h"
 #include "System_Status.h"
 #include "usb_device.h"
 #include "w25q64.h"
@@ -80,6 +81,7 @@ static void GUI_Settings_WaitInputRelease(void);
 static u8 GUI_Settings_HandleKey(u32 key);
 static u8 GUI_Settings_IsSwitchToggleKey(u32 key);
 static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsAction_t action);
+static void GUI_Settings_UpdateProgress(u8 percent, void *context);
 static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context);
@@ -633,7 +635,24 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 			}
 			break;
 		case GUI_SETTINGS_ACTION_UPDATE:
-			GUI_Settings_SetStatus(context, "Update installer is not ready");
+			if (System_Settings_UsbMscEnabled() != 0U)
+			{
+				GUI_Settings_SetStatus(context, "Disable USB MSC before update");
+			}
+			else
+			{
+				IAP_Status_t status;
+
+				GUI_Settings_WaitInputRelease();
+				status = IAP_PrepareUpdate(GUI_Settings_UpdateProgress, context);
+				GUI_Settings_SetStatus(context, IAP_StatusString(status));
+				lv_refr_now(NULL);
+				if (status == IAP_STATUS_OK)
+				{
+					(void)osDelay(500U);
+					NVIC_SystemReset();
+				}
+			}
 			break;
 		case GUI_SETTINGS_ACTION_ABOUT:
 			GUI_Settings_ShowAbout(context);
@@ -641,6 +660,21 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 		default:
 			break;
 	}
+}
+
+static void GUI_Settings_UpdateProgress(u8 percent, void *context_ptr)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)context_ptr;
+	char text[32];
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	(void)snprintf(text, sizeof(text), "Preparing update %u%%", (unsigned int)percent);
+	GUI_Settings_SetStatus(context, text);
+	lv_refr_now(NULL);
 }
 
 static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context)
@@ -693,7 +727,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	if (status == W25Q64_OK)
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer\n"
+		               "Star Gamer 1.0.0-preview\n"
 		               "Author: ZLK\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
