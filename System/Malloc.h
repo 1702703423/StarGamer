@@ -30,6 +30,10 @@
 #define MEM3_GUARD_BASE            (MEM3_MAP_BASE + MEM3_MAP_SIZE)
 #define MEM3_GUARD_SIZE            (SRAMEX_TOTAL_SIZE - (MEM3_MAX_SIZE + MEM3_MAP_SIZE))
 
+#if ((MEM2_ALLOC_TABLE_SIZE > 0x7FFFUL) || (MEM3_ALLOC_TABLE_SIZE > 0x7FFFUL))
+#error "Memory allocator block count exceeds metadata capacity"
+#endif
+
 #define SRAM_ADDR_BEGIN            ((u32)SRAMEX_BASE)
 #define SRAM_ADDR_HALF             ((u32)0x68080000UL)
 #define SRAM_ADDR_END              ((u32)0x680FFFFFUL)

@@ -45,6 +45,11 @@ void PlayerCleanup(void);
 u8 PlayerIsBusy(void);
 Player_State_t PlayerGetState(void);
 int PlayerGetInfo(Player_Info_t *info);
+u32 PlayerGetPositionSeconds(void);
+u8 PlayerCanSeek(void);
+u8 PlayerSeekIsPending(void);
+u16 PlayerGetSeekTargetPermille(void);
+int PlayerSeekPermille(u16 position);
 const TCHAR *PlayerGetCurrentPath(void);
 void WavePlayTaskStop(osThreadId_t tid);
 

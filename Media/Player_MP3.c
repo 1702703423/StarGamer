@@ -18,8 +18,14 @@ typedef struct Player_MP3_Context
   u8 *input_buffer;
   s16 *pcm_buffer;
   int bytes_left;
+  u32 audio_start_offset;
+  u32 audio_size;
   u32 read_offset;
   u32 ready_bytes;
+  u32 duration_seconds;
+  u32 position_base_seconds;
+  u32 decoded_pcm_bytes;
+  u32 pcm_byte_rate;
   u32 expected_output_samps;
   u32 expected_sample_rate;
   u8 expected_channels;
@@ -29,6 +35,37 @@ typedef struct Player_MP3_Context
 } Player_MP3_Context_t;
 
 static Player_MP3_Stats_t s_player_mp3_stats;
+
+static u32 player_mp3_estimate_duration(u32 audio_size, u32 bitrate)
+{
+  u32 seconds;
+
+  if(bitrate == 0U)
+  {
+    return 0U;
+  }
+
+  seconds = (audio_size / bitrate) * 8U;
+  seconds += ((audio_size % bitrate) * 8U) / bitrate;
+  return seconds;
+}
+
+static void player_mp3_count_pcm(Player_MP3_Context_t *mp3, u32 pcm_bytes)
+{
+  if(mp3 == NULL)
+  {
+    return;
+  }
+
+  if((0xFFFFFFFFUL - mp3->decoded_pcm_bytes) < pcm_bytes)
+  {
+    mp3->decoded_pcm_bytes = 0xFFFFFFFFUL;
+  }
+  else
+  {
+    mp3->decoded_pcm_bytes += pcm_bytes;
+  }
+}
 
 /* Helix has consumed the compressed frame and cleared PCM for these errors. */
 static u8 player_mp3_error_is_concealed(int decode_result)
@@ -48,7 +85,7 @@ static u8 player_mp3_error_is_concealed(int decode_result)
   }
 }
 
-static int player_mp3_skip_id3v2(FIL *file)
+static int player_mp3_skip_id3v2(FIL *file, u32 *audio_start_offset)
 {
   u8 header[10];
   UINT bytes_read;
@@ -63,6 +100,10 @@ static int player_mp3_skip_id3v2(FIL *file)
 
   if(bytes_read < sizeof(header) || memcmp(header, "ID3", 3U) != 0)
   {
+    if(audio_start_offset != NULL)
+    {
+      *audio_start_offset = 0U;
+    }
     return (f_lseek(file, 0U) == FR_OK) ? PLAYER_CODEC_READ_OK : PLAYER_CODEC_ERROR;
   }
 
@@ -87,8 +128,16 @@ static int player_mp3_skip_id3v2(FIL *file)
     return PLAYER_CODEC_FORMAT_ERROR;
   }
 
-  return (f_lseek(file, (FSIZE_t)audio_offset) == FR_OK) ?
-         PLAYER_CODEC_READ_OK : PLAYER_CODEC_ERROR;
+  if(f_lseek(file, (FSIZE_t)audio_offset) != FR_OK)
+  {
+    return PLAYER_CODEC_ERROR;
+  }
+
+  if(audio_start_offset != NULL)
+  {
+    *audio_start_offset = audio_offset;
+  }
+  return PLAYER_CODEC_READ_OK;
 }
 
 static int player_mp3_refill(Player_MP3_Context_t *mp3)
@@ -496,6 +545,7 @@ static int player_mp3_decode_next(Player_MP3_Context_t *mp3,
 static int player_mp3_read_pcm(void *context, const u8 **pcm, u32 *pcm_bytes)
 {
   Player_MP3_Context_t *mp3 = (Player_MP3_Context_t *)context;
+  int result;
 
   if(mp3 == NULL || pcm == NULL || pcm_bytes == NULL)
   {
@@ -507,10 +557,86 @@ static int player_mp3_read_pcm(void *context, const u8 **pcm, u32 *pcm_bytes)
   {
     mp3->pcm_ready = 0U;
     *pcm_bytes = mp3->ready_bytes;
+    player_mp3_count_pcm(mp3, *pcm_bytes);
     return PLAYER_CODEC_READ_OK;
   }
 
-  return player_mp3_decode_next(mp3, pcm_bytes, NULL);
+  result = player_mp3_decode_next(mp3, pcm_bytes, NULL);
+  if(result == PLAYER_CODEC_READ_OK)
+  {
+    player_mp3_count_pcm(mp3, *pcm_bytes);
+  }
+  return result;
+}
+
+static int player_mp3_seek(void *context, u16 position)
+{
+  Player_MP3_Context_t *mp3 = (Player_MP3_Context_t *)context;
+  u32 target;
+
+  if(mp3 == NULL || mp3->file == NULL)
+  {
+    return PLAYER_CODEC_ERROR;
+  }
+
+  if(position > 1000U)
+  {
+    position = 1000U;
+  }
+
+  target = (mp3->audio_size / 1000U) * (u32)position;
+  target += ((mp3->audio_size % 1000U) * (u32)position) / 1000U;
+  if(target > mp3->audio_size)
+  {
+    target = mp3->audio_size;
+  }
+
+  if(f_lseek(mp3->file, (FSIZE_t)(mp3->audio_start_offset + target)) != FR_OK)
+  {
+    return PLAYER_CODEC_ERROR;
+  }
+
+  if(mp3->decoder != NULL)
+  {
+    MP3FreeDecoder(mp3->decoder);
+  }
+  mp3->decoder = MP3InitDecoder();
+  if(mp3->decoder == NULL)
+  {
+    return PLAYER_CODEC_MEMORY_ERROR;
+  }
+
+  mp3->bytes_left = 0;
+  mp3->read_offset = 0U;
+  mp3->ready_bytes = 0U;
+  mp3->decoded_pcm_bytes = 0U;
+  mp3->position_base_seconds =
+      (mp3->duration_seconds / 1000U) * (u32)position +
+      ((mp3->duration_seconds % 1000U) * (u32)position) / 1000U;
+  mp3->eof = 0U;
+  mp3->pcm_ready = 0U;
+
+  return PLAYER_CODEC_READ_OK;
+}
+
+static u32 player_mp3_tell_seconds(void *context)
+{
+  Player_MP3_Context_t *mp3 = (Player_MP3_Context_t *)context;
+  u32 seconds;
+
+  if(mp3 == NULL || mp3->pcm_byte_rate == 0U)
+  {
+    return 0U;
+  }
+
+  seconds = mp3->position_base_seconds +
+            (mp3->decoded_pcm_bytes / mp3->pcm_byte_rate);
+  if(mp3->duration_seconds != 0U && seconds > mp3->duration_seconds)
+  {
+    seconds = mp3->duration_seconds;
+  }
+
+  return seconds;
 }
 
 static void player_mp3_close(void *context)
@@ -541,6 +667,7 @@ int Player_MP3_Open(FIL *file, Player_Codec_Handle_t *codec, Player_Info_t *info
 {
   Player_MP3_Context_t *mp3;
   MP3FrameInfo frame_info;
+  u32 audio_start_offset = 0U;
   u32 pcm_bytes;
   int result;
 
@@ -552,7 +679,7 @@ int Player_MP3_Open(FIL *file, Player_Codec_Handle_t *codec, Player_Info_t *info
   memset(codec, 0, sizeof(*codec));
   memset(info, 0, sizeof(*info));
   Player_MP3_ResetStats();
-  result = player_mp3_skip_id3v2(file);
+  result = player_mp3_skip_id3v2(file, &audio_start_offset);
   if(result != PLAYER_CODEC_READ_OK)
   {
     return result;
@@ -566,6 +693,11 @@ int Player_MP3_Open(FIL *file, Player_Codec_Handle_t *codec, Player_Info_t *info
   }
   memset(mp3, 0, sizeof(*mp3));
   mp3->file = file;
+  mp3->audio_start_offset = audio_start_offset;
+  if(f_size(file) > (FSIZE_t)audio_start_offset)
+  {
+    mp3->audio_size = (u32)(f_size(file) - (FSIZE_t)audio_start_offset);
+  }
 
   mp3->input_buffer = (u8 *)sys_malloc(PLAYER_MP3_MEM_POOL, PLAYER_MP3_INPUT_SIZE);
   mp3->pcm_buffer = (s16 *)sys_malloc(PLAYER_MP3_MEM_POOL,
@@ -585,15 +717,22 @@ int Player_MP3_Open(FIL *file, Player_Codec_Handle_t *codec, Player_Info_t *info
     return (result == PLAYER_CODEC_READ_EOF) ? PLAYER_CODEC_FORMAT_ERROR : result;
   }
 
+  mp3->duration_seconds =
+      player_mp3_estimate_duration(mp3->audio_size, (u32)frame_info.bitrate);
+  mp3->pcm_byte_rate = (u32)frame_info.samprate *
+                       (u32)frame_info.nChans *
+                       (u32)sizeof(s16);
   mp3->ready_bytes = pcm_bytes;
   mp3->pcm_ready = 1U;
   codec->context = mp3;
   codec->read_pcm = player_mp3_read_pcm;
+  codec->seek = player_mp3_seek;
+  codec->tell_seconds = player_mp3_tell_seconds;
   codec->close = player_mp3_close;
   codec->package_size = pcm_bytes;
 
   info->codec = PLAYER_CODEC_MP3;
-  info->duration_seconds = 0U;
+  info->duration_seconds = mp3->duration_seconds;
   info->sample_rate = (u32)frame_info.samprate;
   info->bitrate = (u32)frame_info.bitrate;
   info->channels = (u8)frame_info.nChans;

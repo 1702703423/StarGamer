@@ -7,7 +7,7 @@
 #include "task.h"
 #include "Malloc.h"
 
-#define GUI_NES_THREAD_STACK_WORDS      2048U
+#define GUI_NES_THREAD_STACK_WORDS      4096U
 #define GUI_NES_THREAD_STACK_SIZE       (GUI_NES_THREAD_STACK_WORDS * sizeof(u32))
 #define GUI_NES_LAUNCH_DELAY_MS         80U
 #define GUI_NES_CLEANUP_DELAY_TICKS     2U

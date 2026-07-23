@@ -20,10 +20,12 @@ typedef StaticTask_t osStaticThreadDef_t;
 #define EVENT_HALF_DMA       (1U << 0)
 #define EVENT_OVER_DMA       (1U << 1)
 #define EVENT_STOP_PLAYER     (1U << 2)
+#define EVENT_SEEK_PLAYER     (1U << 3)
 #define EVENT_PAUSE_PLAYER    (1U << 4)
 #define EVENT_RESUME_PLAYER   (1U << 5)
 #define EVENT_DMA_EMPTY       (EVENT_HALF_DMA | EVENT_OVER_DMA)
-#define EVENT_PLAYER_WAIT     (EVENT_DMA_EMPTY | EVENT_STOP_PLAYER | EVENT_PAUSE_PLAYER)
+#define EVENT_PLAYER_WAIT     (EVENT_DMA_EMPTY | EVENT_STOP_PLAYER | EVENT_PAUSE_PLAYER | EVENT_SEEK_PLAYER)
+#define EVENT_PAUSE_WAIT      (EVENT_RESUME_PLAYER | EVENT_STOP_PLAYER | EVENT_SEEK_PLAYER)
 #define PLAYER_PATH_SIZE      256U
 #define PLAYER_TASK_STACK_SIZE (3072U * sizeof(u32))
 #define PLAYER_CLEANUP_DELAY_TICKS 2U
@@ -39,6 +41,12 @@ static volatile u32 s_player_codec_read_count;
 static volatile u32 s_player_codec_read_max_ticks;
 static volatile u32 s_player_write_max_ticks;
 static volatile u32 s_player_dma_both_event_count;
+static volatile u32 s_player_position_seconds;
+static volatile u16 s_player_seek_position;
+static volatile u32 s_player_seek_request_id;
+static volatile u32 s_player_seek_processed_id;
+static volatile u8 s_player_seek_pending;
+static volatile u8 s_player_seekable;
 static Player_Info_t s_player_info;
 static TCHAR s_player_path[PLAYER_PATH_SIZE];
 
@@ -55,6 +63,12 @@ static osThreadAttr_t s_player_task_attr =
 
 static void WaveDataTransmitTask(void *argument);
 static void audio_feeder(void);
+static void player_update_position(void);
+static u32 player_position_from_permille(u16 position);
+static void player_set_position_from_permille(u16 position);
+static void player_complete_seek(u32 request_id);
+static int player_prime_audio(u8 *drain_events);
+static int player_seek_and_prime(u8 keep_paused, u8 *drain_events);
 
 static void player_update_max(volatile u32 *target, u32 value)
 {
@@ -72,6 +86,64 @@ static void player_reset_audio_stats(void)
   s_player_dma_both_event_count = 0U;
   audio_card_reset_stats();
   Player_MP3_ResetStats();
+}
+
+static void player_update_position(void)
+{
+  u32 position = 0U;
+
+  if(s_player_codec.tell_seconds != NULL && s_player_codec.context != NULL)
+  {
+    position = s_player_codec.tell_seconds(s_player_codec.context);
+  }
+  if(s_player_info.duration_seconds != 0U &&
+     position > s_player_info.duration_seconds)
+  {
+    position = s_player_info.duration_seconds;
+  }
+
+  s_player_position_seconds = position;
+  __DMB();
+}
+
+static u32 player_position_from_permille(u16 position)
+{
+  u32 seconds;
+
+  if(s_player_info.duration_seconds == 0U)
+  {
+    return 0U;
+  }
+
+  if(position >= 1000U)
+  {
+    return s_player_info.duration_seconds;
+  }
+
+  seconds = (s_player_info.duration_seconds / 1000U) * (u32)position;
+  seconds += ((s_player_info.duration_seconds % 1000U) * (u32)position) / 1000U;
+  if(seconds > s_player_info.duration_seconds)
+  {
+    seconds = s_player_info.duration_seconds;
+  }
+
+  return seconds;
+}
+
+static void player_set_position_from_permille(u16 position)
+{
+  s_player_position_seconds = player_position_from_permille(position);
+  __DMB();
+}
+
+static void player_complete_seek(u32 request_id)
+{
+  __DMB();
+  if(s_player_seek_request_id == request_id)
+  {
+    s_player_seek_pending = 0U;
+    __DMB();
+  }
 }
 
 static u8 player_copy_path(TCHAR *dst, u32 dst_size, const TCHAR *src)
@@ -223,7 +295,45 @@ static int player_fill_dma_buffer(u8 dma_index)
     return -1;
   }
 
+  player_update_position();
   return (codec_result == PLAYER_CODEC_READ_EOF) ? 1 : 0;
+}
+
+static int player_prime_audio(u8 *drain_events)
+{
+  int fill_result;
+
+  if(drain_events == NULL)
+  {
+    return -1;
+  }
+
+  *drain_events = 0U;
+  fill_result = player_fill_dma_buffer(0U);
+  if(fill_result < 0)
+  {
+    return -1;
+  }
+
+  if(fill_result == 0)
+  {
+    fill_result = player_fill_dma_buffer(1U);
+    if(fill_result < 0)
+    {
+      return -1;
+    }
+  }
+  else if(audio_card_write_silence(1U) != 0)
+  {
+    return -1;
+  }
+
+  if(fill_result > 0)
+  {
+    *drain_events = 2U;
+  }
+
+  return 0;
 }
 
 static int player_service_dma_buffer(u8 dma_index, u8 *drain_events)
@@ -254,11 +364,87 @@ static int player_service_dma_buffer(u8 dma_index, u8 *drain_events)
   return 0;
 }
 
+static int player_seek_and_prime(u8 keep_paused, u8 *drain_events)
+{
+  u16 position;
+  u32 request_id;
+
+  if(drain_events == NULL || s_player_codec.seek == NULL ||
+     s_player_codec.context == NULL || s_player_info.sample_rate == 0U ||
+     s_player_codec.package_size == 0U)
+  {
+    return -1;
+  }
+
+  __DMB();
+  position = s_player_seek_position;
+  request_id = s_player_seek_request_id;
+  __DMB();
+
+  /* A request can update the shared target just after osThreadFlagsWait()
+   * consumed an older seek flag.  The newer flag then remains pending even
+   * though this invocation already picked up and completed that request.
+   * Do not restart the decoder and I2S a second time for the same ID. */
+  if(request_id != 0U && request_id == s_player_seek_processed_id)
+  {
+    player_complete_seek(request_id);
+    return 0;
+  }
+  if(position > 1000U)
+  {
+    position = 1000U;
+  }
+
+  s_player_state = PLAYER_STATE_STARTING;
+  audio_card_register_tx(NULL);
+  audio_card_close();
+  (void)osThreadFlagsClear(EVENT_DMA_EMPTY);
+  if(s_player_codec.seek(s_player_codec.context, position) != PLAYER_CODEC_READ_OK)
+  {
+    return -1;
+  }
+  player_set_position_from_permille(position);
+
+  if(audio_card_open_prepare((int)s_player_info.sample_rate,
+                             (int)s_player_info.bits_per_sample,
+                             (int)s_player_info.channels,
+                             (int)s_player_codec.package_size) != 0)
+  {
+    return -1;
+  }
+  audio_card_register_tx(audio_feeder);
+  if(player_prime_audio(drain_events) != 0)
+  {
+    return -1;
+  }
+
+  if(keep_paused == 0U)
+  {
+    if(audio_card_start() != 0)
+    {
+      return -1;
+    }
+    s_player_state = PLAYER_STATE_PLAYING;
+  }
+  else
+  {
+    s_player_state = PLAYER_STATE_PAUSED;
+  }
+
+  s_player_seek_processed_id = request_id;
+  __DMB();
+  player_complete_seek(request_id);
+  return 0;
+}
+
 static void player_exit(Player_State_t final_state)
 {
   osThreadId_t tid = s_player_task_handle;
 
   s_player_state = final_state;
+  s_player_seek_pending = 0U;
+  s_player_seekable = 0U;
+  __DMB();
   audio_card_register_tx(NULL);
   audio_card_close();
   player_close_codec();
@@ -276,9 +462,16 @@ static void player_exit(Player_State_t final_state)
   osThreadExit();
 }
 
-static void player_pause_wait(void)
+static void player_pause_wait(u8 *drain_events)
 {
   u32 flags;
+  u8 restart_on_resume = 0U;
+
+  if(drain_events == NULL)
+  {
+    player_exit(PLAYER_STATE_ERROR);
+    return;
+  }
 
   if(audio_card_pause() != 0)
   {
@@ -289,7 +482,7 @@ static void player_pause_wait(void)
   s_player_state = PLAYER_STATE_PAUSED;
   while(1)
   {
-    flags = osThreadFlagsWait(EVENT_RESUME_PLAYER | EVENT_STOP_PLAYER,
+    flags = osThreadFlagsWait(EVENT_PAUSE_WAIT,
                               osFlagsWaitAny,
                               osWaitForever);
     if((flags & osFlagsError) != 0U)
@@ -301,9 +494,28 @@ static void player_pause_wait(void)
     {
       player_exit(PLAYER_STATE_IDLE);
     }
+    if((flags & EVENT_SEEK_PLAYER) != 0U)
+    {
+      if(player_seek_and_prime(1U, drain_events) != 0)
+      {
+        shellPrintEndLine(&shell, "TASK_ERROR:PLAYER_SEEK\r\n");
+        player_exit(PLAYER_STATE_ERROR);
+      }
+      restart_on_resume = 1U;
+      continue;
+    }
     if((flags & EVENT_RESUME_PLAYER) != 0U)
     {
-      if(audio_card_resume() != 0)
+      if(restart_on_resume != 0U)
+      {
+        if(audio_card_start() != 0)
+        {
+          shellPrintEndLine(&shell, "TASK_ERROR:AUDIO_RESTART\r\n");
+          player_exit(PLAYER_STATE_ERROR);
+        }
+        restart_on_resume = 0U;
+      }
+      else if(audio_card_resume() != 0)
       {
         shellPrintEndLine(&shell, "TASK_ERROR:AUDIO_RESUME\r\n");
         player_exit(PLAYER_STATE_ERROR);
@@ -325,6 +537,9 @@ void WavePlayTaskStop(osThreadId_t tid)
   s_player_task_exit_tick = 0U;
   s_player_task_stack_space = 0U;
   s_player_state = PLAYER_STATE_IDLE;
+  s_player_seek_pending = 0U;
+  s_player_seekable = 0U;
+  __DMB();
   audio_card_register_tx(NULL);
   audio_card_close();
   SysUnregisterThread(tid);
@@ -361,6 +576,12 @@ int PlayerStart(const TCHAR *audio_path)
   player_close_file();
   memset(&info, 0, sizeof(info));
   memset(&s_player_info, 0, sizeof(s_player_info));
+  s_player_position_seconds = 0U;
+  s_player_seek_position = 0U;
+  s_player_seek_request_id = 0U;
+  s_player_seek_processed_id = 0U;
+  s_player_seek_pending = 0U;
+  s_player_seekable = 0U;
   s_player_task_stack_space = 0U;
   s_player_task_exit_tick = 0U;
   s_player_state = PLAYER_STATE_STARTING;
@@ -414,6 +635,8 @@ int PlayerStart(const TCHAR *audio_path)
   }
 
   s_player_info = info;
+  s_player_seekable = (s_player_codec.seek != NULL &&
+                       info.duration_seconds != 0U) ? 1U : 0U;
   s_player_task_handle = SysCreateThread(WaveDataTransmitTask,
                                          &s_player_file,
                                          &s_player_task_attr,
@@ -426,6 +649,7 @@ int PlayerStart(const TCHAR *audio_path)
     player_close_file();
     player_free_stack();
     memset(&s_player_info, 0, sizeof(s_player_info));
+    s_player_seekable = 0U;
     s_player_state = PLAYER_STATE_ERROR;
     return OPERATE_FAILED;
   }
@@ -508,10 +732,14 @@ int PlayerStop(void)
   if(s_player_task_handle == NULL || s_player_task_exit_tick != 0U)
   {
     s_player_state = PLAYER_STATE_IDLE;
+    s_player_seek_pending = 0U;
+    __DMB();
     return SYSTEM_STATUS_OK;
   }
 
   s_player_state = PLAYER_STATE_STOPPING;
+  s_player_seek_pending = 0U;
+  __DMB();
   flags = osThreadFlagsSet(s_player_task_handle, EVENT_STOP_PLAYER);
   return ((flags & osFlagsError) != 0U) ? OPERATE_FAILED : SYSTEM_STATUS_OK;
 }
@@ -538,6 +766,77 @@ int PlayerGetInfo(Player_Info_t *info)
   return SYSTEM_STATUS_OK;
 }
 
+u32 PlayerGetPositionSeconds(void)
+{
+  u32 position;
+
+  __DMB();
+  position = s_player_position_seconds;
+  __DMB();
+  return position;
+}
+
+u8 PlayerCanSeek(void)
+{
+  __DMB();
+  return (s_player_seekable != 0U &&
+          s_player_task_handle != NULL &&
+          s_player_task_exit_tick == 0U) ? 1U : 0U;
+}
+
+u8 PlayerSeekIsPending(void)
+{
+  __DMB();
+  return s_player_seek_pending;
+}
+
+u16 PlayerGetSeekTargetPermille(void)
+{
+  u16 position;
+
+  __DMB();
+  position = s_player_seek_position;
+  __DMB();
+  return position;
+}
+
+int PlayerSeekPermille(u16 position)
+{
+  u32 flags;
+  u32 request_id;
+
+  PlayerCleanup();
+  if(s_player_task_handle == NULL || s_player_task_exit_tick != 0U ||
+     s_player_seekable == 0U)
+  {
+    return OPERATE_FAILED;
+  }
+
+  if(position > 1000U)
+  {
+    position = 1000U;
+  }
+
+  request_id = s_player_seek_request_id + 1U;
+  if(request_id == 0U)
+  {
+    request_id = 1U;
+  }
+  s_player_seek_position = position;
+  s_player_seek_request_id = request_id;
+  s_player_seek_pending = 1U;
+  player_set_position_from_permille(position);
+  __DMB();
+  flags = osThreadFlagsSet(s_player_task_handle, EVENT_SEEK_PLAYER);
+  if((flags & osFlagsError) != 0U)
+  {
+    player_complete_seek(request_id);
+    return OPERATE_FAILED;
+  }
+
+  return SYSTEM_STATUS_OK;
+}
+
 const TCHAR *PlayerGetCurrentPath(void)
 {
   return s_player_path;
@@ -553,28 +852,9 @@ static void WaveDataTransmitTask(void *argument)
   s_player_task_handle = osThreadGetId();
   __DMB();
 
-  fill_result = player_fill_dma_buffer(0U);
-  if(fill_result < 0)
+  if(player_prime_audio(&drain_events) != 0)
   {
     player_exit(PLAYER_STATE_ERROR);
-  }
-
-  if(fill_result == 0)
-  {
-    fill_result = player_fill_dma_buffer(1U);
-    if(fill_result < 0)
-    {
-      player_exit(PLAYER_STATE_ERROR);
-    }
-  }
-  else if(audio_card_write_silence(1U) != 0)
-  {
-    player_exit(PLAYER_STATE_ERROR);
-  }
-
-  if(fill_result > 0)
-  {
-    drain_events = 2U;
   }
 
   if(audio_card_start() != 0)
@@ -595,6 +875,15 @@ static void WaveDataTransmitTask(void *argument)
     if((flags & EVENT_STOP_PLAYER) != 0U)
     {
       player_exit(PLAYER_STATE_IDLE);
+    }
+    if((flags & EVENT_SEEK_PLAYER) != 0U)
+    {
+      if(player_seek_and_prime(0U, &drain_events) != 0)
+      {
+        shellPrintEndLine(&shell, "TASK_ERROR:PLAYER_SEEK\r\n");
+        player_exit(PLAYER_STATE_ERROR);
+      }
+      continue;
     }
 
     if((flags & EVENT_DMA_EMPTY) == EVENT_DMA_EMPTY)
@@ -626,7 +915,7 @@ static void WaveDataTransmitTask(void *argument)
 
     if((flags & EVENT_PAUSE_PLAYER) != 0U)
     {
-      player_pause_wait();
+      player_pause_wait(&drain_events);
     }
   }
 }

@@ -61,11 +61,19 @@ static StackType_t *timerTaskStack;
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName);
 
 /* USER CODE BEGIN 4 */
+xTaskHandle volatile g_stack_overflow_task;
+signed char * volatile g_stack_overflow_task_name;
+
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
 {
-   /* Run time stack overflow checking is performed if
-   configCHECK_FOR_STACK_OVERFLOW is defined to 1 or 2. This hook function is
-   called if a stack overflow is detected. */
+   g_stack_overflow_task = xTask;
+   g_stack_overflow_task_name = pcTaskName;
+   __DMB();
+   taskDISABLE_INTERRUPTS();
+   for (;;)
+   {
+      __NOP();
+   }
 }
 
 void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,

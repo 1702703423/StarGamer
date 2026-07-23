@@ -65,6 +65,7 @@ typedef struct
 	const char * const *extensions;
 	u8 extension_count;
 	u32 accent_color;
+	u8 hide_default_status;
 	GUI_FileManageFilter filter;
 	GUI_FileManageOpen open;
 	GUI_FileManageBack back;
@@ -107,6 +108,7 @@ void GUI_FileManage_SetLocked(GUI_FileManage_t *manager, u8 locked);
 const char *GUI_FileManage_GetCurrentPath(const GUI_FileManage_t *manager);
 void *GUI_FileManage_GetUserData(const GUI_FileManage_t *manager);
 u8 GUI_FileManage_BuildItemPath(const GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, char *dst, u32 dst_size);
+u8 GUI_FileManage_OemToUtf8(char *dst, u32 dst_size, const char *src);
 
 #ifdef __cplusplus
 }

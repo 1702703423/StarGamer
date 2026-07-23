@@ -3,6 +3,10 @@
 
 #define SYS_MEM_INVALID 0xFFU
 #define SYS_ALIGN8(size) (((size) + 7U) & ~7U)
+#define SYS_MEM_BLOCK_START_FLAG ((MT_TYPE)0x8000U)
+#define SYS_MEM_BLOCK_COUNT_MASK ((MT_TYPE)0x7FFFU)
+#define SYS_MEM_BLOCK_CONTINUE   ((MT_TYPE)0xFFFFU)
+#define SYS_MEM_LOCK_UNUSED      ((s32)-1)
 
 static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE];
 #define mem3mapbase ((MT_TYPE *)MEM3_MAP_BASE)
@@ -43,24 +47,21 @@ struct _m_mallco_dev mallco_dev =
     },
 };
 
-static u8 sys_mem_lock(void)
+static s32 sys_mem_lock(void)
 {
     if (osKernelGetState() == osKernelRunning)
     {
-        if (osKernelLock() >= 0)
-        {
-            return 1U;
-        }
+        return (s32)osKernelLock();
     }
 
-    return 0U;
+    return SYS_MEM_LOCK_UNUSED;
 }
 
-static void sys_mem_unlock(u8 locked)
+static void sys_mem_unlock(s32 lock_state)
 {
-    if (locked != 0U)
+    if (lock_state >= 0)
     {
-        (void)osKernelUnlock();
+        (void)osKernelRestoreLock(lock_state);
     }
 }
 
@@ -96,6 +97,8 @@ static u32 sys_mem_used_size(u8 memx, const void *ptr)
     u32 offset;
     u32 index;
     u32 blocks;
+    u32 i;
+    MT_TYPE entry;
 
     if (ptr == NULL || memx >= SRAMBANK)
     {
@@ -110,16 +113,35 @@ static u32 sys_mem_used_size(u8 memx, const void *ptr)
     }
 
     offset = addr - base;
+    if ((offset % memblksize[memx]) != 0U)
+    {
+        return 0U;
+    }
     index = offset / memblksize[memx];
     if (index >= memtblsize[memx])
     {
         return 0U;
     }
 
-    blocks = mallco_dev.memmap[memx][index];
-    if (blocks == 0U)
+    entry = mallco_dev.memmap[memx][index];
+    if (entry == 0U || entry == SYS_MEM_BLOCK_CONTINUE ||
+        (entry & SYS_MEM_BLOCK_START_FLAG) == 0U)
     {
         return 0U;
+    }
+
+    blocks = (u32)(entry & SYS_MEM_BLOCK_COUNT_MASK);
+    if (blocks == 0U || blocks > (memtblsize[memx] - index))
+    {
+        return 0U;
+    }
+
+    for (i = 1U; i < blocks; i++)
+    {
+        if (mallco_dev.memmap[memx][index + i] != SYS_MEM_BLOCK_CONTINUE)
+        {
+            return 0U;
+        }
     }
 
     return blocks * memblksize[memx];
@@ -148,7 +170,7 @@ void sys_mem_set(void *s, u8 c, u32 count)
 
 void sys_mem_init(u8 memx)
 {
-    u8 locked;
+    s32 lock_state;
     u32 mttsize;
 
     if (memx >= SRAMBANK)
@@ -156,11 +178,11 @@ void sys_mem_init(u8 memx)
         return;
     }
 
-    locked = sys_mem_lock();
+    lock_state = sys_mem_lock();
     mttsize = sizeof(MT_TYPE);
     sys_mem_set(mallco_dev.memmap[memx], 0U, memtblsize[memx] * mttsize);
     mallco_dev.memrdy[memx] = 1U;
-    sys_mem_unlock(locked);
+    sys_mem_unlock(lock_state);
 }
 
 u16 sys_mem_perused(u8 memx)
@@ -225,9 +247,11 @@ static u32 my_mem_malloc(u8 memx, u32 size)
 
         if (cmemb == nmemb)
         {
-            for (i = 0U; i < nmemb; i++)
+            mallco_dev.memmap[memx][offset] =
+                (MT_TYPE)(SYS_MEM_BLOCK_START_FLAG | (MT_TYPE)nmemb);
+            for (i = 1U; i < nmemb; i++)
             {
-                mallco_dev.memmap[memx][offset + (signed long)i] = (MT_TYPE)nmemb;
+                mallco_dev.memmap[memx][offset + (signed long)i] = SYS_MEM_BLOCK_CONTINUE;
             }
 
             return (u32)offset * memblksize[memx];
@@ -242,6 +266,7 @@ static u8 my_mem_free(u8 memx, u32 offset)
     u32 i;
     u32 index;
     u32 nmemb;
+    MT_TYPE entry;
 
     if (memx >= SRAMBANK)
     {
@@ -259,14 +284,34 @@ static u8 my_mem_free(u8 memx, u32 offset)
         return 2U;
     }
 
+    if ((offset % memblksize[memx]) != 0U)
+    {
+        return 2U;
+    }
+
     index = offset / memblksize[memx];
-    nmemb = mallco_dev.memmap[memx][index];
-    if (nmemb == 0U)
+    entry = mallco_dev.memmap[memx][index];
+    if (entry == 0U || entry == SYS_MEM_BLOCK_CONTINUE ||
+        (entry & SYS_MEM_BLOCK_START_FLAG) == 0U)
     {
         return 1U;
     }
 
-    for (i = 0U; i < nmemb && (index + i) < memtblsize[memx]; i++)
+    nmemb = (u32)(entry & SYS_MEM_BLOCK_COUNT_MASK);
+    if (nmemb == 0U || nmemb > (memtblsize[memx] - index))
+    {
+        return 2U;
+    }
+
+    for (i = 1U; i < nmemb; i++)
+    {
+        if (mallco_dev.memmap[memx][index + i] != SYS_MEM_BLOCK_CONTINUE)
+        {
+            return 2U;
+        }
+    }
+
+    for (i = 0U; i < nmemb; i++)
     {
         mallco_dev.memmap[memx][index + i] = 0U;
     }
@@ -276,7 +321,7 @@ static u8 my_mem_free(u8 memx, u32 offset)
 
 void sys_free(u8 memx, void *ptr)
 {
-    u8 locked;
+    s32 lock_state;
     u32 offset;
 
     if (ptr == NULL || memx >= SRAMBANK)
@@ -284,15 +329,15 @@ void sys_free(u8 memx, void *ptr)
         return;
     }
 
-    locked = sys_mem_lock();
+    lock_state = sys_mem_lock();
     offset = (u32)ptr - (u32)mallco_dev.membase[memx];
     (void)my_mem_free(memx, offset);
-    sys_mem_unlock(locked);
+    sys_mem_unlock(lock_state);
 }
 
 void *sys_malloc(u8 memx, u32 size)
 {
-    u8 locked;
+    s32 lock_state;
     u32 offset;
     void *ptr = NULL;
 
@@ -301,20 +346,20 @@ void *sys_malloc(u8 memx, u32 size)
         return NULL;
     }
 
-    locked = sys_mem_lock();
+    lock_state = sys_mem_lock();
     offset = my_mem_malloc(memx, size);
     if (offset != 0xFFFFFFFFU)
     {
         ptr = (void *)((u32)mallco_dev.membase[memx] + offset);
     }
-    sys_mem_unlock(locked);
+    sys_mem_unlock(lock_state);
 
     return ptr;
 }
 
 void *myrealloc(u8 memx, void *ptr, u32 size)
 {
-    u8 locked;
+    s32 lock_state;
     u32 offset;
     u32 old_offset;
     u32 copy_size;
@@ -336,16 +381,22 @@ void *myrealloc(u8 memx, void *ptr, u32 size)
         return NULL;
     }
 
-    locked = sys_mem_lock();
+    lock_state = sys_mem_lock();
+    copy_size = sys_mem_used_size(memx, ptr);
+    if (copy_size == 0U)
+    {
+        sys_mem_unlock(lock_state);
+        return NULL;
+    }
+
     offset = my_mem_malloc(memx, size);
     if (offset == 0xFFFFFFFFU)
     {
-        sys_mem_unlock(locked);
+        sys_mem_unlock(lock_state);
         return NULL;
     }
 
     new_ptr = (void *)((u32)mallco_dev.membase[memx] + offset);
-    copy_size = sys_mem_used_size(memx, ptr);
     if (copy_size > size)
     {
         copy_size = size;
@@ -357,7 +408,7 @@ void *myrealloc(u8 memx, void *ptr, u32 size)
 
     old_offset = (u32)ptr - (u32)mallco_dev.membase[memx];
     (void)my_mem_free(memx, old_offset);
-    sys_mem_unlock(locked);
+    sys_mem_unlock(lock_state);
 
     return new_ptr;
 }
@@ -371,17 +422,29 @@ void *sys_malloc_aligned(u8 memx, u32 size, u32 alignment)
     void *raw;
     u32 raw_addr;
     u32 aligned_addr;
+    u32 overhead;
 
-    if (alignment < 4U)
+    if (memx >= SRAMBANK || size == 0U)
     {
-        alignment = 4U;
+        return NULL;
+    }
+
+    if (alignment < sizeof(void *))
+    {
+        alignment = sizeof(void *);
     }
     if ((alignment & (alignment - 1U)) != 0U)
     {
         return NULL;
     }
 
-    raw = sys_malloc(memx, size + alignment + sizeof(void *));
+    overhead = alignment + sizeof(void *);
+    if (overhead < alignment || size > (0xFFFFFFFFU - overhead))
+    {
+        return NULL;
+    }
+
+    raw = sys_malloc(memx, size + overhead);
     if (raw == NULL)
     {
         return NULL;
@@ -397,13 +460,29 @@ void *sys_malloc_aligned(u8 memx, u32 size, u32 alignment)
 void sys_free_aligned(u8 memx, void *ptr)
 {
     void *raw;
+    u32 addr;
+    u32 base;
+    u32 end;
 
-    if (ptr == NULL)
+    if (ptr == NULL || memx >= SRAMBANK)
     {
         return;
     }
 
-    raw = *((void **)((u32)ptr - sizeof(void *)));
+    addr = (u32)ptr;
+    base = (u32)mallco_dev.membase[memx];
+    end = base + memsize[memx];
+    if (addr < (base + sizeof(void *)) || addr >= end)
+    {
+        return;
+    }
+
+    raw = *((void **)(addr - sizeof(void *)));
+    if ((u32)raw < base || (u32)raw >= addr || (u32)raw >= end)
+    {
+        return;
+    }
+
     sys_free(memx, raw);
 }
 

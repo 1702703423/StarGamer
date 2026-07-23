@@ -45,6 +45,11 @@ apu_t *apu; 			//apu指针
 u8 *wave_buffers; 
 
 u8* romfile;			//nes文件指针,指向整个nes文件的起始地址.
+static u32 s_romfile_size;
+static u8 s_vrom_banks_owned;
+static u8 s_vrom_tiles_owned;
+static u8 s_map1_owned;
+static u8 s_mapx_owned;
 //////////////////////////////////////////////////////////////////////////////////////
 
 u8 nes_xoff=0;	//显示在x轴方向的偏移量(实际显示宽度=256-2*nes_xoff)
@@ -143,29 +148,48 @@ u8 nes_load_rom(void)
 	u8* p;  
 	u8 i;
 	u8 res=0;
+	u32 data_offset;
+	u32 prg_size;
+	u32 chr_size;
 	p=(u8*)romfile;	
-	if(strncmp((char*)p,"NES",3)==0)
+	if(strncmp((char*)p,"NES",3)==0&&p[3]==0x1AU)
 	{  
 		RomHeader->ctrl_z=p[3];
 		RomHeader->num_16k_rom_banks=p[4];
 		RomHeader->num_8k_vrom_banks=p[5];
 		RomHeader->flags_1=p[6];
 		RomHeader->flags_2=p[7]; 
-		if(RomHeader->flags_1&0x04)p+=512;		//有512字节的trainer:
+		data_offset=16U;
+		if(RomHeader->flags_1&0x04)data_offset+=512U;		//有512字节的trainer:
+		prg_size=(u32)RomHeader->num_16k_rom_banks*0x4000U;
+		chr_size=(u32)RomHeader->num_8k_vrom_banks*0x2000U;
+		if(data_offset>s_romfile_size||prg_size>(s_romfile_size-data_offset)||
+		   chr_size>(s_romfile_size-data_offset-prg_size))return 2;
 		if(RomHeader->num_8k_vrom_banks>0)		//存在VROM,进行预解码
 		{		
-			VROM_banks=p+16+(RomHeader->num_16k_rom_banks*0x4000);
+			VROM_banks=p+data_offset+prg_size;
+			s_vrom_banks_owned=0U;
 #if	NES_RAM_SPEED==1	//1:内存占用小 0:速度快	 
-			VROM_tiles=VROM_banks;	 
+			VROM_tiles=VROM_banks;
+			s_vrom_tiles_owned=0U;
 #else  
-			VROM_tiles=sys_malloc(SRAMEX,RomHeader->num_8k_vrom_banks*8*1024);//这里可能申请多达1MB内存!!!
-			if(VROM_tiles==0)VROM_tiles=VROM_banks;//内存不够用的情况下,尝试VROM_titles与VROM_banks共用内存			
-			compile(RomHeader->num_8k_vrom_banks*8*1024/16,VROM_banks,VROM_tiles);  
+			VROM_tiles=sys_malloc(SRAMEX,chr_size);//这里可能申请多达1MB内存!!!
+			if(VROM_tiles==0)
+			{
+				VROM_tiles=VROM_banks;//内存不够用的情况下,尝试VROM_titles与VROM_banks共用内存
+				s_vrom_tiles_owned=0U;
+			}else
+			{
+				s_vrom_tiles_owned=1U;
+			}
+			compile(chr_size/16U,VROM_banks,VROM_tiles);
 #endif	
 		}else 
 		{
-			VROM_banks = sys_malloc(1,8*1024);
-			VROM_tiles = sys_malloc(1,8*1024);
+			VROM_banks = sys_malloc(SRAMEX,8U*1024U);
+			s_vrom_banks_owned=(VROM_banks!=0)?1U:0U;
+			VROM_tiles = sys_malloc(SRAMEX,8U*1024U);
+			s_vrom_tiles_owned=(VROM_tiles!=0)?1U:0U;
 			if(!VROM_banks||!VROM_tiles)res=1;
 		}  	
 		VROM_1K_SIZE = RomHeader->num_8k_vrom_banks * 8;
@@ -183,7 +207,8 @@ u8 nes_load_rom(void)
 			switch(MapperNo)
 			{
 				case 1:  
-					MAP1=sys_malloc(1,sizeof(Mapper1Res)); 
+					MAP1=sys_malloc(SRAMEX,sizeof(Mapper1Res));
+					s_map1_owned=(MAP1!=0)?1U:0U;
 					if(!MAP1)res=1;
 					break;
 				case 4:  
@@ -202,57 +227,36 @@ u8 nes_load_rom(void)
 				case 69:
 				case 85:
 				case 189:
-					MAPx=sys_malloc(1,sizeof(MapperCommRes)); 
+					MAPx=sys_malloc(SRAMEX,sizeof(MapperCommRes));
+					s_mapx_owned=(MAPx!=0)?1U:0U;
 					if(!MAPx)res=1;
 					break;  
 				default:
 					break;
 			}
 		}
-	} 
+	}else
+	{
+		res=2;
+	}
 	return res;	//返回执行结果
 } 
 //释放内存 
 void nes_sram_free(void)
 { 
-	sys_free(1,NES_RAM);		
-	sys_free(1,NES_SRAM);	
-	sys_free(1,RomHeader);	
-	sys_free(1,NES_Mapper);
-	sys_free(1,spr_ram);		
-	sys_free(1,ppu);	
-	sys_free(1,apu);	
-	sys_free(1,wave_buffers);	
-	sys_free(1,romfile);
-	if((VROM_tiles!=VROM_banks)&&VROM_banks&&VROM_tiles)//如果分别为VROM_banks和VROM_tiles申请了内存,则释放
-	{
-		sys_free(1,VROM_banks);
-		sys_free(1,VROM_tiles);	
-	}
-	switch (MapperNo)//释放map内存
-	{
-		case 1: 			//释放内存
-			sys_free(1,MAP1);
-			break;	 	
-		case 4: 
-		case 6: 
-		case 16:
-		case 17:
-		case 18:
-		case 19:
-		case 21:
-		case 23:
-		case 24:
-		case 25:
-		case 64:
-		case 65:
-		case 67:
-		case 69:
-		case 85:
-		case 189:
-			sys_free(1,MAPx);break;	 		//释放内存 
-		default:break; 
-	}
+	if(s_vrom_tiles_owned!=0U)sys_free(SRAMEX,VROM_tiles);
+	if(s_vrom_banks_owned!=0U)sys_free(SRAMEX,VROM_banks);
+	if(s_map1_owned!=0U)sys_free(SRAMEX,MAP1);
+	if(s_mapx_owned!=0U)sys_free(SRAMEX,MAPx);
+	sys_free_aligned(SRAMEX,NES_RAM);
+	sys_free(SRAMEX,NES_SRAM);
+	sys_free(SRAMEX,RomHeader);
+	sys_free(SRAMEX,NES_Mapper);
+	sys_free(SRAMEX,spr_ram);
+	sys_free(SRAMEX,ppu);
+	sys_free(SRAMEX,apu);
+	sys_free(SRAMEX,wave_buffers);
+	sys_free(SRAMEX,romfile);
 	NES_RAM=0;	
 	NES_SRAM=0;
 	RomHeader=0;
@@ -266,6 +270,12 @@ void nes_sram_free(void)
 	VROM_tiles=0; 
 	MAP1=0;
 	MAPx=0;
+	s_romfile_size=0U;
+	s_vrom_banks_owned=0U;
+	s_vrom_tiles_owned=0U;
+	s_map1_owned=0U;
+	s_mapx_owned=0U;
+	MapperNo=0;
 } 
 //为NES运行申请内存
 //romsize:nes文件大小
@@ -273,41 +283,29 @@ void nes_sram_free(void)
 //       1,申请失败
 u8 nes_sram_malloc(u32 romsize)
 {
-	u16 i=0;
-	for(i=0;i<64;i++)//为NES_RAM,查找1024对齐的内存
-	{
-		NES_SRAM=sys_malloc(1,i*32);
-		NES_RAM=sys_malloc(1,0X800);	//申请2K字节,必须1024字节对齐
-		if((u32)NES_RAM%1024)			//不是1024字节对齐
-		{
-			sys_free(1,NES_RAM);		//释放内存,然后重新尝试分配
-			sys_free(1,NES_SRAM); 
-		}else 
-		{
-			sys_free(1,NES_SRAM); 	//释放内存
-			break;
-		}
-	}
- 	NES_SRAM=sys_malloc(1,0X2000);
-	RomHeader=sys_malloc(1,sizeof(NES_header));
-	NES_Mapper=sys_malloc(1,sizeof(MAPPER));
-	spr_ram=sys_malloc(1,0X100);		
-	ppu=sys_malloc(1,sizeof(ppu_data));  
-	apu=sys_malloc(1,sizeof(apu_t));		//sizeof(apu_t)=  12588
-	wave_buffers=sys_malloc(1,APU_PCMBUF_SIZE);
-	
-	if(romsize > ROM_SIZE_MAX) //最大限制
+	nes_sram_free();
+	if(romsize<16U||romsize>ROM_SIZE_MAX)
 	{
 		return 1;
 	}
-	
- 	romfile=sys_malloc(SRAMEX,romsize);		//申请游戏rom空间,固定大小，NES_ROM_MEM_SIZE
-	
-	if(i==64||!NES_RAM||!NES_SRAM||!RomHeader||!NES_Mapper||!spr_ram||!ppu||!apu||!wave_buffers||!romfile)
+
+	romfile=sys_malloc(SRAMEX,romsize);		//优先申请最大的连续ROM空间
+	if(romfile!=0)s_romfile_size=romsize;
+	NES_RAM=sys_malloc_aligned(SRAMEX,0X800U,1024U);
+	NES_SRAM=sys_malloc(SRAMEX,0X2000U);
+	RomHeader=sys_malloc(SRAMEX,sizeof(NES_header));
+	NES_Mapper=sys_malloc(SRAMEX,sizeof(MAPPER));
+	spr_ram=sys_malloc(SRAMEX,0X100U);
+	ppu=sys_malloc(SRAMEX,sizeof(ppu_data));
+	apu=sys_malloc(SRAMEX,sizeof(apu_t));		//sizeof(apu_t)=  12588
+	wave_buffers=sys_malloc(SRAMEX,APU_PCMBUF_SIZE);
+
+	if(!NES_RAM||!NES_SRAM||!RomHeader||!NES_Mapper||!spr_ram||!ppu||!apu||!wave_buffers||!romfile)
 	{
 		nes_sram_free();
 		return 1;
 	}
+	memset(NES_RAM,0,0X800U);
 	memset(NES_SRAM,0,0X2000);				//清零
 	memset(RomHeader,0,sizeof(NES_header));	//清零
 	memset(NES_Mapper,0,sizeof(MAPPER));	//清零
@@ -332,22 +330,38 @@ u8 nes_load(u8* pname)
 	UINT br;
 	u8 res=0;
 	
-	file = sys_malloc(1,sizeof(FIL));  
+	file = sys_malloc(SRAMEX,sizeof(FIL));
 	if(file==0)return 1;						//内存申请失败.  
 	res=f_open(file,(char*)pname,FA_READ);
 	if(res!=FR_OK)	//打开文件失败
 	{
-		sys_free(1,file);
+		sys_free(SRAMEX,file);
 		return 2;
 	}
 	
-	f_stat((char*)pname, &FileInf);
-	res=nes_sram_malloc(FileInf.fsize);			//申请内存 
+	if(f_stat((char*)pname, &FileInf)!=FR_OK)
+	{
+		f_close(file);
+		sys_free(SRAMEX,file);
+		return 2;
+	}
+	if(FileInf.fsize<(FSIZE_t)16U||FileInf.fsize>(FSIZE_t)ROM_SIZE_MAX)
+	{
+		res=1;
+	}else
+	{
+		res=nes_sram_malloc((u32)FileInf.fsize);			//申请内存
+	}
 	if(res==0)
 	{
-		f_read(file,romfile,FileInf.fsize,&br);	//读取nes文件
-		NESrom_crc32=get_crc32(romfile+16, FileInf.fsize-16);//获取CRC32的值	
-		res=nes_load_rom();						//加载ROM
+		if(f_read(file,romfile,(UINT)FileInf.fsize,&br)!=FR_OK||(FSIZE_t)br!=FileInf.fsize)
+		{
+			res=2;
+		}else
+		{
+			NESrom_crc32=get_crc32(romfile+16,(u32)FileInf.fsize-16U);//获取CRC32的值
+			res=nes_load_rom();						//加载ROM
+		}
 		if(res==0) 					
 		{   
 			cpu6502_init();						//初始化6502,并复位	 
@@ -361,7 +375,7 @@ u8 nes_load(u8* pname)
 		}
 	}
 	f_close(file);
-	sys_free(1,file);//释放内存
+	sys_free(SRAMEX,file);//释放内存
 	nes_sram_free();	//释放内存
 	return res;
 }  

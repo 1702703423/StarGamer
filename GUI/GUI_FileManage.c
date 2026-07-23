@@ -42,7 +42,6 @@ static void GUI_FM_CloseDir(GUI_FileManage_t *manager);
 static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager);
 static u8 GUI_FM_PathJoin(char *dst, u32 dst_size, const char *dir, const char *name);
 static u8 GUI_FM_CopyText(char *dst, u32 dst_size, const char *src);
-static u8 GUI_FM_OemToUtf8(char *dst, u32 dst_size, const char *src);
 static void GUI_FM_ApplyTextFont(lv_obj_t *obj);
 static u8 GUI_FM_ExtensionAccepted(GUI_FileManage_t *manager, const FILINFO *info);
 static int GUI_FM_StrCaseCmp(const char *a, const char *b);
@@ -826,7 +825,7 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 		lv_group_set_wrap(group, true);
 	}
 
-	if (GUI_FM_OemToUtf8(display_path, sizeof(display_path), manager->current_path) != 0U)
+	if (GUI_FileManage_OemToUtf8(display_path, sizeof(display_path), manager->current_path) != 0U)
 	{
 		lv_label_set_text(manager->path_label, display_path);
 	}
@@ -882,7 +881,7 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 		icon = LV_SYMBOL_FILE;
 	}
 
-	if (GUI_FM_OemToUtf8(display_name, sizeof(display_name), item->name) == 0U)
+	if (GUI_FileManage_OemToUtf8(display_name, sizeof(display_name), item->name) == 0U)
 	{
 		(void)GUI_FM_CopyText(display_name, sizeof(display_name), "Name encoding error");
 	}
@@ -1061,7 +1060,7 @@ static u8 GUI_FM_CopyText(char *dst, u32 dst_size, const char *src)
 	return 1U;
 }
 
-static u8 GUI_FM_OemToUtf8(char *dst, u32 dst_size, const char *src)
+u8 GUI_FileManage_OemToUtf8(char *dst, u32 dst_size, const char *src)
 {
 	const u8 *input;
 	u32 output_index;
@@ -1273,6 +1272,11 @@ static void GUI_FM_SetDefaultStatus(GUI_FileManage_t *manager)
 
 	if (manager == NULL || manager->status_label == NULL)
 	{
+		return;
+	}
+	if (manager->config.hide_default_status != 0U)
+	{
+		GUI_FileManage_SetStatus(manager, "");
 		return;
 	}
 

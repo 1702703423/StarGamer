@@ -14,12 +14,16 @@ typedef enum
 } Player_Codec_Result_t;
 
 typedef int (*Player_Codec_Read_t)(void *context, const u8 **pcm, u32 *pcm_bytes);
+typedef int (*Player_Codec_Seek_t)(void *context, u16 position);
+typedef u32 (*Player_Codec_Tell_t)(void *context);
 typedef void (*Player_Codec_Close_t)(void *context);
 
 typedef struct Player_Codec_Handle
 {
   void *context;
   Player_Codec_Read_t read_pcm;
+  Player_Codec_Seek_t seek;
+  Player_Codec_Tell_t tell_seconds;
   Player_Codec_Close_t close;
   u32 package_size;
 } Player_Codec_Handle_t;

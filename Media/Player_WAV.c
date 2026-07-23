@@ -10,6 +10,10 @@ typedef struct Player_WAV_Context
 {
   FIL *file;
   u8 *pcm_buffer;
+  u32 data_offset;
+  u32 data_size;
+  u32 byte_rate;
+  u16 block_align;
   u32 bytes_remaining;
 } Player_WAV_Context_t;
 
@@ -77,6 +81,59 @@ static int player_wav_read_pcm(void *context, const u8 **pcm, u32 *pcm_bytes)
   }
 
   return (wav->bytes_remaining == 0U) ? PLAYER_CODEC_READ_EOF : PLAYER_CODEC_READ_OK;
+}
+
+static int player_wav_seek(void *context, u16 position)
+{
+  Player_WAV_Context_t *wav = (Player_WAV_Context_t *)context;
+  u32 target;
+
+  if(wav == NULL || wav->file == NULL || wav->block_align == 0U)
+  {
+    return PLAYER_CODEC_ERROR;
+  }
+
+  if(position > 1000U)
+  {
+    position = 1000U;
+  }
+
+  if(position >= 1000U)
+  {
+    target = wav->data_size;
+  }
+  else
+  {
+    target = (wav->data_size / 1000U) * (u32)position;
+    target += ((wav->data_size % 1000U) * (u32)position) / 1000U;
+    target -= target % (u32)wav->block_align;
+  }
+  if(target > wav->data_size)
+  {
+    target = wav->data_size;
+  }
+
+  if(f_lseek(wav->file, (FSIZE_t)(wav->data_offset + target)) != FR_OK)
+  {
+    return PLAYER_CODEC_ERROR;
+  }
+
+  wav->bytes_remaining = wav->data_size - target;
+  return PLAYER_CODEC_READ_OK;
+}
+
+static u32 player_wav_tell_seconds(void *context)
+{
+  Player_WAV_Context_t *wav = (Player_WAV_Context_t *)context;
+  u32 played;
+
+  if(wav == NULL || wav->byte_rate == 0U || wav->bytes_remaining > wav->data_size)
+  {
+    return 0U;
+  }
+
+  played = wav->data_size - wav->bytes_remaining;
+  return played / wav->byte_rate;
 }
 
 static void player_wav_close(void *context)
@@ -151,6 +208,10 @@ int Player_WAV_Open(FIL *file, Player_Codec_Handle_t *codec, Player_Info_t *info
       sample_rate = player_wav_read_le32(&header[4]);
       byte_rate = player_wav_read_le32(&header[8]);
       bits_per_sample = player_wav_read_le16(&header[14]);
+      if(channels == 0U || bits_per_sample == 0U)
+      {
+        return PLAYER_CODEC_UNSUPPORTED;
+      }
       if((channels != 1U && channels != 2U) ||
          sample_rate == 0U || byte_rate == 0U ||
          (bits_per_sample != 8U && bits_per_sample != 16U))
@@ -195,9 +256,15 @@ int Player_WAV_Open(FIL *file, Player_Codec_Handle_t *codec, Player_Info_t *info
   }
 
   wav->file = file;
+  wav->data_offset = (u32)f_tell(file);
+  wav->data_size = data_size;
+  wav->byte_rate = byte_rate;
+  wav->block_align = (u16)((channels * bits_per_sample) / 8U);
   wav->bytes_remaining = data_size;
   codec->context = wav;
   codec->read_pcm = player_wav_read_pcm;
+  codec->seek = player_wav_seek;
+  codec->tell_seconds = player_wav_tell_seconds;
   codec->close = player_wav_close;
   codec->package_size = PLAYER_WAV_BUFFER_SIZE;
 

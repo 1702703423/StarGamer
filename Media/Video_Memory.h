@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 #define VIDEO_MEMORY_ALIGNMENT  32U
-#define VIDEO_MEMORY_POOL_SIZE  (80UL * 1024UL)
+#define VIDEO_MEMORY_POOL_SIZE  (77UL * 1024UL)
 
 typedef struct Video_MemoryStats
 {
