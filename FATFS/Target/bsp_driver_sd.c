@@ -263,11 +263,31 @@ void HAL_SD_RxCpltCallback(SD_HandleTypeDef *hsd)
 
 /* USER CODE BEGIN CallBacksSection_C */
 /**
+  * @brief Error callback
+  * @param hsd: SD handle
+  * @retval None
+  */
+void HAL_SD_ErrorCallback(SD_HandleTypeDef *hsd)
+{
+  BSP_SD_ErrorCallback();
+}
+
+/**
   * @brief BSP SD Abort callback
   * @retval None
   * @note empty (up to the user to fill it in or to remove it if useless)
   */
 __weak void BSP_SD_AbortCallback(void)
+{
+
+}
+
+/**
+  * @brief BSP SD error callback
+  * @retval None
+  * @note empty (up to the user to fill it in or to remove it if useless)
+  */
+__weak void BSP_SD_ErrorCallback(void)
 {
 
 }

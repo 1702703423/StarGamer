@@ -15,6 +15,11 @@ extern "C" {
 #define VIDEO_PCM_LOW_WATER_BYTES (16UL * 1024UL)
 #define VIDEO_PCM_HIGH_WATER_BYTES (28UL * 1024UL)
 
+#define VIDEO_PCM_FATFS_OP_NONE       0U
+#define VIDEO_PCM_FATFS_OP_SEEK       1U
+#define VIDEO_PCM_FATFS_OP_READ       2U
+#define VIDEO_PCM_FATFS_OP_SHORT_READ 3U
+
 typedef enum Video_PCMResult
 {
 	VIDEO_PCM_OK = 0,
@@ -51,6 +56,11 @@ typedef struct Video_PCMStats
 	u32 fatfs_read_errors;
 	u32 fatfs_read_calls;
 	u32 fatfs_read_bytes;
+	u32 fatfs_last_operation;
+	u32 fatfs_last_offset;
+	u32 fatfs_last_request_bytes;
+	u32 fatfs_last_read_bytes;
+	s32 fatfs_last_result;
 } Video_PCMStats_t;
 
 typedef struct Video_PCM
@@ -89,6 +99,11 @@ typedef struct Video_PCM
 	u32 fatfs_read_errors;
 	u32 fatfs_read_calls;
 	u32 fatfs_read_bytes;
+	u32 fatfs_last_operation;
+	u32 fatfs_last_offset;
+	u32 fatfs_last_request_bytes;
+	u32 fatfs_last_read_bytes;
+	s32 fatfs_last_result;
 	volatile u8 opened;
 	volatile u8 started;
 	volatile u8 feed_stop;

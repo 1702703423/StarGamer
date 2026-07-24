@@ -114,7 +114,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
   - NES APU、MP3/WAV 播放器、AVI PCM 均通过回调推送到 I2S
 - **存储**:
   - SD 卡 SDIO 4-bit + DMA（RX: DMA2_Stream3，TX: DMA2_Stream6），FatFs codepage 936，已启用 512 B 对齐 scratch buffer
-  - W25Q64（8 MB）SPI Flash（SPI1）：分区为字体区 2 MB + 预留区 4 MB + 固件暂存区 1 MB + 固件备份区 1 MB
+  - W25Q64（8 MB）SPI Flash（SPI2）：分区为字体区 2 MB + 预留区 4 MB + 固件暂存区 1 MB + 固件备份区 1 MB
   - AT24C02（256 B）I2C EEPROM：用于 IAP 双槽容错记录 + 系统设置持久化
 - **NES 模拟器**: 入口 `nes_main.c`，核心 `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`，`NES_SKIP_FRAME = 2`（跳帧），mapper 文件 `000.cpp`–`255.cpp`。渲染逻辑已适配优化
 - **Arduboy 游戏**: `Middlewares/Third_Party/Arduboy/` 含兼容层（Arduboy2 引擎核心）+ 3 款游戏（Buttons / Dino / FlappyBall）。128×64 1bpp framebuffer，通过 `APP/Arduboy/Arduboy_Runtime.c` 管理生命周期，`Arduboy_Port.c` 对接 LCD 显示和按键
@@ -132,7 +132,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **Flash 分区**: BootLoader 64 KB（扇区 0–3，0x08000000–0x0800FFFF），Application 960 KB（扇区 4–11，0x08010000–0x080FFFFF）
 - **更新流程**: SD 卡 `update.bin` → 写入 W25Q64 暂存区（0x600000）→ CRC32 校验 → 擦写内部 Flash → 校验后跳转 App
 - **安全机制**: 双备份（W25Q64 备份区 0x700000）、EEPROM 双槽记录、断电容错、CRC 全程校验
-- **外设**: 仅依赖 SPI1（LCD / W25Q64 / 按键）、内部 Flash HAL、CRC
+- **外设**: 仅依赖 SPI1,SPI2（LCD / W25Q64 / 按键）、内部 Flash HAL、CRC
 - **产物**: 已编译生成 `StarGamerBootLoader.hex`、`.bin`、`.axf`
 
 ### LVGL 集成

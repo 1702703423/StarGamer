@@ -1407,6 +1407,7 @@ static void video_finish(Video_Context_t *context, Video_Result_t result)
 	if(context->pcm_opened != 0U)
 	{
 		video_update_pcm_stats(context);
+		video_accumulate_pcm_stats(context);
 		Video_PCM_Close(&context->pcm);
 		context->pcm_opened = 0U;
 	}
@@ -1812,6 +1813,14 @@ static void video_accumulate_pcm_stats(Video_Context_t *context)
 	total->fatfs_read_errors += current.fatfs_read_errors;
 	total->fatfs_read_calls += current.fatfs_read_calls;
 	total->fatfs_read_bytes += current.fatfs_read_bytes;
+	if(current.fatfs_last_operation != VIDEO_PCM_FATFS_OP_NONE)
+	{
+		total->fatfs_last_operation = current.fatfs_last_operation;
+		total->fatfs_last_offset = current.fatfs_last_offset;
+		total->fatfs_last_request_bytes = current.fatfs_last_request_bytes;
+		total->fatfs_last_read_bytes = current.fatfs_last_read_bytes;
+		total->fatfs_last_result = current.fatfs_last_result;
+	}
 	context->pcm_fatfs_read_errors = total->fatfs_read_errors;
 	context->pcm_fatfs_read_calls = total->fatfs_read_calls;
 	context->pcm_fatfs_read_bytes = total->fatfs_read_bytes;
@@ -1973,8 +1982,13 @@ static void video_update_pcm_stats(Video_Context_t *context)
 		pcm_stats.input_bytes;
 	context->stats.pcm_output_frames = context->pcm_accumulated.output_frames +
 		pcm_stats.output_frames;
-	context->stats.audio_fifo_bytes = (context->pcm_opened != 0U) ?
-		Video_PCM_GetBufferedBytes(&context->pcm) : 0U;
+	if(context->pcm_opened != 0U)
+	{
+		context->stats.audio_fifo_bytes = Video_PCM_GetBufferedBytes(&context->pcm);
+		context->stats.audio_prebuffer_bytes = context->pcm.prebuffer_bytes;
+		context->stats.pending_audio_chunks =
+			(context->active_audio_pending != 0U) ? 1U : 0U;
+	}
 	context->stats.audio_underruns = context->pcm_accumulated.underruns +
 		pcm_stats.underruns;
 	context->stats.audio_fifo_peak_bytes = pcm_stats.fifo_peak_bytes;
@@ -2020,10 +2034,30 @@ static void video_update_pcm_stats(Video_Context_t *context)
 		pcm_stats.fatfs_read_calls;
 	context->pcm_fatfs_read_bytes = context->pcm_accumulated.fatfs_read_bytes +
 		pcm_stats.fatfs_read_bytes;
+	if(pcm_stats.fatfs_last_operation != VIDEO_PCM_FATFS_OP_NONE)
+	{
+		context->stats.pcm_fatfs_last_operation = pcm_stats.fatfs_last_operation;
+		context->stats.pcm_fatfs_last_offset = pcm_stats.fatfs_last_offset;
+		context->stats.pcm_fatfs_last_request_bytes =
+			pcm_stats.fatfs_last_request_bytes;
+		context->stats.pcm_fatfs_last_read_bytes =
+			pcm_stats.fatfs_last_read_bytes;
+		context->stats.pcm_fatfs_last_result = pcm_stats.fatfs_last_result;
+	}
+	else
+	{
+		context->stats.pcm_fatfs_last_operation =
+			context->pcm_accumulated.fatfs_last_operation;
+		context->stats.pcm_fatfs_last_offset =
+			context->pcm_accumulated.fatfs_last_offset;
+		context->stats.pcm_fatfs_last_request_bytes =
+			context->pcm_accumulated.fatfs_last_request_bytes;
+		context->stats.pcm_fatfs_last_read_bytes =
+			context->pcm_accumulated.fatfs_last_read_bytes;
+		context->stats.pcm_fatfs_last_result =
+			context->pcm_accumulated.fatfs_last_result;
+	}
 	context->stats.pending_video_frames = 0U;
-	context->stats.pending_audio_chunks =
-		(context->active_audio_pending != 0U) ? 1U : 0U;
-	context->stats.audio_prebuffer_bytes = context->pcm.prebuffer_bytes;
 	context->stats.audio_deadline_frames = context->audio_deadline_frames;
 }
 
@@ -2274,6 +2308,12 @@ int video_stats_cmd(int argc, char *argv[])
 	                  (unsigned long)stats.avi_resync_from,
 	                  (unsigned long)stats.avi_resync_to,
 	                  (long)stats.pcm_last_result);
+	shellPrintEndLine(&shell, "  pcm fatfs op=%lu fr=%ld off=0x%08lX request=%lu read=%lu\r\n",
+	                  (unsigned long)stats.pcm_fatfs_last_operation,
+	                  (long)stats.pcm_fatfs_last_result,
+	                  (unsigned long)stats.pcm_fatfs_last_offset,
+	                  (unsigned long)stats.pcm_fatfs_last_request_bytes,
+	                  (unsigned long)stats.pcm_fatfs_last_read_bytes);
 	shellPrintEndLine(&shell, "  jpeg_arena_peak=%lu arena_fail=%lu task_stack_free=%lu\r\n",
 	                  (unsigned long)stats.jpeg_arena_peak_bytes,
 	                  (unsigned long)stats.jpeg_arena_allocation_failures,

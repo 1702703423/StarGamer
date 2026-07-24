@@ -108,8 +108,13 @@ typedef struct Video_Stats
 	u32 avi_error_fourcc;
 	u32 avi_error_chunk_size;
 	u32 pcm_tail_bytes_dropped;
+	u32 pcm_fatfs_last_operation;
+	u32 pcm_fatfs_last_offset;
+	u32 pcm_fatfs_last_request_bytes;
+	u32 pcm_fatfs_last_read_bytes;
 	s32 avi_error_result;
 	s32 pcm_last_result;
+	s32 pcm_fatfs_last_result;
 } Video_Stats_t;
 
 int Video_Init(void);

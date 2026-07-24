@@ -133,6 +133,22 @@ const Diskio_drvTypeDef  SD_Driver =
 
 /* USER CODE BEGIN beforeFunctionSection */
 /* can be used to modify / undefine following code or add new code */
+#undef SD_TIMEOUT
+#define SD_TIMEOUT 3000U
+#define SD_TRANSFER_RETRY_COUNT 1U
+
+#ifndef RW_ERROR_MSG
+#define RW_ERROR_MSG       (uint32_t) 3
+#endif
+#ifndef RW_ABORT_MSG
+#define RW_ABORT_MSG       (uint32_t) 4
+#endif
+
+extern SD_HandleTypeDef hsd;
+
+static void SD_FlushQueue(void);
+static void SD_RecoverDmaTransfer(void);
+
 #if FATFS_LOG_ENABLE
 static int SD_CheckStatusWithTimeout(u32 timeout);
 
@@ -219,6 +235,7 @@ static int SD_CheckStatusWithTimeout(uint32_t timeout)
     {
       return 0;
     }
+    osDelay(1U);
   }
 
   return -1;
@@ -323,6 +340,9 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
   uint8_t ret;
   DRESULT res = RES_ERROR;
   uint32_t timer;
+  BYTE *start_buff = buff;
+  DWORD start_sector = sector;
+  uint32_t retry_count = 0U;
 #if (osCMSIS < 0x20000U)
   osEvent event;
 #else
@@ -332,12 +352,22 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
 #if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
   uint32_t alignedAddr;
 #endif
+SD_READ_RETRY:
+  res = RES_ERROR;
+  buff = start_buff;
+  sector = start_sector;
   /*
   * ensure the SDCard is ready for a new operation
   */
 
   if (SD_CheckStatusWithTimeout(SD_TIMEOUT) < 0)
   {
+    SD_RecoverDmaTransfer();
+    if (retry_count < SD_TRANSFER_RETRY_COUNT)
+    {
+      retry_count++;
+      goto SD_READ_RETRY;
+    }
     return res;
   }
 
@@ -346,6 +376,7 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
   {
 #endif
     /* Fast path cause destination buffer is correctly aligned */
+    SD_FlushQueue();
     ret = BSP_SD_ReadBlocks_DMA((uint32_t*)buff, (uint32_t)(sector), count);
 
     if (ret == MSD_OK) {
@@ -400,9 +431,11 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
 
       for (i = 0; i < count; i++)
       {
+        SD_FlushQueue();
         ret = BSP_SD_ReadBlocks_DMA((uint32_t*)scratch, (uint32_t)sector++, 1);
         if (ret == MSD_OK )
         {
+          ret = MSD_ERROR;
           /* wait until the read is successful or a timeout occurs */
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
@@ -421,7 +454,6 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
               {
                 timer = osKernelGetTickCount();
                 /* block until SDIO IP is ready or a timeout occur */
-                ret = MSD_ERROR;
                 while(osKernelGetTickCount() - timer < SD_TIMEOUT)
 #endif
                 {
@@ -443,6 +475,10 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
 #else
           }
 #endif
+          if (ret != MSD_OK)
+          {
+            break;
+          }
 #if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
           /*
           *
@@ -463,6 +499,15 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
         res = RES_OK;
     }
 #endif
+  if (res != RES_OK)
+  {
+    SD_RecoverDmaTransfer();
+    if (retry_count < SD_TRANSFER_RETRY_COUNT)
+    {
+      retry_count++;
+      goto SD_READ_RETRY;
+    }
+  }
   return res;
 }
 
@@ -483,6 +528,9 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 {
   DRESULT res = RES_ERROR;
   uint32_t timer;
+  const BYTE *start_buff = buff;
+  DWORD start_sector = sector;
+  uint32_t retry_count = 0U;
 
 #if (osCMSIS < 0x20000U)
   osEvent event;
@@ -495,12 +543,22 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
   int32_t ret;
 #endif
 
+SD_WRITE_RETRY:
+  res = RES_ERROR;
+  buff = start_buff;
+  sector = start_sector;
   /*
   * ensure the SDCard is ready for a new operation
   */
 
   if (SD_CheckStatusWithTimeout(SD_TIMEOUT) < 0)
   {
+    SD_RecoverDmaTransfer();
+    if (retry_count < SD_TRANSFER_RETRY_COUNT)
+    {
+      retry_count++;
+      goto SD_WRITE_RETRY;
+    }
     return res;
   }
 
@@ -518,6 +576,7 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
   SCB_CleanDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
 #endif
 
+  SD_FlushQueue();
   if(BSP_SD_WriteBlocks_DMA((uint32_t*)buff,
                            (uint32_t) (sector),
                            count) == MSD_OK)
@@ -575,9 +634,11 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
         memcpy((void *)scratch, buff, BLOCKSIZE);
         buff += BLOCKSIZE;
 
+        SD_FlushQueue();
         ret = BSP_SD_WriteBlocks_DMA((uint32_t*)scratch, (uint32_t)sector++, 1);
         if (ret == MSD_OK )
         {
+          ret = MSD_ERROR;
           /* wait until the read is successful or a timeout occurs */
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
@@ -585,18 +646,17 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 
           if (event.status == osEventMessage)
           {
-            if (event.value.v == READ_CPLT_MSG)
+            if (event.value.v == WRITE_CPLT_MSG)
             {
               timer = osKernelSysTick();
               /* block until SDIO IP is ready or a timeout occur */
               while(osKernelSysTick() - timer <SD_TIMEOUT)
 #else
                 status = osMessageQueueGet(SDQueueID, (void *)&event, NULL, SD_TIMEOUT);
-              if ((status == osOK) && (event == READ_CPLT_MSG))
+              if ((status == osOK) && (event == WRITE_CPLT_MSG))
               {
                 timer = osKernelGetTickCount();
                 /* block until SDIO IP is ready or a timeout occur */
-                ret = MSD_ERROR;
                 while(osKernelGetTickCount() - timer < SD_TIMEOUT)
 #endif
                 {
@@ -618,6 +678,10 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 #else
           }
 #endif
+          if (ret != MSD_OK)
+          {
+            break;
+          }
         }
         else
         {
@@ -631,6 +695,15 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 
 #endif
 
+  if (res != RES_OK)
+  {
+    SD_RecoverDmaTransfer();
+    if (retry_count < SD_TRANSFER_RETRY_COUNT)
+    {
+      retry_count++;
+      goto SD_WRITE_RETRY;
+    }
+  }
   return res;
 }
  #endif /* _USE_WRITE == 1 */
@@ -736,9 +809,12 @@ void BSP_SD_ReadCpltCallback(void)
 }
 
 /* USER CODE BEGIN ErrorAbortCallbacks */
-/*
 void BSP_SD_AbortCallback(void)
 {
+   if (SDQueueID == NULL)
+   {
+      return;
+   }
 #if (osCMSIS < 0x20000U)
    osMessagePut(SDQueueID, RW_ABORT_MSG, 0);
 #else
@@ -746,9 +822,55 @@ void BSP_SD_AbortCallback(void)
    osMessageQueuePut(SDQueueID, (const void *)&msg, 0, 0);
 #endif
 }
-*/
+
+void BSP_SD_ErrorCallback(void)
+{
+   if (SDQueueID == NULL)
+   {
+      return;
+   }
+#if (osCMSIS < 0x20000U)
+   osMessagePut(SDQueueID, RW_ERROR_MSG, 0);
+#else
+   const uint16_t msg = RW_ERROR_MSG;
+   osMessageQueuePut(SDQueueID, (const void *)&msg, 0, 0);
+#endif
+}
 /* USER CODE END ErrorAbortCallbacks */
 
 /* USER CODE BEGIN lastSection */
 /* can be used to modify / undefine previous code or add new code */
+static void SD_FlushQueue(void)
+{
+  if (SDQueueID == NULL)
+  {
+    return;
+  }
+#if (osCMSIS < 0x20000U)
+  while(osMessageGet(SDQueueID, 0U).status == osEventMessage)
+  {
+  }
+#else
+  {
+    uint16_t event;
+    while(osMessageQueueGet(SDQueueID, (void *)&event, NULL, 0U) == osOK)
+    {
+    }
+  }
+#endif
+}
+
+static void SD_RecoverDmaTransfer(void)
+{
+  if (hsd.Instance == NULL)
+  {
+    return;
+  }
+
+  (void)HAL_SD_Abort(&hsd);
+  __HAL_SD_CLEAR_FLAG(&hsd, SDIO_STATIC_FLAGS);
+  hsd.Context = SD_CONTEXT_NONE;
+  hsd.State = HAL_SD_STATE_READY;
+  SD_FlushQueue();
+}
 /* USER CODE END lastSection */

@@ -187,10 +187,12 @@ void Video_PCM_Close(Video_PCM_t *pcm)
 int Video_PCM_ReadChunkPart(Video_PCM_t *pcm, FIL *file,
 	u32 *offset, u32 *remaining)
 {
+	FRESULT fatfs_result = FR_OK;
 	UINT bytes_read = 0U;
 	u32 request_size;
 	u32 free_bytes;
 	u32 buffered_bytes;
+	u32 fatfs_operation = VIDEO_PCM_FATFS_OP_NONE;
 
 	if(pcm == NULL || file == NULL || offset == NULL || remaining == NULL ||
 	   pcm->opened == 0U || pcm->block_align == 0U)
@@ -227,12 +229,35 @@ int Video_PCM_ReadChunkPart(Video_PCM_t *pcm, FIL *file,
 	}
 
 	pcm->fatfs_read_calls++;
-	if(((u32)f_tell(file) != *offset &&
-	    f_lseek(file, (FSIZE_t)*offset) != FR_OK) ||
-	   f_read(file, pcm->io_buffer, (UINT)request_size, &bytes_read) != FR_OK ||
-	   bytes_read != (UINT)request_size)
+	if((u32)f_tell(file) != *offset)
+	{
+		fatfs_result = f_lseek(file, (FSIZE_t)*offset);
+		if(fatfs_result != FR_OK)
+		{
+			fatfs_operation = VIDEO_PCM_FATFS_OP_SEEK;
+		}
+	}
+	if(fatfs_operation == VIDEO_PCM_FATFS_OP_NONE)
+	{
+		fatfs_result = f_read(file, pcm->io_buffer, (UINT)request_size,
+		                       &bytes_read);
+		if(fatfs_result != FR_OK)
+		{
+			fatfs_operation = VIDEO_PCM_FATFS_OP_READ;
+		}
+		else if(bytes_read != (UINT)request_size)
+		{
+			fatfs_operation = VIDEO_PCM_FATFS_OP_SHORT_READ;
+		}
+	}
+	if(fatfs_operation != VIDEO_PCM_FATFS_OP_NONE)
 	{
 		pcm->fatfs_read_errors++;
+		pcm->fatfs_last_operation = fatfs_operation;
+		pcm->fatfs_last_offset = *offset;
+		pcm->fatfs_last_request_bytes = request_size;
+		pcm->fatfs_last_read_bytes = (u32)bytes_read;
+		pcm->fatfs_last_result = (s32)fatfs_result;
 		return VIDEO_PCM_IO_ERROR;
 	}
 	pcm->fatfs_read_bytes += request_size;
@@ -433,6 +458,11 @@ void Video_PCM_GetStats(const Video_PCM_t *pcm, Video_PCMStats_t *stats)
 	stats->fatfs_read_errors = pcm->fatfs_read_errors;
 	stats->fatfs_read_calls = pcm->fatfs_read_calls;
 	stats->fatfs_read_bytes = pcm->fatfs_read_bytes;
+	stats->fatfs_last_operation = pcm->fatfs_last_operation;
+	stats->fatfs_last_offset = pcm->fatfs_last_offset;
+	stats->fatfs_last_request_bytes = pcm->fatfs_last_request_bytes;
+	stats->fatfs_last_read_bytes = pcm->fatfs_last_read_bytes;
+	stats->fatfs_last_result = pcm->fatfs_last_result;
 }
 
 static void video_pcm_dma_callback(u8 idle_index, u32 sequence)

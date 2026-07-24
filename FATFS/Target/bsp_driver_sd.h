@@ -78,6 +78,7 @@ uint8_t BSP_SD_IsDetected(void);
 /* These functions can be modified in case the current settings (e.g. DMA stream)
    need to be changed for specific application needs */
 void    BSP_SD_AbortCallback(void);
+void    BSP_SD_ErrorCallback(void);
 void    BSP_SD_WriteCpltCallback(void);
 void    BSP_SD_ReadCpltCallback(void);
 /* USER CODE END BSP_H_CODE */
