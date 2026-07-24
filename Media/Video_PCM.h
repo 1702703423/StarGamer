@@ -60,6 +60,14 @@ typedef struct Video_PCMStats
 	u32 fatfs_last_offset;
 	u32 fatfs_last_request_bytes;
 	u32 fatfs_last_read_bytes;
+	u32 fatfs_io_last_ticks;
+	u32 fatfs_io_max_ticks;
+	u32 fatfs_io_slow_count;
+	u32 fatfs_io_active_operation;
+	u32 fatfs_io_active_offset;
+	u32 fatfs_io_active_request_bytes;
+	u32 fatfs_io_active_start_tick;
+	u32 last_dma_tick;
 	s32 fatfs_last_result;
 } Video_PCMStats_t;
 
@@ -104,6 +112,7 @@ typedef struct Video_PCM
 	u32 fatfs_last_request_bytes;
 	u32 fatfs_last_read_bytes;
 	s32 fatfs_last_result;
+	AVI_IOTrace_t fatfs_io_trace;
 	volatile u8 opened;
 	volatile u8 started;
 	volatile u8 feed_stop;

@@ -39,6 +39,7 @@ typedef struct Video_MJPEG
 	u32 fatfs_read_errors;
 	u32 fatfs_read_calls;
 	u32 fatfs_read_bytes;
+	AVI_IOTrace_t fatfs_io_trace;
 	u32 lcd_wait_ticks;
 	u32 max_lcd_wait_ticks;
 	u8 jpeg_created;

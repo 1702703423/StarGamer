@@ -17,6 +17,11 @@ extern "C" {
 #define AVI_STREAM_INDEX_NONE   0xFFU
 #define AVI_AUDIO_FORMAT_PCM    0x0001U
 
+#define AVI_IO_OP_NONE          0U
+#define AVI_IO_OP_SEEK          1U
+#define AVI_IO_OP_READ          2U
+#define AVI_IO_SLOW_TICKS       20U
+
 #define AVI_FOURCC(a, b, c, d) \
 	((u32)(u8)(a) | ((u32)(u8)(b) << 8U) | \
 	 ((u32)(u8)(c) << 16U) | ((u32)(u8)(d) << 24U))
@@ -70,6 +75,19 @@ typedef struct AVI_Info
 	u8 audio_supported;
 } AVI_Info_t;
 
+typedef struct AVI_IOTrace
+{
+	volatile u32 active_operation;
+	volatile u32 active_offset;
+	volatile u32 active_request_bytes;
+	volatile u32 active_start_tick;
+	u32 last_ticks;
+	u32 max_ticks;
+	u32 slow_count;
+} AVI_IOTrace_t;
+
+typedef u32 (*AVI_GetTickCallback_t)(void);
+
 typedef struct AVI_Parser
 {
 	FIL *file;
@@ -90,6 +108,8 @@ typedef struct AVI_Parser
 	u32 last_resync_from;
 	u32 last_resync_to;
 	s32 last_error_result;
+	AVI_IOTrace_t io_trace;
+	AVI_GetTickCallback_t get_tick;
 	u8 resync_buffer[AVI_RESYNC_BUFFER_SIZE];
 	u8 list_depth;
 	AVI_Info_t info;
@@ -101,6 +121,11 @@ int AVI_Parser_SeekPermille(AVI_Parser_t *parser, u16 position);
 int AVI_Parser_Next(AVI_Parser_t *parser, AVI_Chunk_t *chunk);
 u16 AVI_Parser_GetPositionPermille(const AVI_Parser_t *parser);
 const AVI_Info_t *AVI_Parser_GetInfo(const AVI_Parser_t *parser);
+void AVI_Parser_SetTickCallback(AVI_Parser_t *parser,
+	AVI_GetTickCallback_t callback);
+void AVI_IOTrace_Begin(AVI_IOTrace_t *trace, u32 operation,
+	u32 offset, u32 request_bytes, u32 now);
+void AVI_IOTrace_End(AVI_IOTrace_t *trace, u32 now);
 
 #ifdef __cplusplus
 }

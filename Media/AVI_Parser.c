@@ -54,6 +54,7 @@ static int avi_find_video(AVI_Parser_t *parser, u32 scan_start,
 static int avi_resync_video(AVI_Parser_t *parser, u32 start, u32 parent_end);
 static void avi_record_error(AVI_Parser_t *parser, int result, u32 offset,
 	u32 fourcc, u32 chunk_size);
+static u32 avi_get_tick(const AVI_Parser_t *parser);
 
 int AVI_Parser_Open(AVI_Parser_t *parser, FIL *file)
 {
@@ -455,6 +456,53 @@ const AVI_Info_t *AVI_Parser_GetInfo(const AVI_Parser_t *parser)
 	return (parser != NULL) ? &parser->info : NULL;
 }
 
+void AVI_Parser_SetTickCallback(AVI_Parser_t *parser,
+	AVI_GetTickCallback_t callback)
+{
+	if(parser != NULL)
+	{
+		parser->get_tick = callback;
+	}
+}
+
+void AVI_IOTrace_Begin(AVI_IOTrace_t *trace, u32 operation,
+	u32 offset, u32 request_bytes, u32 now)
+{
+	if(trace == NULL)
+	{
+		return;
+	}
+	trace->active_offset = offset;
+	trace->active_request_bytes = request_bytes;
+	trace->active_start_tick = now;
+	__DMB();
+	trace->active_operation = operation;
+	__DMB();
+}
+
+void AVI_IOTrace_End(AVI_IOTrace_t *trace, u32 now)
+{
+	u32 elapsed;
+
+	if(trace == NULL)
+	{
+		return;
+	}
+	elapsed = now - trace->active_start_tick;
+	trace->last_ticks = elapsed;
+	if(elapsed > trace->max_ticks)
+	{
+		trace->max_ticks = elapsed;
+	}
+	if(elapsed >= AVI_IO_SLOW_TICKS)
+	{
+		trace->slow_count++;
+	}
+	__DMB();
+	trace->active_operation = AVI_IO_OP_NONE;
+	__DMB();
+}
+
 static u16 avi_read_le16(const u8 *data)
 {
 	return (u16)data[0] | ((u16)data[1] << 8U);
@@ -470,24 +518,44 @@ static u32 avi_read_le32(const u8 *data)
 
 static int avi_read_at(AVI_Parser_t *parser, u32 offset, void *buffer, u32 size)
 {
+	FRESULT fatfs_result;
 	UINT bytes_read = 0U;
+	u32 now;
 
 	if(parser == NULL || parser->file == NULL || buffer == NULL ||
 	   offset > parser->file_size || size > (parser->file_size - offset))
 	{
 		return AVI_PARSER_BAD_CHUNK;
 	}
-	if((u32)f_tell(parser->file) != offset &&
-	   f_lseek(parser->file, offset) != FR_OK)
+	if((u32)f_tell(parser->file) != offset)
 	{
-		return AVI_PARSER_IO_ERROR;
+		now = avi_get_tick(parser);
+		AVI_IOTrace_Begin(&parser->io_trace, AVI_IO_OP_SEEK,
+		                  offset, 0U, now);
+		fatfs_result = f_lseek(parser->file, offset);
+		AVI_IOTrace_End(&parser->io_trace, avi_get_tick(parser));
+		if(fatfs_result != FR_OK)
+		{
+			return AVI_PARSER_IO_ERROR;
+		}
 	}
-	if(f_read(parser->file, buffer, (UINT)size, &bytes_read) != FR_OK ||
+	now = avi_get_tick(parser);
+	AVI_IOTrace_Begin(&parser->io_trace, AVI_IO_OP_READ,
+	                  offset, size, now);
+	fatfs_result = f_read(parser->file, buffer, (UINT)size, &bytes_read);
+	AVI_IOTrace_End(&parser->io_trace, avi_get_tick(parser));
+	if(fatfs_result != FR_OK ||
 	   bytes_read != (UINT)size)
 	{
 		return AVI_PARSER_IO_ERROR;
 	}
 	return AVI_PARSER_OK;
+}
+
+static u32 avi_get_tick(const AVI_Parser_t *parser)
+{
+	return (parser != NULL && parser->get_tick != NULL) ?
+	       parser->get_tick() : 0U;
 }
 
 static int avi_get_chunk(AVI_Parser_t *parser, u32 offset, u32 parent_end,

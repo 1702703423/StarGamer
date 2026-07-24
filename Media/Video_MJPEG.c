@@ -1,6 +1,7 @@
 #include "Video_MJPEG.h"
 
 #include "LCD.h"
+#include "System_Status.h"
 #include "Video_Memory.h"
 #include "jerror.h"
 #include "jpeg_memory_provider.h"
@@ -13,6 +14,8 @@
 #define VIDEO_MJPEG_MAX_HEIGHT        240U
 #define VIDEO_MJPEG_RGB_COMPONENTS    3U
 #define VIDEO_MJPEG_ARENA_ALIGNMENT   8U
+#define VIDEO_MJPEG_JPEG_LOG(...) \
+	System_DebugLogPrint(SYSTEM_DEBUG_LOG_LIBJPEG, __VA_ARGS__)
 typedef struct Video_JpegError
 {
 	struct jpeg_error_mgr pub;
@@ -32,6 +35,7 @@ typedef struct Video_JpegSource
 } Video_JpegSource_t;
 
 static void video_mjpeg_error_exit(j_common_ptr cinfo);
+static void video_mjpeg_output_message(j_common_ptr cinfo);
 static void video_mjpeg_init_source(j_decompress_ptr cinfo);
 static boolean video_mjpeg_fill_input_buffer(j_decompress_ptr cinfo);
 static void video_mjpeg_skip_input_data(j_decompress_ptr cinfo, long byte_count);
@@ -89,6 +93,7 @@ int Video_MJPEG_Init(Video_MJPEG_t *decoder)
 	cinfo->err = jpeg_std_error(&jerr->pub);
 	cinfo->client_data = provider;
 	jerr->pub.error_exit = video_mjpeg_error_exit;
+	jerr->pub.output_message = video_mjpeg_output_message;
 	jerr->message_code = &jpeg_message_code;
 
 	if(setjmp(jerr->jump_buffer) != 0)
@@ -188,6 +193,7 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 	u16 x;
 	u16 y;
 	u32 lcd_wait_started;
+	FRESULT fatfs_result;
 	u8 direct_rgb565;
 	volatile int jpeg_message_code = 0;
 	volatile u8 stream_started = 0U;
@@ -203,11 +209,17 @@ Video_MJPEGResult_t Video_MJPEG_DecodeFrame(Video_MJPEG_t *decoder,
 	{
 		return VIDEO_MJPEG_FORMAT_ERROR;
 	}
-	if((u32)f_tell(file) != chunk->data_offset &&
-	   f_lseek(file, chunk->data_offset) != FR_OK)
+	if((u32)f_tell(file) != chunk->data_offset)
 	{
-		decoder->fatfs_read_errors++;
-		return VIDEO_MJPEG_IO_ERROR;
+		AVI_IOTrace_Begin(&decoder->fatfs_io_trace, AVI_IO_OP_SEEK,
+		                  chunk->data_offset, 0U, osKernelGetTickCount());
+		fatfs_result = f_lseek(file, chunk->data_offset);
+		AVI_IOTrace_End(&decoder->fatfs_io_trace, osKernelGetTickCount());
+		if(fatfs_result != FR_OK)
+		{
+			decoder->fatfs_read_errors++;
+			return VIDEO_MJPEG_IO_ERROR;
+		}
 	}
 
 	cinfo = (struct jpeg_decompress_struct *)decoder->jpeg_context;
@@ -356,6 +368,7 @@ static void video_mjpeg_error_exit(j_common_ptr cinfo)
 
 	if(error != NULL)
 	{
+		video_mjpeg_output_message(cinfo);
 		if(error->message_code != NULL)
 		{
 			*error->message_code = cinfo->err->msg_code;
@@ -365,6 +378,24 @@ static void video_mjpeg_error_exit(j_common_ptr cinfo)
 	while(1)
 	{
 	}
+}
+
+static void video_mjpeg_output_message(j_common_ptr cinfo)
+{
+	char message[JMSG_LENGTH_MAX];
+
+	if(cinfo == NULL || cinfo->err == NULL ||
+	   System_DebugLogEnabled(SYSTEM_DEBUG_LOG_LIBJPEG) == 0U)
+	{
+		return;
+	}
+	message[0] = '\0';
+	if(cinfo->err->format_message != NULL)
+	{
+		(*cinfo->err->format_message)(cinfo, message);
+	}
+	VIDEO_MJPEG_JPEG_LOG("[VIDEO] code=%d msg=%s\r\n",
+	                     cinfo->err->msg_code, message);
 }
 
 static void video_mjpeg_init_source(j_decompress_ptr cinfo)
@@ -377,6 +408,7 @@ static void video_mjpeg_init_source(j_decompress_ptr cinfo)
 static boolean video_mjpeg_fill_input_buffer(j_decompress_ptr cinfo)
 {
 	Video_JpegSource_t *source = (Video_JpegSource_t *)cinfo->src;
+	FRESULT fatfs_result;
 	UINT bytes_read = 0U;
 	u32 read_size;
 
@@ -398,7 +430,14 @@ static boolean video_mjpeg_fill_input_buffer(j_decompress_ptr cinfo)
 	read_size = (source->remaining < source->buffer_size) ?
 		source->remaining : source->buffer_size;
 	source->decoder->fatfs_read_calls++;
-	if(f_read(source->file, source->buffer, (UINT)read_size, &bytes_read) != FR_OK ||
+	AVI_IOTrace_Begin(&source->decoder->fatfs_io_trace, AVI_IO_OP_READ,
+	                  (u32)f_tell(source->file), read_size,
+	                  osKernelGetTickCount());
+	fatfs_result = f_read(source->file, source->buffer,
+	                      (UINT)read_size, &bytes_read);
+	AVI_IOTrace_End(&source->decoder->fatfs_io_trace,
+	                osKernelGetTickCount());
+	if(fatfs_result != FR_OK ||
 	   bytes_read == 0U || bytes_read > read_size)
 	{
 		source->decoder->fatfs_read_errors++;

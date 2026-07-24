@@ -15,6 +15,9 @@
 
 extern Shell shell;
 
+#define PLAYER_AUDIO_LOG(...) \
+  System_DebugLogPrint(SYSTEM_DEBUG_LOG_AUDIO, __VA_ARGS__)
+
 typedef StaticTask_t osStaticThreadDef_t;
 
 #define EVENT_HALF_DMA       (1U << 0)
@@ -275,7 +278,7 @@ static int player_fill_dma_buffer(u8 dma_index)
   player_update_max(&s_player_codec_read_max_ticks, elapsed_ticks);
   if(codec_result < PLAYER_CODEC_READ_OK)
   {
-    shellPrintEndLine(&shell, "TASK_ERROR:CODEC_READ:%d\r\n", codec_result);
+    PLAYER_AUDIO_LOG("TASK_ERROR:CODEC_READ:%d\r\n", codec_result);
     return -1;
   }
 
@@ -475,7 +478,7 @@ static void player_pause_wait(u8 *drain_events)
 
   if(audio_card_pause() != 0)
   {
-    shellPrintEndLine(&shell, "TASK_ERROR:AUDIO_PAUSE\r\n");
+    PLAYER_AUDIO_LOG("TASK_ERROR:AUDIO_PAUSE\r\n");
     player_exit(PLAYER_STATE_ERROR);
   }
 
@@ -487,7 +490,7 @@ static void player_pause_wait(u8 *drain_events)
                               osWaitForever);
     if((flags & osFlagsError) != 0U)
     {
-      shellPrintEndLine(&shell, "PauseWaitError\r\n");
+      PLAYER_AUDIO_LOG("PauseWaitError\r\n");
       player_exit(PLAYER_STATE_ERROR);
     }
     if((flags & EVENT_STOP_PLAYER) != 0U)
@@ -498,7 +501,7 @@ static void player_pause_wait(u8 *drain_events)
     {
       if(player_seek_and_prime(1U, drain_events) != 0)
       {
-        shellPrintEndLine(&shell, "TASK_ERROR:PLAYER_SEEK\r\n");
+        PLAYER_AUDIO_LOG("TASK_ERROR:PLAYER_SEEK\r\n");
         player_exit(PLAYER_STATE_ERROR);
       }
       restart_on_resume = 1U;
@@ -510,14 +513,14 @@ static void player_pause_wait(u8 *drain_events)
       {
         if(audio_card_start() != 0)
         {
-          shellPrintEndLine(&shell, "TASK_ERROR:AUDIO_RESTART\r\n");
+          PLAYER_AUDIO_LOG("TASK_ERROR:AUDIO_RESTART\r\n");
           player_exit(PLAYER_STATE_ERROR);
         }
         restart_on_resume = 0U;
       }
       else if(audio_card_resume() != 0)
       {
-        shellPrintEndLine(&shell, "TASK_ERROR:AUDIO_RESUME\r\n");
+        PLAYER_AUDIO_LOG("TASK_ERROR:AUDIO_RESUME\r\n");
         player_exit(PLAYER_STATE_ERROR);
       }
       s_player_state = PLAYER_STATE_PLAYING;
@@ -558,17 +561,17 @@ int PlayerStart(const TCHAR *audio_path)
   PlayerCleanup();
   if(audio_path == NULL)
   {
-    shellPrintEndLine(&shell, "PlayerStart:NULL_PATH\r\n");
+    PLAYER_AUDIO_LOG("PlayerStart:NULL_PATH\r\n");
     return OPERATE_FAILED;
   }
   if(s_player_task_handle != NULL)
   {
-    shellPrintEndLine(&shell, "PlayerStart:BUSY\r\n");
+    PLAYER_AUDIO_LOG("PlayerStart:BUSY\r\n");
     return OPERATE_FAILED;
   }
   if(player_copy_path(s_player_path, PLAYER_PATH_SIZE, audio_path) == 0U)
   {
-    shellPrintEndLine(&shell, "PlayerStart:PATH_TOO_LONG\r\n");
+    PLAYER_AUDIO_LOG("PlayerStart:PATH_TOO_LONG\r\n");
     return OPERATE_FAILED;
   }
 
@@ -589,7 +592,7 @@ int PlayerStart(const TCHAR *audio_path)
   file_result = f_open(&s_player_file, audio_path, FA_READ);
   if(file_result != FR_OK)
   {
-    shellPrintEndLine(&shell, "PlayerStart:f_open:%d\r\n", file_result);
+    PLAYER_AUDIO_LOG("PlayerStart:f_open:%d\r\n", file_result);
     s_player_state = PLAYER_STATE_ERROR;
     return OPERATE_FAILED;
   }
@@ -598,7 +601,7 @@ int PlayerStart(const TCHAR *audio_path)
   codec_result = player_open_codec(audio_path, &info);
   if(codec_result != PLAYER_CODEC_READ_OK)
   {
-    shellPrintEndLine(&shell, "PlayerStart:codec:%d\r\n", codec_result);
+    PLAYER_AUDIO_LOG("PlayerStart:codec:%d\r\n", codec_result);
     player_close_codec();
     player_close_file();
     s_player_state = PLAYER_STATE_ERROR;
@@ -612,7 +615,7 @@ int PlayerStart(const TCHAR *audio_path)
                              (int)info.channels,
                              (int)s_player_codec.package_size) != 0)
   {
-    shellPrintEndLine(&shell, "PlayerStart:AUDIO_UNSUPPORTED\r\n");
+    PLAYER_AUDIO_LOG("PlayerStart:AUDIO_UNSUPPORTED\r\n");
     player_close_codec();
     player_close_file();
     s_player_state = PLAYER_STATE_ERROR;
@@ -654,7 +657,7 @@ int PlayerStart(const TCHAR *audio_path)
     return OPERATE_FAILED;
   }
 
-  shellPrintEndLine(&shell, "Player codec=%d sample=%lu channels=%u bits=%u bitrate=%lu\r\n",
+  PLAYER_AUDIO_LOG("Player codec=%d sample=%lu channels=%u bits=%u bitrate=%lu\r\n",
                     (int)info.codec,
                     (unsigned long)info.sample_rate,
                     (unsigned int)info.channels,
@@ -859,7 +862,7 @@ static void WaveDataTransmitTask(void *argument)
 
   if(audio_card_start() != 0)
   {
-    shellPrintEndLine(&shell, "TASK_ERROR:AUDIO_START\r\n");
+    PLAYER_AUDIO_LOG("TASK_ERROR:AUDIO_START\r\n");
     player_exit(PLAYER_STATE_ERROR);
   }
   s_player_state = PLAYER_STATE_PLAYING;
@@ -869,7 +872,7 @@ static void WaveDataTransmitTask(void *argument)
     flags = osThreadFlagsWait(EVENT_PLAYER_WAIT, osFlagsWaitAny, 20000U);
     if((flags & osFlagsError) != 0U)
     {
-      shellPrintEndLine(&shell, "WaitEventError\r\n");
+      PLAYER_AUDIO_LOG("WaitEventError\r\n");
       player_exit(PLAYER_STATE_ERROR);
     }
     if((flags & EVENT_STOP_PLAYER) != 0U)
@@ -880,7 +883,7 @@ static void WaveDataTransmitTask(void *argument)
     {
       if(player_seek_and_prime(0U, &drain_events) != 0)
       {
-        shellPrintEndLine(&shell, "TASK_ERROR:PLAYER_SEEK\r\n");
+        PLAYER_AUDIO_LOG("TASK_ERROR:PLAYER_SEEK\r\n");
         player_exit(PLAYER_STATE_ERROR);
       }
       continue;
@@ -908,7 +911,7 @@ static void WaveDataTransmitTask(void *argument)
     {
       if(fill_result > 0)
       {
-        shellPrintEndLine(&shell, "PlayOver\r\n");
+        PLAYER_AUDIO_LOG("PlayOver\r\n");
       }
       player_exit((fill_result > 0) ? PLAYER_STATE_IDLE : PLAYER_STATE_ERROR);
     }

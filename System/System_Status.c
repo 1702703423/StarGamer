@@ -7,14 +7,33 @@
 #include "task.h"
 #include "shell.h"
 #include "shell_support.h"
+#include <stdio.h>
 #include <string.h>
 
 #define SYSTEM_SETTINGS_EEPROM_ADDR       0U
 #define SYSTEM_SETTINGS_MAGIC             0x53544753UL
-#define SYSTEM_SETTINGS_VERSION           1U
+#define SYSTEM_SETTINGS_VERSION           2U
+#define SYSTEM_SETTINGS_LEGACY_VERSION    1U
 #define SYSTEM_SETTINGS_DEFAULT_VOLUME    70UL
 #define SYSTEM_SETTINGS_DEFAULT_LIGHT     100U
 #define SYSTEM_SETTINGS_DEFAULT_FONT_LINE 21U
+#define SYSTEM_DEBUG_LOG_BUFFER_SIZE       192U
+
+typedef struct System_SettingsV1
+{
+	u32 volume;
+	u8 Debug;
+	u8 UsbMscEnabled;
+	u16 ScreenLight;
+	u8 FontInstalled;
+	u8 FontBpp;
+	u8 FontLineHeight;
+	u8 FontBaseLine;
+	u32 FontFlashAddress;
+	u32 FontSize;
+	u16 FontMinUnicode;
+	u16 FontMaxUnicode;
+} System_SettingsV1_t;
 
 typedef struct System_Settings_Record
 {
@@ -25,7 +44,22 @@ typedef struct System_Settings_Record
 	u32 checksum;
 }System_Settings_Record_t;
 
-typedef char System_Settings_RecordSizeCheck[(sizeof(System_Settings_Record_t) <= AT24C02_SIZE) ? 1 : -1];
+typedef struct System_Settings_RecordV1
+{
+	u32 magic;
+	u16 version;
+	u16 size;
+	System_SettingsV1_t settings;
+	u32 checksum;
+} System_Settings_RecordV1_t;
+
+typedef union System_Settings_Storage
+{
+	System_Settings_Record_t current;
+	System_Settings_RecordV1_t legacy;
+} System_Settings_Storage_t;
+
+typedef char System_Settings_RecordSizeCheck[(sizeof(System_Settings_Record_t) <= 128U) ? 1 : -1];
 
 static u32 System_Settings_Checksum(const u8* data, u16 length);
 static void System_Settings_Normalize(System_Settings_t* settings);
@@ -488,6 +522,15 @@ void System_Settings_SetDefaults(System_Settings_t* settings)
 	memset(settings, 0, sizeof(System_Settings_t));
 	settings->volume = SYSTEM_SETTINGS_DEFAULT_VOLUME;
 	settings->Debug = 1U;
+	settings->DebugShellEnabled = 1U;
+	settings->DebugAudioLogEnabled = 1U;
+	settings->DebugVideoLogEnabled = 0U;
+	settings->DebugLibjpegLogEnabled = 0U;
+	settings->DebugFatfsLogEnabled = 0U;
+	settings->MemoryDumpEnabled = 0U;
+	settings->MemoryDumpCcmEnabled = 1U;
+	settings->MemoryDumpMainSramEnabled = 1U;
+	settings->MemoryDumpSramexEnabled = 1U;
 	settings->UsbMscEnabled = 0U;
 	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
 	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
@@ -519,29 +562,58 @@ int System_Settings_Init(void)
 
 int System_Settings_Load(void)
 {
-	System_Settings_Record_t record;
+	System_Settings_Storage_t storage;
+	System_Settings_Record_t* record;
+	System_Settings_RecordV1_t* legacy;
 	u32 checksum;
 	AT24C02_StatusTypeDef status;
 
-	memset(&record, 0, sizeof(record));
-	status = AT24C02_Read(SYSTEM_SETTINGS_EEPROM_ADDR, (u8*)&record, (u16)sizeof(record));
+	memset(&storage, 0, sizeof(storage));
+	status = AT24C02_Read(SYSTEM_SETTINGS_EEPROM_ADDR, (u8*)&storage, (u16)sizeof(storage));
 	if (status != AT24C02_OK)
 	{
 		return OPERATE_FAILED;
 	}
 
-	checksum = System_Settings_Checksum((const u8*)&record, (u16)(sizeof(record) - sizeof(record.checksum)));
-	if (record.magic != SYSTEM_SETTINGS_MAGIC ||
-	    record.version != SYSTEM_SETTINGS_VERSION ||
-	    record.size != (u16)sizeof(System_Settings_t) ||
-	    record.checksum != checksum)
+	record = &storage.current;
+	checksum = System_Settings_Checksum((const u8*)record,
+		(u16)(sizeof(*record) - sizeof(record->checksum)));
+	if (record->magic == SYSTEM_SETTINGS_MAGIC &&
+	    record->version == SYSTEM_SETTINGS_VERSION &&
+	    record->size == (u16)sizeof(System_Settings_t) &&
+	    record->checksum == checksum)
+	{
+		System_Settings = record->settings;
+		System_Settings_Normalize(&System_Settings);
+		return SYSTEM_STATUS_OK;
+	}
+
+	legacy = &storage.legacy;
+	checksum = System_Settings_Checksum((const u8*)legacy,
+		(u16)(sizeof(*legacy) - sizeof(legacy->checksum)));
+	if (legacy->magic != SYSTEM_SETTINGS_MAGIC ||
+	    legacy->version != SYSTEM_SETTINGS_LEGACY_VERSION ||
+	    legacy->size != (u16)sizeof(System_SettingsV1_t) ||
+	    legacy->checksum != checksum)
 	{
 		return OPERATE_FAILED;
 	}
 
-	System_Settings = record.settings;
+	System_Settings_SetDefaults(&System_Settings);
+	System_Settings.volume = legacy->settings.volume;
+	System_Settings.Debug = legacy->settings.Debug;
+	System_Settings.UsbMscEnabled = legacy->settings.UsbMscEnabled;
+	System_Settings.ScreenLight = legacy->settings.ScreenLight;
+	System_Settings.FontInstalled = legacy->settings.FontInstalled;
+	System_Settings.FontBpp = legacy->settings.FontBpp;
+	System_Settings.FontLineHeight = legacy->settings.FontLineHeight;
+	System_Settings.FontBaseLine = legacy->settings.FontBaseLine;
+	System_Settings.FontFlashAddress = legacy->settings.FontFlashAddress;
+	System_Settings.FontSize = legacy->settings.FontSize;
+	System_Settings.FontMinUnicode = legacy->settings.FontMinUnicode;
+	System_Settings.FontMaxUnicode = legacy->settings.FontMaxUnicode;
 	System_Settings_Normalize(&System_Settings);
-	return SYSTEM_STATUS_OK;
+	return System_Settings_Save();
 }
 
 int System_Settings_Save(void)
@@ -594,6 +666,107 @@ int System_Settings_SetUsbMscEnabled(u8 enabled)
 	return code;
 }
 
+u8 System_DebugEnabled(void)
+{
+	return (System_Settings.Debug != 0U) ? 1U : 0U;
+}
+
+u8 System_DebugShellEnabled(void)
+{
+	return (System_Settings.Debug != 0U &&
+	        System_Settings.DebugShellEnabled != 0U) ? 1U : 0U;
+}
+
+u8 System_DebugLogEnabled(System_DebugLog_t source)
+{
+	u8 enabled = 0U;
+
+	if (System_DebugShellEnabled() == 0U || SCI.Debug == 0U)
+	{
+		return 0U;
+	}
+
+	switch (source)
+	{
+		case SYSTEM_DEBUG_LOG_AUDIO:
+			enabled = System_Settings.DebugAudioLogEnabled;
+			break;
+		case SYSTEM_DEBUG_LOG_VIDEO:
+			enabled = System_Settings.DebugVideoLogEnabled;
+			break;
+		case SYSTEM_DEBUG_LOG_LIBJPEG:
+			enabled = System_Settings.DebugLibjpegLogEnabled;
+			break;
+		case SYSTEM_DEBUG_LOG_FATFS:
+			enabled = System_Settings.DebugFatfsLogEnabled;
+			break;
+		default:
+			break;
+	}
+
+	return (enabled != 0U) ? 1U : 0U;
+}
+
+void System_DebugLogPrint(System_DebugLog_t source, const char* fmt, ...)
+{
+	static const char* const prefix[] = {"AUDIO", "VIDEO", "LIBJPEG", "FATFS"};
+	char buffer[SYSTEM_DEBUG_LOG_BUFFER_SIZE];
+	va_list args;
+	int length;
+
+	if (fmt == NULL || source > SYSTEM_DEBUG_LOG_FATFS ||
+	    System_DebugLogEnabled(source) == 0U ||
+	    shell.write == NULL || shell.parser.buffer == NULL)
+	{
+		return;
+	}
+#if SHELL_USING_LOCK == 1
+	if (shell.lock == NULL || shell.unlock == NULL)
+	{
+		return;
+	}
+#endif
+
+	va_start(args, fmt);
+	length = vsnprintf(buffer, sizeof(buffer), fmt, args);
+	va_end(args);
+	if (length <= 0)
+	{
+		return;
+	}
+
+	shellPrintEndLine(&shell, "[%s] %s", prefix[(u32)source], buffer);
+}
+
+u8 System_MemoryDumpEnabled(void)
+{
+	return (System_Settings.Debug != 0U &&
+	        System_Settings.MemoryDumpEnabled != 0U &&
+	        (System_Settings.MemoryDumpCcmEnabled != 0U ||
+	         System_Settings.MemoryDumpMainSramEnabled != 0U ||
+	         System_Settings.MemoryDumpSramexEnabled != 0U)) ? 1U : 0U;
+}
+
+u8 System_MemoryDumpRegionEnabled(System_MemoryDumpRegion_t region)
+{
+	if (System_MemoryDumpEnabled() == 0U)
+	{
+		return 0U;
+	}
+
+	switch (region)
+	{
+		case SYSTEM_MEMORY_DUMP_REGION_CCM:
+			return (System_Settings.MemoryDumpCcmEnabled != 0U) ? 1U : 0U;
+		case SYSTEM_MEMORY_DUMP_REGION_MAIN_SRAM:
+			return (System_Settings.MemoryDumpMainSramEnabled != 0U) ? 1U : 0U;
+		case SYSTEM_MEMORY_DUMP_REGION_SRAMEX:
+			return (System_Settings.MemoryDumpSramexEnabled != 0U) ? 1U : 0U;
+		default:
+			return 0U;
+	}
+}
+
 static u32 System_Settings_Checksum(const u8* data, u16 length)
 {
 	u16 i;
@@ -623,6 +796,15 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 	}
 
 	settings->Debug = (settings->Debug != 0U) ? 1U : 0U;
+	settings->DebugShellEnabled = (settings->DebugShellEnabled != 0U) ? 1U : 0U;
+	settings->DebugAudioLogEnabled = (settings->DebugAudioLogEnabled != 0U) ? 1U : 0U;
+	settings->DebugVideoLogEnabled = (settings->DebugVideoLogEnabled != 0U) ? 1U : 0U;
+	settings->DebugLibjpegLogEnabled = (settings->DebugLibjpegLogEnabled != 0U) ? 1U : 0U;
+	settings->DebugFatfsLogEnabled = (settings->DebugFatfsLogEnabled != 0U) ? 1U : 0U;
+	settings->MemoryDumpEnabled = (settings->MemoryDumpEnabled != 0U) ? 1U : 0U;
+	settings->MemoryDumpCcmEnabled = (settings->MemoryDumpCcmEnabled != 0U) ? 1U : 0U;
+	settings->MemoryDumpMainSramEnabled = (settings->MemoryDumpMainSramEnabled != 0U) ? 1U : 0U;
+	settings->MemoryDumpSramexEnabled = (settings->MemoryDumpSramexEnabled != 0U) ? 1U : 0U;
 	settings->UsbMscEnabled = (settings->UsbMscEnabled != 0U) ? 1U : 0U;
 	valid_font = (settings->FontInstalled != 0U &&
 	              settings->FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&

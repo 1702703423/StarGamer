@@ -66,7 +66,31 @@ typedef struct System_Settings
 	u32 FontSize;
 	u16 FontMinUnicode;
 	u16 FontMaxUnicode;
+	u8 DebugShellEnabled;
+	u8 DebugAudioLogEnabled;
+	u8 DebugVideoLogEnabled;
+	u8 DebugLibjpegLogEnabled;
+	u8 DebugFatfsLogEnabled;
+	u8 MemoryDumpEnabled;
+	u8 MemoryDumpCcmEnabled;
+	u8 MemoryDumpMainSramEnabled;
+	u8 MemoryDumpSramexEnabled;
 }System_Settings_t;
+
+typedef enum System_DebugLog
+{
+	SYSTEM_DEBUG_LOG_AUDIO = 0,
+	SYSTEM_DEBUG_LOG_VIDEO,
+	SYSTEM_DEBUG_LOG_LIBJPEG,
+	SYSTEM_DEBUG_LOG_FATFS
+} System_DebugLog_t;
+
+typedef enum System_MemoryDumpRegion
+{
+	SYSTEM_MEMORY_DUMP_REGION_CCM = 0,
+	SYSTEM_MEMORY_DUMP_REGION_MAIN_SRAM,
+	SYSTEM_MEMORY_DUMP_REGION_SRAMEX
+} System_MemoryDumpRegion_t;
 
 typedef struct Frame_Buffer_Status
 {
@@ -109,5 +133,11 @@ int System_Settings_Save(void);
 u8 System_Settings_FontInstalled(void);
 u8 System_Settings_UsbMscEnabled(void);
 int System_Settings_SetUsbMscEnabled(u8 enabled);
+u8 System_DebugEnabled(void);
+u8 System_DebugShellEnabled(void);
+u8 System_DebugLogEnabled(System_DebugLog_t source);
+void System_DebugLogPrint(System_DebugLog_t source, const char* fmt, ...);
+u8 System_MemoryDumpEnabled(void);
+u8 System_MemoryDumpRegionEnabled(System_MemoryDumpRegion_t region);
 
 #endif

@@ -1516,6 +1516,16 @@
               <FilePath>..\System\firmware_start.c</FilePath>
             </File>
             <File>
+              <FileName>Memory_Dump.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\System\Memory_Dump.c</FilePath>
+            </File>
+            <File>
+              <FileName>Memory_Dump.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\System\Memory_Dump.h</FilePath>
+            </File>
+            <File>
               <FileName>kfifo.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\System\kfifo.c</FilePath>

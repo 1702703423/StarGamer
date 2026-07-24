@@ -45,6 +45,33 @@ typedef enum Video_Result
 	VIDEO_RESULT_THREAD_FAILED
 } Video_Result_t;
 
+typedef enum Video_Phase
+{
+	VIDEO_PHASE_IDLE = 0,
+	VIDEO_PHASE_LAUNCH,
+	VIDEO_PHASE_OPEN,
+	VIDEO_PHASE_PLAY_LOOP,
+	VIDEO_PHASE_DEMUX_NEXT,
+	VIDEO_PHASE_AUDIO_READ,
+	VIDEO_PHASE_AUDIO_WAIT_FIFO,
+	VIDEO_PHASE_VIDEO_WAIT_CLOCK,
+	VIDEO_PHASE_JPEG_DECODE,
+	VIDEO_PHASE_SKIP_CHUNK,
+	VIDEO_PHASE_SEEK,
+	VIDEO_PHASE_PAUSED,
+	VIDEO_PHASE_EOF_DRAIN,
+	VIDEO_PHASE_FINISH
+} Video_Phase_t;
+
+typedef enum Video_IOOwner
+{
+	VIDEO_IO_OWNER_NONE = 0,
+	VIDEO_IO_OWNER_PARSER,
+	VIDEO_IO_OWNER_PCM,
+	VIDEO_IO_OWNER_JPEG,
+	VIDEO_IO_OWNER_VIDEO
+} Video_IOOwner_t;
+
 typedef struct Video_Stats
 {
 	u32 video_chunks;
@@ -112,9 +139,62 @@ typedef struct Video_Stats
 	u32 pcm_fatfs_last_offset;
 	u32 pcm_fatfs_last_request_bytes;
 	u32 pcm_fatfs_last_read_bytes;
+	u32 phase;
+	u32 phase_age_ticks;
+	u32 loop_count;
+	u32 parser_cursor;
+	u32 file_offset;
+	u32 current_chunk_type;
+	u32 current_chunk_fourcc;
+	u32 current_chunk_offset;
+	u32 current_chunk_size;
+	u32 active_audio_offset;
+	u32 active_audio_remaining;
+	u32 active_audio_end;
+	u32 active_audio_age_ticks;
+	u32 audio_fifo_free_bytes;
+	u32 current_audio_chunk_size;
+	u32 max_audio_chunk_size;
+	u32 audio_run_chunks;
+	u32 audio_run_bytes;
+	u32 max_audio_run_chunks;
+	u32 max_audio_run_bytes;
+	u32 audio_wait_count;
+	u32 epoch_played_frames;
+	u32 epoch_media_frames;
+	u32 epoch_replayed_frames;
+	u32 epoch_silence_frames;
+	u32 epoch_last_dma_age_ticks;
+	u32 late_drop_count;
+	u32 oversized_drop_count;
+	u32 prebuffer_drop_count;
+	u32 consecutive_late_drops;
+	u32 max_consecutive_late_drops;
+	u32 parser_progress_age_ticks;
+	u32 video_progress_age_ticks;
+	u32 audio_progress_age_ticks;
+	u32 display_progress_age_ticks;
+	u32 io_owner;
+	u32 io_active_operation;
+	u32 io_active_age_ticks;
+	u32 io_active_offset;
+	u32 io_active_request_bytes;
+	u32 parser_io_last_ticks;
+	u32 parser_io_max_ticks;
+	u32 parser_io_slow_count;
+	u32 pcm_io_last_ticks;
+	u32 pcm_io_max_ticks;
+	u32 pcm_io_slow_count;
+	u32 jpeg_io_last_ticks;
+	u32 jpeg_io_max_ticks;
+	u32 jpeg_io_slow_count;
+	u32 video_io_last_ticks;
+	u32 video_io_max_ticks;
+	u32 video_io_slow_count;
 	s32 avi_error_result;
 	s32 pcm_last_result;
 	s32 pcm_fatfs_last_result;
+	s32 audio_clock_delta_frames;
 } Video_Stats_t;
 
 int Video_Init(void);

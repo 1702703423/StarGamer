@@ -10,6 +10,7 @@
 #include "string.h"
 #include "Player.h"
 #include "System_Status.h"
+#include "Memory_Dump.h"
 #include "Malloc.h"
 #include "LCD.h"
 #include "dl_lib.h"
@@ -86,6 +87,8 @@ static int key_init()
 void System_init()
 {
 	int code;
+	int settings_code;
+	osThreadId_t shell_thread;
 	
 	//内存池初始化
 	if (mallco_dev.memrdy[SRAMCCM] == 0U)
@@ -93,29 +96,34 @@ void System_init()
 		sys_mem_init(SRAMCCM);
 	}
 	sys_mem_init(SRAMEX);
-	
-	//开发阶段，调试模式常开
-	SCI.Debug = 1;
 
-	shell.read = shell_read;
-	shell.write = shell_write;
-
-	if (SCI.Debug) {
-		shell_lock_create();
-		shellInit(&shell, shell_buffer, SHELL_BUFFER_SIZE);
-		shell_uart_rx_start();
+	settings_code = System_Settings_Init();
+	SCI.Debug = 0U;
+	if (System_DebugShellEnabled() != 0U)
+	{
+		shell.read = shell_read;
+		shell.write = shell_write;
+		if (shell_lock_create() == 0)
+		{
+			shellInit(&shell, shell_buffer, SHELL_BUFFER_SIZE);
+		}
 		if (shellTask_attributes.stack_mem == NULL)
 		{
 			shellTask_attributes.stack_mem = sys_thread_stack_alloc((u32)shellTask_attributes.stack_size);
 		}
-		if (shellTask_attributes.stack_mem == NULL)
+		if (shellTask_attributes.stack_mem != NULL && shell.parser.buffer != NULL)
 		{
-			SCI.Debug = 0U;
-		}
-		else
-		{
-			osThreadNew(shellTask, &shell, &shellTask_attributes);
-			shell_fs_init();
+			shell_thread = osThreadNew(shellTask, &shell, &shellTask_attributes);
+			if (shell_thread != NULL)
+			{
+				SCI.Debug = 1U;
+				shell_uart_rx_start();
+				shell_fs_init();
+				shellPrintEndLine(&shell,
+					(settings_code == SYSTEM_STATUS_OK) ?
+					"SystemSettingsInitSuccess\r\n" :
+					"SystemSettingsInitFailed\r\n");
+			}
 		}
 	}
 
@@ -138,6 +146,8 @@ void System_init()
 #define HARDFAULT_COLOR_RED_DARK     0x7800U
 #define HARDFAULT_COLOR_YELLOW       0xFFE0U
 #define HARDFAULT_COLOR_CYAN         0x07FFU
+#define HARDFAULT_COLOR_GREEN        0x07E0U
+#define HARDFAULT_COLOR_GRAY         0x39E7U
 
 #define HARDFAULT_GPIO_MODE_MASK(pin)     (3UL << ((pin) * 2U))
 #define HARDFAULT_GPIO_MODE_AF(pin)       (2UL << ((pin) * 2U))
@@ -154,29 +164,7 @@ void System_init()
 #define HARDFAULT_LCD_RST_LOW()           (GPIOB->BSRR = ((u32)GPIO_PIN_12 << 16U))
 #define HARDFAULT_LCD_BL_HIGH()           (GPIOB->BSRR = GPIO_PIN_15)
 
-typedef struct {
-	u32 stack_pointer;
-	u32 frame_pointer;
-	u32 exc_return;
-	u32 msp;
-	u32 psp;
-	u32 cfsr;
-	u32 hfsr;
-	u32 dfsr;
-	u32 afsr;
-	u32 mmfar;
-	u32 bfar;
-	u32 r0;
-	u32 r1;
-	u32 r2;
-	u32 r3;
-	u32 r12;
-	u32 stacked_lr;
-	u32 pc;
-	u32 xpsr;
-	u8 frame_valid;
-	u8 fp_extended_frame;
-} HardFault_Record_t;
+typedef Memory_Dump_FaultRecord_t HardFault_Record_t;
 
 typedef struct {
 	char ch;
@@ -722,6 +710,37 @@ static void hardfault_lcd_show(volatile const HardFault_Record_t *record)
 	hardfault_lcd_print_fault_flags(&y, record);
 }
 
+static void hardfault_lcd_dump_progress(u8 percent, const char *phase)
+{
+	u16 width;
+	char percent_text[5];
+
+	if(percent > 100U)
+	{
+		percent = 100U;
+	}
+	percent_text[0] = (char)('0' + ((percent / 100U) % 10U));
+	percent_text[1] = (char)('0' + ((percent / 10U) % 10U));
+	percent_text[2] = (char)('0' + (percent % 10U));
+	percent_text[3] = '%';
+	percent_text[4] = '\0';
+
+	hardfault_lcd_fill_rect(0U, 208U, HARDFAULT_LCD_WIDTH, 32U,
+	                        HARDFAULT_COLOR_BLACK);
+	hardfault_lcd_puts(4U, 210U,
+	                   (phase != NULL) ? phase : "MEMORY DUMP",
+	                   HARDFAULT_COLOR_WHITE, HARDFAULT_COLOR_BLACK, 1U);
+	hardfault_lcd_puts(286U, 210U, percent_text,
+	                   HARDFAULT_COLOR_CYAN, HARDFAULT_COLOR_BLACK, 1U);
+	hardfault_lcd_fill_rect(4U, 224U, 312U, 10U, HARDFAULT_COLOR_GRAY);
+	width = (u16)((308UL * percent) / 100U);
+	if(width != 0U)
+	{
+		hardfault_lcd_fill_rect(6U, 226U, width, 6U,
+		                        HARDFAULT_COLOR_GREEN);
+	}
+}
+
 void HardFault_Handler_C(u32 *stack_pointer, u32 lr_value, u32 msp_value, u32 psp_value)
 {
 	u32 frame_addr;
@@ -767,6 +786,11 @@ void HardFault_Handler_C(u32 *stack_pointer, u32 lr_value, u32 msp_value, u32 ps
 	}
 
 	hardfault_lcd_show(&g_hardfault_record);
+	if(System_MemoryDumpEnabled() != 0U)
+	{
+		(void)Memory_Dump_Capture((const Memory_Dump_FaultRecord_t *)&g_hardfault_record,
+		                          hardfault_lcd_dump_progress);
+	}
 
 	while(1)
 	{
@@ -803,21 +827,16 @@ static void bsp_init()
 	if(W25Q64_Init() == W25Q64_OK)
 	{
 		W25Q64_ReadID(&mid,&did);
-		shellPrintEndLine(&shell,"W25Q64InitSuccess,MID,DID:%X,%X\r\n",mid,did);
+		if(SCI.Debug != 0U)
+		{
+			shellPrintEndLine(&shell,"W25Q64InitSuccess,MID,DID:%X,%X\r\n",mid,did);
+		}
 	}else
 	{
-		shellPrintEndLine(&shell,"W25Q64Failed\r\n");
-	}
-	if(System_Settings_Init() == SYSTEM_STATUS_OK)
-	{
-		shellPrintEndLine(&shell,"SystemSettingsInitSuccess\r\n");
-	}else
-	{
-		shellPrintEndLine(&shell,"SystemSettingsInitFailed\r\n");
-	}
-	if (USB_DEVICE_MSC_ApplySetting() != SYSTEM_STATUS_OK)
-	{
-		shellPrintEndLine(&shell,"USBMSCApplyFailed\r\n");
+		if(SCI.Debug != 0U)
+		{
+			shellPrintEndLine(&shell,"W25Q64Failed\r\n");
+		}
 	}
 }
 
@@ -833,6 +852,7 @@ int mount_fs()
 		SSI.fs_mount_status = 1;
 		FATFS_LOG("mount ok path=%s", "0:");
 	} else {
+		SSI.fs_mount_status = 0U;
 		FATFS_LOG("mount fail path=%s fr=%u", "0:", (unsigned int)fr);
 	}
 
@@ -843,7 +863,10 @@ int mount_fs()
 
 static void LVGL_shellLog(const char* log)
 {
-	shellPrintEndLine(&shell,log);
+	if(SCI.Debug != 0U)
+	{
+		shellPrintEndLine(&shell,log);
+	}
 }
 
 static void lvgl_init()
@@ -872,7 +895,10 @@ static void lvgl_start_task()
 	}
 	if (lvglTask_attributes.stack_mem == NULL)
 	{
-		shellPrintEndLine(&shell, "LVGLTaskStackAllocFailed\r\n");
+		if(SCI.Debug != 0U)
+		{
+			shellPrintEndLine(&shell, "LVGLTaskStackAllocFailed\r\n");
+		}
 		return;
 	}
 	lvglThreadId = osThreadNew(lvgl_timer_task, NULL, &lvglTask_attributes);
@@ -886,9 +912,25 @@ static int GUI_Init(void)
 void init(void)
 {
 	int res;
-	res = mount_fs();
+	Memory_Dump_Result_t dump_result;
+
 	System_init();
+	res = mount_fs();
 	bsp_init();
+	if(res != 0)
+	{
+		dump_result = Memory_Dump_ExportPending();
+		if(dump_result != MEMORY_DUMP_RESULT_NONE &&
+		   dump_result != MEMORY_DUMP_RESULT_ALREADY_EXPORTED)
+		{
+			System_DebugLogPrint(SYSTEM_DEBUG_LOG_FATFS, "%s: %s\r\n",
+				MEMORY_DUMP_EXPORT_PATH, Memory_Dump_ResultText(dump_result));
+		}
+	}
+	if (USB_DEVICE_MSC_ApplySetting() != SYSTEM_STATUS_OK && SCI.Debug != 0U)
+	{
+		shellPrintEndLine(&shell,"USBMSCApplyFailed\r\n");
+	}
 //	nes_load((u8*)"0://SICHUAN.NES");
 	lvgl_start_task();
 //	LCD_Fill(1, 1, 320, 240, BLACK, p);

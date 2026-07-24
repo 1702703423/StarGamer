@@ -97,6 +97,18 @@ void shellPrintEndLine(Shell *shell, const char *fmt, ...)
 	va_list args;
 	int len;
 
+	if (shell == NULL || fmt == NULL || shell->write == NULL ||
+	    shell->parser.buffer == NULL)
+	{
+		return;
+	}
+#if SHELL_USING_LOCK == 1
+	if (shell->lock == NULL || shell->unlock == NULL)
+	{
+		return;
+	}
+#endif
+
 	va_start(args, fmt);
 	len = vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);

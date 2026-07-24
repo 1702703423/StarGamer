@@ -27,9 +27,7 @@ FIL SDFile;       /* File object for SD */
 #if FATFS_LOG_ENABLE
 #include <stdarg.h>
 #include <stdio.h>
-#include "shell_support.h"
-
-extern Shell shell;
+#include "System_Status.h"
 #endif
 
 /* USER CODE END Variables */
@@ -68,7 +66,7 @@ void FATFS_LogPrint(const char *fmt, ...)
   va_list args;
   int len;
 
-  if (fmt == NULL)
+  if (fmt == NULL || System_DebugLogEnabled(SYSTEM_DEBUG_LOG_FATFS) == 0U)
   {
     return;
   }
@@ -86,18 +84,7 @@ void FATFS_LogPrint(const char *fmt, ...)
     len = (int)sizeof(msg) - 1;
   }
 
-  if (shell.write == NULL || shell.parser.buffer == NULL)
-  {
-    return;
-  }
-#if SHELL_USING_LOCK == 1
-  if (shell.lock == NULL || shell.unlock == NULL)
-  {
-    return;
-  }
-#endif
-
-  shellPrintEndLine(&shell, "[FATFS] %s\r\n", msg);
+  System_DebugLogPrint(SYSTEM_DEBUG_LOG_FATFS, "%s\r\n", msg);
 }
 #endif
 

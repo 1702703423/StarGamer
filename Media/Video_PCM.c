@@ -231,7 +231,10 @@ int Video_PCM_ReadChunkPart(Video_PCM_t *pcm, FIL *file,
 	pcm->fatfs_read_calls++;
 	if((u32)f_tell(file) != *offset)
 	{
+		AVI_IOTrace_Begin(&pcm->fatfs_io_trace, AVI_IO_OP_SEEK,
+		                  *offset, 0U, osKernelGetTickCount());
 		fatfs_result = f_lseek(file, (FSIZE_t)*offset);
+		AVI_IOTrace_End(&pcm->fatfs_io_trace, osKernelGetTickCount());
 		if(fatfs_result != FR_OK)
 		{
 			fatfs_operation = VIDEO_PCM_FATFS_OP_SEEK;
@@ -239,8 +242,11 @@ int Video_PCM_ReadChunkPart(Video_PCM_t *pcm, FIL *file,
 	}
 	if(fatfs_operation == VIDEO_PCM_FATFS_OP_NONE)
 	{
+		AVI_IOTrace_Begin(&pcm->fatfs_io_trace, AVI_IO_OP_READ,
+		                  *offset, request_size, osKernelGetTickCount());
 		fatfs_result = f_read(file, pcm->io_buffer, (UINT)request_size,
 		                       &bytes_read);
+		AVI_IOTrace_End(&pcm->fatfs_io_trace, osKernelGetTickCount());
 		if(fatfs_result != FR_OK)
 		{
 			fatfs_operation = VIDEO_PCM_FATFS_OP_READ;
@@ -463,6 +469,20 @@ void Video_PCM_GetStats(const Video_PCM_t *pcm, Video_PCMStats_t *stats)
 	stats->fatfs_last_request_bytes = pcm->fatfs_last_request_bytes;
 	stats->fatfs_last_read_bytes = pcm->fatfs_last_read_bytes;
 	stats->fatfs_last_result = pcm->fatfs_last_result;
+	__DMB();
+	stats->fatfs_io_active_operation =
+		pcm->fatfs_io_trace.active_operation;
+	__DMB();
+	stats->fatfs_io_active_offset = pcm->fatfs_io_trace.active_offset;
+	stats->fatfs_io_active_request_bytes =
+		pcm->fatfs_io_trace.active_request_bytes;
+	stats->fatfs_io_active_start_tick =
+		pcm->fatfs_io_trace.active_start_tick;
+	stats->fatfs_io_last_ticks = pcm->fatfs_io_trace.last_ticks;
+	stats->fatfs_io_max_ticks = pcm->fatfs_io_trace.max_ticks;
+	stats->fatfs_io_slow_count = pcm->fatfs_io_trace.slow_count;
+	stats->last_dma_tick = pcm->last_dma_tick;
+	__DMB();
 }
 
 static void video_pcm_dma_callback(u8 idle_index, u32 sequence)

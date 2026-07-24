@@ -28,14 +28,35 @@
 #define GUI_SETTINGS_ABOUT_W         300
 #define GUI_SETTINGS_ABOUT_H         182
 #define GUI_SETTINGS_TEXT_LEN        256U
+#define GUI_SETTINGS_DEBUG_ITEM_COUNT 10U
+#define GUI_SETTINGS_DEBUG_LIST_X    6
+#define GUI_SETTINGS_DEBUG_LIST_Y    34
+#define GUI_SETTINGS_DEBUG_LIST_W    288
+#define GUI_SETTINGS_DEBUG_LIST_H    142
+#define GUI_SETTINGS_DEBUG_SWITCH_X  226
 
 typedef enum
 {
 	GUI_SETTINGS_ACTION_FONT_INSTALL = 0,
 	GUI_SETTINGS_ACTION_FONT_UNINSTALL,
 	GUI_SETTINGS_ACTION_UPDATE,
+	GUI_SETTINGS_ACTION_DEBUG,
 	GUI_SETTINGS_ACTION_ABOUT
 } GUI_SettingsAction_t;
+
+typedef enum
+{
+	GUI_SETTINGS_DEBUG_MASTER = 0,
+	GUI_SETTINGS_DEBUG_SHELL,
+	GUI_SETTINGS_DEBUG_AUDIO,
+	GUI_SETTINGS_DEBUG_VIDEO,
+	GUI_SETTINGS_DEBUG_LIBJPEG,
+	GUI_SETTINGS_DEBUG_FATFS,
+	GUI_SETTINGS_DEBUG_MEMORY_DUMP,
+	GUI_SETTINGS_DEBUG_DUMP_CCM,
+	GUI_SETTINGS_DEBUG_DUMP_MAIN,
+	GUI_SETTINGS_DEBUG_DUMP_SRAMEX
+} GUI_SettingsDebugItemId_t;
 
 typedef struct
 {
@@ -43,6 +64,12 @@ typedef struct
 	const char *symbol;
 	const char *text;
 } GUI_SettingsItem_t;
+
+typedef struct
+{
+	GUI_SettingsDebugItemId_t id;
+	const char *text;
+} GUI_SettingsDebugItem_t;
 
 typedef struct
 {
@@ -54,14 +81,21 @@ typedef struct
 	lv_obj_t *about_panel;
 	lv_obj_t *about_label;
 	lv_obj_t *about_close_btn;
+	lv_obj_t *debug_panel;
+	lv_obj_t *debug_list;
+	lv_obj_t *debug_close_btn;
+	lv_obj_t *debug_btns[GUI_SETTINGS_DEBUG_ITEM_COUNT];
+	lv_obj_t *debug_switches[GUI_SETTINGS_DEBUG_ITEM_COUNT];
 	lv_obj_t *font_install_btn;
 	lv_obj_t *font_uninstall_btn;
 	lv_obj_t *usb_msc_btn;
 	lv_obj_t *usb_msc_switch;
 	lv_obj_t *about_btn;
+	lv_obj_t *debug_btn;
 	lv_obj_t *first_item_btn;
 	char about_text[GUI_SETTINGS_TEXT_LEN];
 	u8 about_visible;
+	u8 debug_visible;
 } GUI_SettingsContext_t;
 
 static int GUI_Settings_PageBuild(Page_Struct_t *page);
@@ -73,10 +107,14 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item);
 static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context);
+static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context);
+static void GUI_Settings_AddDebugItem(GUI_SettingsContext_t *context, const GUI_SettingsDebugItem_t *item);
 static void GUI_Settings_BackEvent(lv_event_t *event);
 static void GUI_Settings_ItemEvent(lv_event_t *event);
 static void GUI_Settings_UsbMscEvent(lv_event_t *event);
 static void GUI_Settings_AboutCloseEvent(lv_event_t *event);
+static void GUI_Settings_DebugCloseEvent(lv_event_t *event);
+static void GUI_Settings_DebugItemEvent(lv_event_t *event);
 static void GUI_Settings_WaitInputRelease(void);
 static u8 GUI_Settings_HandleKey(u32 key);
 static u8 GUI_Settings_IsSwitchToggleKey(u32 key);
@@ -84,6 +122,11 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 static void GUI_Settings_UpdateProgress(u8 percent, void *context);
 static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context);
+static void GUI_Settings_ShowDebug(GUI_SettingsContext_t *context);
+static void GUI_Settings_HideDebug(GUI_SettingsContext_t *context);
+static void GUI_Settings_UpdateDebugSwitches(GUI_SettingsContext_t *context);
+static void GUI_Settings_ToggleDebugItem(GUI_SettingsContext_t *context, GUI_SettingsDebugItemId_t id);
+static u8 GUI_Settings_DebugItemValue(GUI_SettingsDebugItemId_t id);
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateUsbMscSwitch(GUI_SettingsContext_t *context);
@@ -92,6 +135,7 @@ static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled);
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text);
 static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *focus_obj);
 static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *parent, lv_obj_t **first_obj);
+static u8 GUI_Settings_IsInternalSwitch(lv_obj_t *object);
 
 static GUI_SettingsContext_t s_settings;
 
@@ -100,7 +144,22 @@ static const GUI_SettingsItem_t s_setting_items[] =
 	{GUI_SETTINGS_ACTION_FONT_INSTALL, LV_SYMBOL_FILE, "Install Font"},
 	{GUI_SETTINGS_ACTION_FONT_UNINSTALL, LV_SYMBOL_TRASH, "Uninstall Font"},
 	{GUI_SETTINGS_ACTION_UPDATE, LV_SYMBOL_DOWNLOAD, "Install Update"},
+	{GUI_SETTINGS_ACTION_DEBUG, LV_SYMBOL_SETTINGS, "Debug"},
 	{GUI_SETTINGS_ACTION_ABOUT, LV_SYMBOL_SETTINGS, "About"}
+};
+
+static const GUI_SettingsDebugItem_t s_debug_items[GUI_SETTINGS_DEBUG_ITEM_COUNT] =
+{
+	{GUI_SETTINGS_DEBUG_MASTER, "Debug"},
+	{GUI_SETTINGS_DEBUG_SHELL, "Shell"},
+	{GUI_SETTINGS_DEBUG_AUDIO, "Audio Log"},
+	{GUI_SETTINGS_DEBUG_VIDEO, "Video Log"},
+	{GUI_SETTINGS_DEBUG_LIBJPEG, "LibJPEG Log"},
+	{GUI_SETTINGS_DEBUG_FATFS, "FatFs Log"},
+	{GUI_SETTINGS_DEBUG_MEMORY_DUMP, "Memory Dump"},
+	{GUI_SETTINGS_DEBUG_DUMP_CCM, "Dump CCM"},
+	{GUI_SETTINGS_DEBUG_DUMP_MAIN, "Dump Main SRAM"},
+	{GUI_SETTINGS_DEBUG_DUMP_SRAMEX, "Dump SRAMEX"}
 };
 
 int GUI_Settings_Register(void)
@@ -144,8 +203,10 @@ static int GUI_Settings_PageBuild(Page_Struct_t *page)
 	GUI_Settings_CreateHeader(&s_settings);
 	GUI_Settings_CreateList(&s_settings);
 	GUI_Settings_CreateAboutPanel(&s_settings);
+	GUI_Settings_CreateDebugPanel(&s_settings);
 	GUI_Settings_SetStatus(&s_settings, "Ready");
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
+	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_UpdateFontState(&s_settings);
 
 	return SYSTEM_STATUS_OK;
@@ -158,6 +219,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 
 	GUI_Settings_UpdateFontState(&s_settings);
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
+	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_RebuildFocus(&s_settings, s_settings.first_item_btn);
 	GUI_Settings_WaitInputRelease();
 	lv_obj_invalidate(s_settings.screen);
@@ -319,6 +381,7 @@ static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_S
 	}
 
 	btn = lv_list_add_btn(context->list, item->symbol, item->text);
+	lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
 	lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
 	lv_obj_set_style_radius(btn, 4, 0);
 	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
@@ -359,6 +422,10 @@ static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_S
 	if (item->action == GUI_SETTINGS_ACTION_ABOUT)
 	{
 		context->about_btn = btn;
+	}
+	else if (item->action == GUI_SETTINGS_ACTION_DEBUG)
+	{
+		context->debug_btn = btn;
 	}
 }
 
@@ -417,6 +484,117 @@ static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context)
 	GUI_Settings_HideAbout(context);
 }
 
+static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context)
+{
+	lv_obj_t *title;
+	lv_obj_t *close_icon;
+	u8 index;
+
+	context->debug_panel = lv_obj_create(context->screen);
+	lv_obj_clear_flag(context->debug_panel, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_size(context->debug_panel, GUI_SETTINGS_ABOUT_W, GUI_SETTINGS_ABOUT_H);
+	lv_obj_set_pos(context->debug_panel, GUI_SETTINGS_ABOUT_X, GUI_SETTINGS_ABOUT_Y);
+	lv_obj_set_style_radius(context->debug_panel, 6, 0);
+	lv_obj_set_style_border_width(context->debug_panel, 1, 0);
+	lv_obj_set_style_border_color(context->debug_panel, lv_color_hex(GUI_SETTINGS_ACCENT), 0);
+	lv_obj_set_style_bg_color(context->debug_panel, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_bg_opa(context->debug_panel, LV_OPA_COVER, 0);
+	lv_obj_set_style_pad_all(context->debug_panel, 0, 0);
+
+	title = lv_label_create(context->debug_panel);
+	lv_label_set_text(title, "Debug");
+	lv_obj_set_style_text_color(title, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_pos(title, 10, 8);
+
+	context->debug_close_btn = lv_btn_create(context->debug_panel);
+	lv_obj_clear_flag(context->debug_close_btn, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_size(context->debug_close_btn, 32, 24);
+	lv_obj_set_pos(context->debug_close_btn, 258, 5);
+	lv_obj_set_style_radius(context->debug_close_btn, 6, 0);
+	lv_obj_set_style_bg_color(context->debug_close_btn, lv_color_hex(0x252D36U), 0);
+	lv_obj_set_style_bg_color(context->debug_close_btn, lv_color_hex(0x344150U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_opa(context->debug_close_btn, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_width(context->debug_close_btn, 0, 0);
+	lv_obj_set_style_border_width(context->debug_close_btn, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_border_color(context->debug_close_btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_width(context->debug_close_btn, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_pad(context->debug_close_btn, 1, LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_color(context->debug_close_btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
+	lv_obj_set_style_shadow_width(context->debug_close_btn, 0, 0);
+	lv_obj_set_style_pad_all(context->debug_close_btn, 0, 0);
+	lv_obj_add_event_cb(context->debug_close_btn, GUI_Settings_DebugCloseEvent, LV_EVENT_CLICKED, context);
+	lv_obj_add_event_cb(context->debug_close_btn, GUI_Settings_DebugCloseEvent, LV_EVENT_KEY, context);
+
+	close_icon = lv_label_create(context->debug_close_btn);
+	lv_label_set_text(close_icon, LV_SYMBOL_CLOSE);
+	lv_obj_set_style_text_color(close_icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_center(close_icon);
+
+	context->debug_list = lv_list_create(context->debug_panel);
+	lv_obj_set_size(context->debug_list, GUI_SETTINGS_DEBUG_LIST_W, GUI_SETTINGS_DEBUG_LIST_H);
+	lv_obj_set_pos(context->debug_list, GUI_SETTINGS_DEBUG_LIST_X, GUI_SETTINGS_DEBUG_LIST_Y);
+	lv_obj_set_style_radius(context->debug_list, 4, 0);
+	lv_obj_set_style_border_width(context->debug_list, 0, 0);
+	lv_obj_set_style_bg_color(context->debug_list, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_bg_opa(context->debug_list, LV_OPA_COVER, 0);
+	lv_obj_set_style_pad_all(context->debug_list, 0, 0);
+	lv_obj_set_style_pad_row(context->debug_list, 0, 0);
+	lv_obj_set_scrollbar_mode(context->debug_list, LV_SCROLLBAR_MODE_AUTO);
+
+	for (index = 0U; index < GUI_SETTINGS_DEBUG_ITEM_COUNT; index++)
+	{
+		GUI_Settings_AddDebugItem(context, &s_debug_items[index]);
+	}
+	GUI_Settings_UpdateDebugSwitches(context);
+	GUI_Settings_HideDebug(context);
+}
+
+static void GUI_Settings_AddDebugItem(GUI_SettingsContext_t *context,
+	const GUI_SettingsDebugItem_t *item)
+{
+	lv_obj_t *btn;
+	lv_obj_t *toggle;
+	u32 index;
+
+	if (context == NULL || context->debug_list == NULL || item == NULL)
+	{
+		return;
+	}
+	index = (u32)item->id;
+	if (index >= GUI_SETTINGS_DEBUG_ITEM_COUNT)
+	{
+		return;
+	}
+
+	btn = lv_list_add_btn(context->debug_list, LV_SYMBOL_SETTINGS, item->text);
+	lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+	lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
+	lv_obj_set_style_radius(btn, 4, 0);
+	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
+	lv_obj_set_style_bg_color(btn, lv_color_hex(0x263240U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, lv_color_hex(0x22303AU), LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_width(btn, 0, 0);
+	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_border_color(btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_width(btn, 0, 0);
+	lv_obj_set_style_text_color(btn, lv_color_hex(0xEEF2F6U), 0);
+	lv_obj_add_event_cb(btn, GUI_Settings_DebugItemEvent, LV_EVENT_CLICKED, (void *)item);
+	lv_obj_add_event_cb(btn, GUI_Settings_DebugItemEvent, LV_EVENT_KEY, (void *)item);
+
+	toggle = lv_switch_create(btn);
+	lv_obj_clear_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_set_size(toggle, GUI_SETTINGS_SWITCH_W, GUI_SETTINGS_SWITCH_H);
+	lv_obj_set_pos(toggle, GUI_SETTINGS_DEBUG_SWITCH_X, GUI_SETTINGS_SWITCH_Y);
+	lv_obj_set_style_bg_color(toggle, lv_color_hex(0x303844U), 0);
+	lv_obj_set_style_bg_color(toggle, lv_color_hex(0x303844U), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(toggle, lv_color_hex(GUI_SETTINGS_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
+	lv_obj_set_style_bg_color(toggle, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+
+	context->debug_btns[index] = btn;
+	context->debug_switches[index] = toggle;
+}
+
 static void GUI_Settings_BackEvent(lv_event_t *event)
 {
 	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)lv_event_get_user_data(event);
@@ -434,6 +612,10 @@ static void GUI_Settings_BackEvent(lv_event_t *event)
 		{
 			GUI_Settings_HideAbout(context);
 		}
+		else if (context->debug_visible != 0U)
+		{
+			GUI_Settings_HideDebug(context);
+		}
 		else
 		{
 			(void)Page_Back();
@@ -445,7 +627,18 @@ static void GUI_Settings_BackEvent(lv_event_t *event)
 		if (key == LV_KEY_ESC)
 		{
 			GUI_Settings_WaitInputRelease();
-			(void)Page_Back();
+			if (context->about_visible != 0U)
+			{
+				GUI_Settings_HideAbout(context);
+			}
+			else if (context->debug_visible != 0U)
+			{
+				GUI_Settings_HideDebug(context);
+			}
+			else
+			{
+				(void)Page_Back();
+			}
 		}
 		else if (key != LV_KEY_ENTER)
 		{
@@ -473,6 +666,18 @@ static void GUI_Settings_ItemEvent(lv_event_t *event)
 			if (key == LV_KEY_ESC || key == LV_KEY_LEFT)
 			{
 				GUI_Settings_HideAbout(&s_settings);
+			}
+		}
+		return;
+	}
+	if (s_settings.debug_visible != 0U)
+	{
+		if (code == LV_EVENT_KEY)
+		{
+			key = lv_event_get_key(event);
+			if (key == LV_KEY_ESC || key == LV_KEY_LEFT)
+			{
+				GUI_Settings_HideDebug(&s_settings);
 			}
 		}
 		return;
@@ -505,7 +710,7 @@ static void GUI_Settings_UsbMscEvent(lv_event_t *event)
 		return;
 	}
 
-	if (context->about_visible != 0U)
+	if (context->about_visible != 0U || context->debug_visible != 0U)
 	{
 		return;
 	}
@@ -547,6 +752,66 @@ static void GUI_Settings_AboutCloseEvent(lv_event_t *event)
 	else if (code == LV_EVENT_KEY)
 	{
 		(void)GUI_Settings_HandleKey(lv_event_get_key(event));
+	}
+}
+
+static void GUI_Settings_DebugCloseEvent(lv_event_t *event)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	if (code == LV_EVENT_CLICKED || (code == LV_EVENT_KEY &&
+	    (lv_event_get_key(event) == LV_KEY_ENTER ||
+	     lv_event_get_key(event) == LV_KEY_ESC ||
+	     lv_event_get_key(event) == LV_KEY_LEFT)))
+	{
+		GUI_Settings_HideDebug(context);
+	}
+	else if (code == LV_EVENT_KEY)
+	{
+		(void)GUI_Settings_HandleKey(lv_event_get_key(event));
+	}
+}
+
+static void GUI_Settings_DebugItemEvent(lv_event_t *event)
+{
+	const GUI_SettingsDebugItem_t *item =
+		(const GUI_SettingsDebugItem_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+
+	if (item == NULL || s_settings.debug_visible == 0U)
+	{
+		return;
+	}
+	if (code == LV_EVENT_CLICKED)
+	{
+		GUI_Settings_ToggleDebugItem(&s_settings, item->id);
+		return;
+	}
+	if (code != LV_EVENT_KEY)
+	{
+		return;
+	}
+
+	key = lv_event_get_key(event);
+	if (GUI_Settings_IsSwitchToggleKey(key) != 0U)
+	{
+		/* Keypad ENTER also emits CLICKED when released; toggle there once. */
+		return;
+	}
+	else if (key == LV_KEY_ESC || key == LV_KEY_LEFT)
+	{
+		GUI_Settings_HideDebug(&s_settings);
+	}
+	else
+	{
+		(void)GUI_Settings_HandleKey(key);
 	}
 }
 
@@ -654,6 +919,9 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 				}
 			}
 			break;
+		case GUI_SETTINGS_ACTION_DEBUG:
+			GUI_Settings_ShowDebug(context);
+			break;
 		case GUI_SETTINGS_ACTION_ABOUT:
 			GUI_Settings_ShowAbout(context);
 			break;
@@ -710,6 +978,157 @@ static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context)
 	}
 }
 
+static void GUI_Settings_ShowDebug(GUI_SettingsContext_t *context)
+{
+	if (context == NULL || context->debug_panel == NULL)
+	{
+		return;
+	}
+
+	GUI_Settings_UpdateDebugSwitches(context);
+	lv_obj_clear_flag(context->debug_panel, LV_OBJ_FLAG_HIDDEN);
+	lv_obj_move_foreground(context->debug_panel);
+	context->debug_visible = 1U;
+	GUI_Settings_SetStatus(context, "Debug");
+	GUI_Settings_RebuildFocus(context, context->debug_btns[0]);
+	GUI_Settings_WaitInputRelease();
+}
+
+static void GUI_Settings_HideDebug(GUI_SettingsContext_t *context)
+{
+	if (context == NULL || context->debug_panel == NULL)
+	{
+		return;
+	}
+
+	lv_obj_add_flag(context->debug_panel, LV_OBJ_FLAG_HIDDEN);
+	context->debug_visible = 0U;
+	if (Page_GetCurrent() == GUI_PAGE_SETTINGS)
+	{
+		GUI_Settings_RebuildFocus(context, context->debug_btn);
+		GUI_Settings_WaitInputRelease();
+	}
+}
+
+static u8 GUI_Settings_DebugItemValue(GUI_SettingsDebugItemId_t id)
+{
+	switch (id)
+	{
+		case GUI_SETTINGS_DEBUG_MASTER:
+			return System_Settings.Debug;
+		case GUI_SETTINGS_DEBUG_SHELL:
+			return System_Settings.DebugShellEnabled;
+		case GUI_SETTINGS_DEBUG_AUDIO:
+			return System_Settings.DebugAudioLogEnabled;
+		case GUI_SETTINGS_DEBUG_VIDEO:
+			return System_Settings.DebugVideoLogEnabled;
+		case GUI_SETTINGS_DEBUG_LIBJPEG:
+			return System_Settings.DebugLibjpegLogEnabled;
+		case GUI_SETTINGS_DEBUG_FATFS:
+			return System_Settings.DebugFatfsLogEnabled;
+		case GUI_SETTINGS_DEBUG_MEMORY_DUMP:
+			return System_Settings.MemoryDumpEnabled;
+		case GUI_SETTINGS_DEBUG_DUMP_CCM:
+			return System_Settings.MemoryDumpCcmEnabled;
+		case GUI_SETTINGS_DEBUG_DUMP_MAIN:
+			return System_Settings.MemoryDumpMainSramEnabled;
+		case GUI_SETTINGS_DEBUG_DUMP_SRAMEX:
+			return System_Settings.MemoryDumpSramexEnabled;
+		default:
+			return 0U;
+	}
+}
+
+static void GUI_Settings_UpdateDebugSwitches(GUI_SettingsContext_t *context)
+{
+	u32 index;
+
+	if (context == NULL)
+	{
+		return;
+	}
+	for (index = 0U; index < GUI_SETTINGS_DEBUG_ITEM_COUNT; index++)
+	{
+		if (context->debug_switches[index] == NULL)
+		{
+			continue;
+		}
+		if (GUI_Settings_DebugItemValue((GUI_SettingsDebugItemId_t)index) != 0U)
+		{
+			lv_obj_add_state(context->debug_switches[index], LV_STATE_CHECKED);
+		}
+		else
+		{
+			lv_obj_clear_state(context->debug_switches[index], LV_STATE_CHECKED);
+		}
+	}
+}
+
+static void GUI_Settings_ToggleDebugItem(GUI_SettingsContext_t *context,
+	GUI_SettingsDebugItemId_t id)
+{
+	System_Settings_t previous;
+	u8 enabled;
+
+	if (context == NULL || (u32)id >= GUI_SETTINGS_DEBUG_ITEM_COUNT)
+	{
+		return;
+	}
+	previous = System_Settings;
+	enabled = (GUI_Settings_DebugItemValue(id) == 0U) ? 1U : 0U;
+
+	switch (id)
+	{
+		case GUI_SETTINGS_DEBUG_MASTER:
+			System_Settings.Debug = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_SHELL:
+			System_Settings.DebugShellEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_AUDIO:
+			System_Settings.DebugAudioLogEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_VIDEO:
+			System_Settings.DebugVideoLogEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_LIBJPEG:
+			System_Settings.DebugLibjpegLogEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_FATFS:
+			System_Settings.DebugFatfsLogEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_MEMORY_DUMP:
+			System_Settings.MemoryDumpEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_DUMP_CCM:
+			System_Settings.MemoryDumpCcmEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_DUMP_MAIN:
+			System_Settings.MemoryDumpMainSramEnabled = enabled;
+			break;
+		case GUI_SETTINGS_DEBUG_DUMP_SRAMEX:
+			System_Settings.MemoryDumpSramexEnabled = enabled;
+			break;
+		default:
+			return;
+	}
+
+	if (System_Settings_Save() != SYSTEM_STATUS_OK)
+	{
+		System_Settings = previous;
+		GUI_Settings_SetStatus(context, "Debug setting save failed");
+	}
+	else if (id == GUI_SETTINGS_DEBUG_MASTER || id == GUI_SETTINGS_DEBUG_SHELL)
+	{
+		GUI_Settings_SetStatus(context, "Restart to apply Debug/Shell");
+	}
+	else
+	{
+		GUI_Settings_SetStatus(context, "Debug setting saved");
+	}
+	GUI_Settings_UpdateDebugSwitches(context);
+}
+
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 {
 	u32 cpuid;
@@ -727,7 +1146,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	if (status == W25Q64_OK)
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.0.0-preview\n"
+		               "Star Gamer 1.0.1-preview\n"
 		               "Author: ZLK\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
@@ -894,6 +1313,10 @@ static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *
 			first_obj = context->about_close_btn;
 		}
 	}
+	else if (context->debug_visible != 0U)
+	{
+		GUI_Settings_AddFocusableChildren(group, context->debug_panel, &first_obj);
+	}
 	else
 	{
 		GUI_Settings_AddFocusableChildren(group, context->screen, &first_obj);
@@ -934,7 +1357,7 @@ static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *paren
 			continue;
 		}
 
-		if (child == s_settings.usb_msc_switch)
+		if (GUI_Settings_IsInternalSwitch(child) != 0U)
 		{
 			continue;
 		}
@@ -950,4 +1373,22 @@ static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *paren
 
 		GUI_Settings_AddFocusableChildren(group, child, first_obj);
 	}
+}
+
+static u8 GUI_Settings_IsInternalSwitch(lv_obj_t *object)
+{
+	u32 index;
+
+	if (object == s_settings.usb_msc_switch)
+	{
+		return 1U;
+	}
+	for (index = 0U; index < GUI_SETTINGS_DEBUG_ITEM_COUNT; index++)
+	{
+		if (object == s_settings.debug_switches[index])
+		{
+			return 1U;
+		}
+	}
+	return 0U;
 }

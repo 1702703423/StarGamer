@@ -16,6 +16,9 @@
 
 extern Shell shell;
 
+#define VIDEO_DIAG_LOG(...) \
+	System_DebugLogPrint(SYSTEM_DEBUG_LOG_VIDEO, __VA_ARGS__)
+
 #define VIDEO_TASK_STACK_SIZE             8192U
 #define VIDEO_LAUNCH_DELAY_TICKS          80U
 #define VIDEO_CONTROL_POLL_TICKS          5U
@@ -50,6 +53,8 @@ typedef struct Video_Context
 	Video_MJPEG_t mjpeg;
 	Video_PCM_t pcm;
 	AVI_Info_t info;
+	AVI_Chunk_t current_chunk;
+	AVI_IOTrace_t fatfs_io_trace;
 	Video_Stats_t stats;
 	char path[VIDEO_PATH_SIZE];
 	osThreadId_t thread_id;
@@ -58,6 +63,8 @@ typedef struct Video_Context
 	volatile u32 exit_tick;
 	volatile u32 pending_seek_permille;
 	volatile u32 pending_volume;
+	volatile Video_Phase_t phase;
+	volatile u32 phase_enter_tick;
 	u32 key_previous;
 	u32 deadline_whole_ticks;
 	u32 deadline_fraction_ticks;
@@ -69,6 +76,24 @@ typedef struct Video_Context
 	u32 active_audio_offset;
 	u32 active_audio_remaining;
 	u32 active_audio_end;
+	u32 active_audio_started_tick;
+	u32 loop_count;
+	u32 last_parser_progress_tick;
+	u32 last_video_progress_tick;
+	u32 last_audio_progress_tick;
+	u32 last_display_progress_tick;
+	u32 current_audio_chunk_size;
+	u32 max_audio_chunk_size;
+	u32 audio_run_chunks;
+	u32 audio_run_bytes;
+	u32 max_audio_run_chunks;
+	u32 max_audio_run_bytes;
+	u32 audio_wait_count;
+	u32 late_drop_count;
+	u32 oversized_drop_count;
+	u32 prebuffer_drop_count;
+	u32 consecutive_late_drops;
+	u32 max_consecutive_late_drops;
 	u32 consecutive_jpeg_errors;
 	u32 pcm_fatfs_read_errors;
 	u32 pcm_fatfs_read_calls;
@@ -130,8 +155,15 @@ static void video_update_parser_stats(Video_Context_t *context);
 static void video_update_mjpeg_stats(Video_Context_t *context);
 static void video_update_pcm_stats(Video_Context_t *context);
 static void video_update_memory_stats(Video_Context_t *context);
+static void video_update_diagnostic_stats(Video_Context_t *context);
 static void video_reset_stats(Video_Context_t *context);
+static void video_set_phase(Video_Context_t *context, Video_Phase_t phase);
+static void video_note_chunk(Video_Context_t *context,
+	const AVI_Chunk_t *chunk);
 static const char *video_shell_state_text(Video_State_t state);
+static const char *video_shell_phase_text(u32 phase);
+static const char *video_shell_io_owner_text(u32 owner);
+static const char *video_shell_io_operation_text(u32 operation);
 static void video_shell_fourcc(char *buffer, u32 fourcc);
 
 static Video_Context_t *s_video;
@@ -161,16 +193,20 @@ int Video_Play(const char *path)
 	context = video_get_context();
 	if(context == NULL)
 	{
+		VIDEO_DIAG_LOG("start failed: context allocation\r\n");
 		return OUT_OF_HEAP_MEMORY;
 	}
 	if(path == NULL || context->thread_id != NULL)
 	{
+		VIDEO_DIAG_LOG("start rejected path=%p busy=%u\r\n",
+		               (void *)path, (context->thread_id != NULL) ? 1U : 0U);
 		return OPERATE_FAILED;
 	}
 
 	memset(context, 0, sizeof(*context));
 	if(video_copy_path(context->path, sizeof(context->path), path) == 0U)
 	{
+		VIDEO_DIAG_LOG("start failed: path too long\r\n");
 		context->result = VIDEO_RESULT_OPEN_FAILED;
 		context->state = VIDEO_STATE_ERROR;
 		return OPERATE_FAILED;
@@ -180,11 +216,13 @@ int Video_Play(const char *path)
 	context->key_previous = KEY_GetState();
 	context->pending_volume = (u32)Video_GetVolume();
 	context->resume_after_seek = 1U;
+	video_set_phase(context, VIDEO_PHASE_LAUNCH);
 	Video_Memory_ResetStats();
 	__DMB();
 
 	if(s_video_thread_attr.stack_mem == NULL)
 	{
+		VIDEO_DIAG_LOG("start failed: task stack\r\n");
 		s_video_thread_attr.stack_mem = sys_thread_stack_alloc(
 			(u32)s_video_thread_attr.stack_size);
 	}
@@ -198,6 +236,7 @@ int Video_Play(const char *path)
 	thread_id = osThreadNew(video_task, context, &s_video_thread_attr);
 	if(thread_id == NULL)
 	{
+		VIDEO_DIAG_LOG("start failed: thread create\r\n");
 		sys_thread_stack_free(s_video_thread_attr.stack_mem);
 		s_video_thread_attr.stack_mem = NULL;
 		context->result = VIDEO_RESULT_THREAD_FAILED;
@@ -205,6 +244,7 @@ int Video_Play(const char *path)
 		return OPERATE_FAILED;
 	}
 	context->thread_id = thread_id;
+	VIDEO_DIAG_LOG("start path=%s\r\n", context->path);
 	return SYSTEM_STATUS_OK;
 }
 
@@ -386,6 +426,7 @@ int Video_GetStats(Video_Stats_t *stats)
 	video_update_mjpeg_stats(s_video);
 	video_update_parser_stats(s_video);
 	video_update_memory_stats(s_video);
+	video_update_diagnostic_stats(s_video);
 	s_video->stats.position_permille = (u32)Video_GetPositionPermille();
 	s_video->stats.volume = (u32)Video_GetVolume();
 	if(s_video->thread_id != NULL && s_video->exit_tick == 0U)
@@ -448,6 +489,7 @@ static void video_task(void *argument)
 		return;
 	}
 	context->thread_id = osThreadGetId();
+	video_set_phase(context, VIDEO_PHASE_LAUNCH);
 	if(video_wait_launch(context) == 0U)
 	{
 		video_finish(context, VIDEO_RESULT_USER_STOP);
@@ -455,6 +497,7 @@ static void video_task(void *argument)
 	}
 
 	context->state = VIDEO_STATE_OPENING;
+	video_set_phase(context, VIDEO_PHASE_OPEN);
 	if(f_open(&context->file, (const TCHAR *)context->path, FA_READ) != FR_OK)
 	{
 		video_finish(context, VIDEO_RESULT_OPEN_FAILED);
@@ -467,6 +510,7 @@ static void video_task(void *argument)
 		video_finish(context, video_map_parser_result(parser_result));
 		return;
 	}
+	AVI_Parser_SetTickCallback(&context->parser, osKernelGetTickCount);
 	video_memcpy_align4(&context->info, &context->parser.info,
 	                    sizeof(context->info));
 	if(context->info.has_audio != 0U && context->info.audio_supported == 0U)
@@ -539,6 +583,8 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 	context->state = VIDEO_STATE_PLAYING;
 	while(1)
 	{
+		context->loop_count++;
+		video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 		if(context->seek_pending != 0U)
 		{
 			decode_result = video_execute_seek(context);
@@ -581,6 +627,7 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 			}
 		}
 
+		video_set_phase(context, VIDEO_PHASE_DEMUX_NEXT);
 		parser_result = AVI_Parser_Next(&context->parser, &chunk);
 		if(parser_result == AVI_PARSER_EOF)
 		{
@@ -590,6 +637,8 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 		{
 			return video_map_parser_result(parser_result);
 		}
+		video_note_chunk(context, &chunk);
+		video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 		if(chunk.type != AVI_CHUNK_VIDEO)
 		{
 			continue;
@@ -598,6 +647,8 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 		if(chunk.oversized != 0U)
 		{
 			context->stats.video_frames_dropped++;
+			context->oversized_drop_count++;
+			context->consecutive_late_drops = 0U;
 			video_advance_deadline(context, &deadline);
 			continue;
 		}
@@ -615,10 +666,15 @@ static Video_Result_t video_run_silent(Video_Context_t *context)
 		if((s32)(now - deadline) > (s32)drop_threshold)
 		{
 			context->stats.video_frames_dropped++;
+			context->late_drop_count++;
+			context->consecutive_late_drops++;
+			video_update_max(&context->max_consecutive_late_drops,
+			                 context->consecutive_late_drops);
 			video_advance_deadline(context, &deadline);
 			continue;
 		}
 
+		context->consecutive_late_drops = 0U;
 		decode_result = video_decode_frame(context, &chunk);
 		video_advance_deadline(context, &deadline);
 		if(decode_result != VIDEO_RESULT_OK)
@@ -667,6 +723,8 @@ video_pcm_restart:
 	      (first_frame_displayed == 0U ||
 	       Video_PCM_GetBufferedBytes(&context->pcm) < context->pcm.prebuffer_bytes))
 	{
+		context->loop_count++;
+		video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 		control = video_process_controls(context, 0U);
 		if(control == VIDEO_CONTROL_STOP)
 		{
@@ -716,6 +774,7 @@ video_pcm_restart:
 			continue;
 		}
 
+		video_set_phase(context, VIDEO_PHASE_DEMUX_NEXT);
 		parser_result = AVI_Parser_Next(&context->parser, &chunk);
 		if(parser_result == AVI_PARSER_EOF)
 		{
@@ -727,6 +786,8 @@ video_pcm_restart:
 		{
 			return video_map_parser_result(parser_result);
 		}
+		video_note_chunk(context, &chunk);
+		video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 		if(chunk.type == AVI_CHUNK_AUDIO)
 		{
 			context->stats.audio_chunks++;
@@ -758,6 +819,8 @@ video_pcm_restart:
 		if(chunk.oversized != 0U)
 		{
 			context->stats.video_frames_dropped++;
+			context->oversized_drop_count++;
+			context->consecutive_late_drops = 0U;
 			video_advance_audio_deadline(context);
 			error = video_skip_chunk_payload(context, &chunk);
 			if(error != VIDEO_RESULT_OK)
@@ -768,6 +831,7 @@ video_pcm_restart:
 		}
 		if(first_frame_displayed == 0U)
 		{
+			context->consecutive_late_drops = 0U;
 			error = video_decode_frame(context, &chunk);
 			if(error == VIDEO_RESULT_OK)
 			{
@@ -783,6 +847,8 @@ video_pcm_restart:
 		}
 
 		context->stats.video_frames_dropped++;
+		context->prebuffer_drop_count++;
+		context->consecutive_late_drops = 0U;
 		video_advance_audio_deadline(context);
 		error = video_skip_chunk_payload(context, &chunk);
 		if(error != VIDEO_RESULT_OK)
@@ -828,6 +894,8 @@ video_pcm_restart:
 
 	while(1)
 	{
+		context->loop_count++;
+		video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 		if(context->seek_pending != 0U)
 		{
 			goto video_pcm_restart;
@@ -878,6 +946,7 @@ video_pcm_restart:
 		}
 		if(context->demux_eof != 0U)
 		{
+			video_set_phase(context, VIDEO_PHASE_EOF_DRAIN);
 			if(Video_PCM_IsDrained(&context->pcm) != 0U)
 			{
 				return VIDEO_RESULT_EOF;
@@ -910,6 +979,7 @@ video_pcm_restart:
 			continue;
 		}
 
+		video_set_phase(context, VIDEO_PHASE_DEMUX_NEXT);
 		parser_result = AVI_Parser_Next(&context->parser, &chunk);
 		if(parser_result == AVI_PARSER_EOF)
 		{
@@ -921,6 +991,8 @@ video_pcm_restart:
 		{
 			return video_map_parser_result(parser_result);
 		}
+		video_note_chunk(context, &chunk);
+		video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 
 		if(chunk.type == AVI_CHUNK_AUDIO)
 		{
@@ -950,6 +1022,8 @@ video_pcm_restart:
 		if(chunk.oversized != 0U)
 		{
 			context->stats.video_frames_dropped++;
+			context->oversized_drop_count++;
+			context->consecutive_late_drops = 0U;
 			video_advance_audio_deadline(context);
 			error = video_skip_chunk_payload(context, &chunk);
 			if(error != VIDEO_RESULT_OK)
@@ -970,6 +1044,10 @@ video_pcm_restart:
 		if(video_pcm_should_drop_frame(context, context->audio_deadline_frames) != 0U)
 		{
 			context->stats.video_frames_dropped++;
+			context->late_drop_count++;
+			context->consecutive_late_drops++;
+			video_update_max(&context->max_consecutive_late_drops,
+			                 context->consecutive_late_drops);
 			video_advance_audio_deadline(context);
 			error = video_skip_chunk_payload(context, &chunk);
 			if(error != VIDEO_RESULT_OK)
@@ -979,6 +1057,7 @@ video_pcm_restart:
 			continue;
 		}
 
+		context->consecutive_late_drops = 0U;
 		error = video_decode_frame(context, &chunk);
 		video_advance_audio_deadline(context);
 		if(error == VIDEO_RESULT_OK)
@@ -998,15 +1077,18 @@ static Video_Result_t video_decode_frame(Video_Context_t *context,
 	Video_MJPEGResult_t decode_result;
 	u32 decode_start;
 
+	video_set_phase(context, VIDEO_PHASE_JPEG_DECODE);
 	decode_start = osKernelGetTickCount();
 	decode_result = Video_MJPEG_DecodeFrame(&context->mjpeg, &context->file,
 		chunk, context->info.width, context->info.height);
 	video_update_max(&context->stats.max_jpeg_decode_ticks,
 	                 osKernelGetTickCount() - decode_start);
+	video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 	if(decode_result == VIDEO_MJPEG_OK)
 	{
 		context->stats.video_frames_decoded++;
 		context->stats.video_frames_displayed++;
+		context->last_display_progress_tick = osKernelGetTickCount();
 		context->consecutive_jpeg_errors = 0U;
 		video_draw_hud(context, 0U);
 		return VIDEO_RESULT_OK;
@@ -1037,6 +1119,7 @@ static Video_Result_t video_execute_seek(Video_Context_t *context)
 	__DMB();
 	context->seek_pending = 0U;
 	context->state = VIDEO_STATE_PREBUFFER;
+	video_set_phase(context, VIDEO_PHASE_SEEK);
 
 	if(context->pcm_opened != 0U)
 	{
@@ -1056,6 +1139,7 @@ static Video_Result_t video_execute_seek(Video_Context_t *context)
 	context->active_audio_offset = 0U;
 	context->active_audio_remaining = 0U;
 	context->active_audio_end = 0U;
+	context->active_audio_started_tick = 0U;
 	context->consecutive_jpeg_errors = 0U;
 	parser_result = AVI_Parser_SeekPermille(&context->parser, target);
 	if(parser_result != AVI_PARSER_OK)
@@ -1091,6 +1175,7 @@ static Video_Result_t video_execute_seek(Video_Context_t *context)
 static Video_Result_t video_skip_chunk_payload(Video_Context_t *context,
 	const AVI_Chunk_t *chunk)
 {
+	FRESULT fatfs_result;
 	u32 end;
 
 	if(context == NULL || chunk == NULL)
@@ -1098,11 +1183,19 @@ static Video_Result_t video_skip_chunk_payload(Video_Context_t *context,
 		return VIDEO_RESULT_BAD_CONTAINER;
 	}
 	end = video_chunk_end(chunk);
-	if((u32)f_tell(&context->file) != end &&
-	   f_lseek(&context->file, (FSIZE_t)end) != FR_OK)
+	if((u32)f_tell(&context->file) != end)
 	{
-		return VIDEO_RESULT_IO_FAILED;
+		video_set_phase(context, VIDEO_PHASE_SKIP_CHUNK);
+		AVI_IOTrace_Begin(&context->fatfs_io_trace, AVI_IO_OP_SEEK,
+		                  end, 0U, osKernelGetTickCount());
+		fatfs_result = f_lseek(&context->file, (FSIZE_t)end);
+		AVI_IOTrace_End(&context->fatfs_io_trace, osKernelGetTickCount());
+		if(fatfs_result != FR_OK)
+		{
+			return VIDEO_RESULT_IO_FAILED;
+		}
 	}
+	video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 	return VIDEO_RESULT_OK;
 }
 
@@ -1144,6 +1237,7 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 		context->active_audio_offset = chunk->data_offset;
 		context->active_audio_remaining = aligned_size;
 		context->active_audio_end = video_chunk_end(chunk);
+		context->active_audio_started_tick = osKernelGetTickCount();
 		context->active_audio_pending = (aligned_size != 0U) ? 1U : 0U;
 		if(context->active_audio_pending == 0U)
 		{
@@ -1158,10 +1252,13 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 		{
 			return VIDEO_RESULT_OK;
 		}
+		video_set_phase(context, VIDEO_PHASE_AUDIO_READ);
 		result = Video_PCM_ReadChunkPart(&context->pcm, &context->file,
 			&context->active_audio_offset, &context->active_audio_remaining);
 		if(result == VIDEO_PCM_WOULD_BLOCK)
 		{
+			context->audio_wait_count++;
+			video_set_phase(context, VIDEO_PHASE_AUDIO_WAIT_FIFO);
 			if(wait_for_space == 0U)
 			{
 				return VIDEO_RESULT_OK;
@@ -1213,14 +1310,25 @@ static Video_Result_t video_pcm_read_audio_payload(Video_Context_t *context,
 		if(context->active_audio_remaining == 0U)
 		{
 			context->active_audio_pending = 0U;
-			if((u32)f_tell(&context->file) != context->active_audio_end &&
-			   f_lseek(&context->file,
-			           (FSIZE_t)context->active_audio_end) != FR_OK)
+			context->active_audio_started_tick = 0U;
+			if((u32)f_tell(&context->file) != context->active_audio_end)
 			{
-				return VIDEO_RESULT_IO_FAILED;
+				AVI_IOTrace_Begin(&context->fatfs_io_trace, AVI_IO_OP_SEEK,
+				                  context->active_audio_end, 0U,
+				                  osKernelGetTickCount());
+				if(f_lseek(&context->file,
+				           (FSIZE_t)context->active_audio_end) != FR_OK)
+				{
+					AVI_IOTrace_End(&context->fatfs_io_trace,
+					                osKernelGetTickCount());
+					return VIDEO_RESULT_IO_FAILED;
+				}
+				AVI_IOTrace_End(&context->fatfs_io_trace,
+				                osKernelGetTickCount());
 			}
 		}
 	}
+	video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 	return VIDEO_RESULT_OK;
 }
 
@@ -1233,6 +1341,7 @@ static Video_Result_t video_pcm_wait_for_frame(Video_Context_t *context,
 	{
 		return VIDEO_RESULT_BAD_CONTAINER;
 	}
+	video_set_phase(context, VIDEO_PHASE_VIDEO_WAIT_CLOCK);
 	while((s32)(Video_PCM_GetPlayedFrames(&context->pcm) - deadline_frames) < 0)
 	{
 		if(Video_PCM_CheckHealth(&context->pcm) != VIDEO_PCM_OK)
@@ -1265,6 +1374,7 @@ static Video_Result_t video_pcm_wait_for_frame(Video_Context_t *context,
 			}
 		}
 	}
+	video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 	return VIDEO_RESULT_OK;
 }
 
@@ -1402,6 +1512,7 @@ static void video_finish(Video_Context_t *context, Video_Result_t result)
 		osThreadExit();
 		return;
 	}
+	video_set_phase(context, VIDEO_PHASE_FINISH);
 	context->state = VIDEO_STATE_STOPPING;
 	video_update_parser_stats(context);
 	if(context->pcm_opened != 0U)
@@ -1439,6 +1550,13 @@ static void video_finish(Video_Context_t *context, Video_Result_t result)
 	context->result = result;
 	context->state = (result == VIDEO_RESULT_EOF || result == VIDEO_RESULT_USER_STOP ||
 	                  result == VIDEO_RESULT_OK) ? VIDEO_STATE_FINISHED : VIDEO_STATE_ERROR;
+	VIDEO_DIAG_LOG("finish result=%d decoded=%lu displayed=%lu dropped=%lu jpeg_err=%lu fatfs_err=%lu\r\n",
+	               (int)result,
+	               (unsigned long)context->stats.video_frames_decoded,
+	               (unsigned long)context->stats.video_frames_displayed,
+	               (unsigned long)context->stats.video_frames_dropped,
+	               (unsigned long)context->stats.jpeg_errors,
+	               (unsigned long)context->stats.fatfs_read_errors);
 	__DMB();
 	context->exit_tick = osKernelGetTickCount();
 	__DMB();
@@ -1595,6 +1713,7 @@ static u8 video_pause_loop(Video_Context_t *context, u32 *deadline)
 		}
 	}
 	context->state = VIDEO_STATE_PAUSED;
+	video_set_phase(context, VIDEO_PHASE_PAUSED);
 	while(1)
 	{
 		control = video_process_controls(context, VIDEO_CONTROL_POLL_TICKS);
@@ -1618,6 +1737,7 @@ static u8 video_pause_loop(Video_Context_t *context, u32 *deadline)
 				*deadline += osKernelGetTickCount() - pause_start;
 			}
 			context->state = resume_state;
+			video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 			return VIDEO_CONTROL_RESUME;
 		}
 	}
@@ -1629,6 +1749,7 @@ static u8 video_wait_deadline(Video_Context_t *context, u32 *deadline)
 	u32 wait_ticks;
 	u8 control;
 
+	video_set_phase(context, VIDEO_PHASE_VIDEO_WAIT_CLOCK);
 	while((s32)(osKernelGetTickCount() - *deadline) < 0)
 	{
 		now = osKernelGetTickCount();
@@ -1659,6 +1780,7 @@ static u8 video_wait_deadline(Video_Context_t *context, u32 *deadline)
 			}
 		}
 	}
+	video_set_phase(context, VIDEO_PHASE_PLAY_LOOP);
 	return VIDEO_CONTROL_NONE;
 }
 
@@ -1821,6 +1943,10 @@ static void video_accumulate_pcm_stats(Video_Context_t *context)
 		total->fatfs_last_read_bytes = current.fatfs_last_read_bytes;
 		total->fatfs_last_result = current.fatfs_last_result;
 	}
+	total->fatfs_io_last_ticks = current.fatfs_io_last_ticks;
+	video_update_max(&total->fatfs_io_max_ticks,
+	                 current.fatfs_io_max_ticks);
+	total->fatfs_io_slow_count += current.fatfs_io_slow_count;
 	context->pcm_fatfs_read_errors = total->fatfs_read_errors;
 	context->pcm_fatfs_read_calls = total->fatfs_read_calls;
 	context->pcm_fatfs_read_bytes = total->fatfs_read_bytes;
@@ -1926,6 +2052,57 @@ static void video_update_max(u32 *maximum, u32 value)
 	}
 }
 
+static void video_set_phase(Video_Context_t *context, Video_Phase_t phase)
+{
+	if(context == NULL || context->phase == phase)
+	{
+		return;
+	}
+	context->phase_enter_tick = osKernelGetTickCount();
+	__DMB();
+	context->phase = phase;
+	__DMB();
+}
+
+static void video_note_chunk(Video_Context_t *context,
+	const AVI_Chunk_t *chunk)
+{
+	u32 now;
+
+	if(context == NULL || chunk == NULL)
+	{
+		return;
+	}
+	now = osKernelGetTickCount();
+	context->current_chunk = *chunk;
+	context->last_parser_progress_tick = now;
+	if(chunk->type == AVI_CHUNK_AUDIO)
+	{
+		context->current_audio_chunk_size = chunk->data_size;
+		video_update_max(&context->max_audio_chunk_size, chunk->data_size);
+		context->audio_run_chunks++;
+		if(chunk->data_size > (0xFFFFFFFFUL - context->audio_run_bytes))
+		{
+			context->audio_run_bytes = 0xFFFFFFFFUL;
+		}
+		else
+		{
+			context->audio_run_bytes += chunk->data_size;
+		}
+		video_update_max(&context->max_audio_run_chunks,
+		                 context->audio_run_chunks);
+		video_update_max(&context->max_audio_run_bytes,
+		                 context->audio_run_bytes);
+		context->last_audio_progress_tick = now;
+	}
+	else if(chunk->type == AVI_CHUNK_VIDEO)
+	{
+		context->last_video_progress_tick = now;
+		context->audio_run_chunks = 0U;
+		context->audio_run_bytes = 0U;
+	}
+}
+
 static void video_update_parser_stats(Video_Context_t *context)
 {
 	if(context == NULL)
@@ -1985,6 +2162,8 @@ static void video_update_pcm_stats(Video_Context_t *context)
 	if(context->pcm_opened != 0U)
 	{
 		context->stats.audio_fifo_bytes = Video_PCM_GetBufferedBytes(&context->pcm);
+		context->stats.audio_fifo_free_bytes =
+			Video_PCM_GetFreeBytes(&context->pcm);
 		context->stats.audio_prebuffer_bytes = context->pcm.prebuffer_bytes;
 		context->stats.pending_audio_chunks =
 			(context->active_audio_pending != 0U) ? 1U : 0U;
@@ -2059,6 +2238,142 @@ static void video_update_pcm_stats(Video_Context_t *context)
 	}
 	context->stats.pending_video_frames = 0U;
 	context->stats.audio_deadline_frames = context->audio_deadline_frames;
+	context->stats.epoch_played_frames = pcm_stats.output_frames;
+	context->stats.epoch_media_frames = pcm_stats.media_frames;
+	context->stats.epoch_replayed_frames = pcm_stats.replayed_frames;
+	context->stats.epoch_silence_frames = pcm_stats.silence_frames;
+	context->stats.epoch_last_dma_age_ticks =
+		(pcm_stats.last_dma_tick != 0U) ?
+		(osKernelGetTickCount() - pcm_stats.last_dma_tick) : 0U;
+	context->stats.audio_clock_delta_frames =
+		(s32)(pcm_stats.output_frames - context->audio_deadline_frames);
+	context->stats.pcm_io_last_ticks =
+		(context->pcm_opened != 0U) ? pcm_stats.fatfs_io_last_ticks :
+		context->pcm_accumulated.fatfs_io_last_ticks;
+	context->stats.pcm_io_max_ticks = pcm_stats.fatfs_io_max_ticks;
+	context->stats.pcm_io_slow_count = pcm_stats.fatfs_io_slow_count;
+	if(context->pcm_accumulated.fatfs_io_max_ticks >
+	   context->stats.pcm_io_max_ticks)
+	{
+		context->stats.pcm_io_max_ticks =
+			context->pcm_accumulated.fatfs_io_max_ticks;
+	}
+	context->stats.pcm_io_slow_count +=
+		context->pcm_accumulated.fatfs_io_slow_count;
+}
+
+static void video_update_diagnostic_stats(Video_Context_t *context)
+{
+	const AVI_IOTrace_t *trace = NULL;
+	u32 now;
+	u32 phase;
+
+	if(context == NULL)
+	{
+		return;
+	}
+	now = osKernelGetTickCount();
+	__DMB();
+	phase = (u32)context->phase;
+	__DMB();
+	context->stats.phase = phase;
+	context->stats.phase_age_ticks = now - context->phase_enter_tick;
+	context->stats.loop_count = context->loop_count;
+	context->stats.parser_cursor = context->parser.cursor;
+	context->stats.file_offset = (u32)f_tell(&context->file);
+	context->stats.current_chunk_type = (u32)context->current_chunk.type;
+	context->stats.current_chunk_fourcc = context->current_chunk.fourcc;
+	context->stats.current_chunk_offset = context->current_chunk.data_offset;
+	context->stats.current_chunk_size = context->current_chunk.data_size;
+	context->stats.active_audio_offset = context->active_audio_offset;
+	context->stats.active_audio_remaining = context->active_audio_remaining;
+	context->stats.active_audio_end = context->active_audio_end;
+	context->stats.active_audio_age_ticks =
+		(context->active_audio_pending != 0U &&
+		 context->active_audio_started_tick != 0U) ?
+		(now - context->active_audio_started_tick) : 0U;
+	context->stats.current_audio_chunk_size =
+		context->current_audio_chunk_size;
+	context->stats.max_audio_chunk_size = context->max_audio_chunk_size;
+	context->stats.audio_run_chunks = context->audio_run_chunks;
+	context->stats.audio_run_bytes = context->audio_run_bytes;
+	context->stats.max_audio_run_chunks = context->max_audio_run_chunks;
+	context->stats.max_audio_run_bytes = context->max_audio_run_bytes;
+	context->stats.audio_wait_count = context->audio_wait_count;
+	context->stats.late_drop_count = context->late_drop_count;
+	context->stats.oversized_drop_count = context->oversized_drop_count;
+	context->stats.prebuffer_drop_count = context->prebuffer_drop_count;
+	context->stats.consecutive_late_drops =
+		context->consecutive_late_drops;
+	context->stats.max_consecutive_late_drops =
+		context->max_consecutive_late_drops;
+	context->stats.parser_progress_age_ticks =
+		(context->last_parser_progress_tick != 0U) ?
+		(now - context->last_parser_progress_tick) : 0U;
+	context->stats.video_progress_age_ticks =
+		(context->last_video_progress_tick != 0U) ?
+		(now - context->last_video_progress_tick) : 0U;
+	context->stats.audio_progress_age_ticks =
+		(context->last_audio_progress_tick != 0U) ?
+		(now - context->last_audio_progress_tick) : 0U;
+	context->stats.display_progress_age_ticks =
+		(context->last_display_progress_tick != 0U) ?
+		(now - context->last_display_progress_tick) : 0U;
+
+	context->stats.io_owner = VIDEO_IO_OWNER_NONE;
+	if(context->parser.io_trace.active_operation != AVI_IO_OP_NONE)
+	{
+		trace = &context->parser.io_trace;
+		context->stats.io_owner = VIDEO_IO_OWNER_PARSER;
+	}
+	else if(context->pcm_opened != 0U &&
+	        context->pcm.fatfs_io_trace.active_operation != AVI_IO_OP_NONE)
+	{
+		trace = &context->pcm.fatfs_io_trace;
+		context->stats.io_owner = VIDEO_IO_OWNER_PCM;
+	}
+	else if(context->mjpeg_opened != 0U &&
+	        context->mjpeg.fatfs_io_trace.active_operation != AVI_IO_OP_NONE)
+	{
+		trace = &context->mjpeg.fatfs_io_trace;
+		context->stats.io_owner = VIDEO_IO_OWNER_JPEG;
+	}
+	else if(context->fatfs_io_trace.active_operation != AVI_IO_OP_NONE)
+	{
+		trace = &context->fatfs_io_trace;
+		context->stats.io_owner = VIDEO_IO_OWNER_VIDEO;
+	}
+	if(trace != NULL)
+	{
+		__DMB();
+		context->stats.io_active_operation = trace->active_operation;
+		__DMB();
+		context->stats.io_active_offset = trace->active_offset;
+		context->stats.io_active_request_bytes =
+			trace->active_request_bytes;
+		context->stats.io_active_age_ticks =
+			now - trace->active_start_tick;
+	}
+	else
+	{
+		context->stats.io_active_operation = AVI_IO_OP_NONE;
+		context->stats.io_active_offset = 0U;
+		context->stats.io_active_request_bytes = 0U;
+		context->stats.io_active_age_ticks = 0U;
+	}
+	context->stats.parser_io_last_ticks = context->parser.io_trace.last_ticks;
+	context->stats.parser_io_max_ticks = context->parser.io_trace.max_ticks;
+	context->stats.parser_io_slow_count = context->parser.io_trace.slow_count;
+	context->stats.jpeg_io_last_ticks =
+		context->mjpeg.fatfs_io_trace.last_ticks;
+	context->stats.jpeg_io_max_ticks =
+		context->mjpeg.fatfs_io_trace.max_ticks;
+	context->stats.jpeg_io_slow_count =
+		context->mjpeg.fatfs_io_trace.slow_count;
+	context->stats.video_io_last_ticks = context->fatfs_io_trace.last_ticks;
+	context->stats.video_io_max_ticks = context->fatfs_io_trace.max_ticks;
+	context->stats.video_io_slow_count = context->fatfs_io_trace.slow_count;
+	__DMB();
 }
 
 static void video_update_memory_stats(Video_Context_t *context)
@@ -2089,6 +2404,16 @@ static void video_reset_stats(Video_Context_t *context)
 	context->pcm_fatfs_read_errors = 0U;
 	context->pcm_fatfs_read_calls = 0U;
 	context->pcm_fatfs_read_bytes = 0U;
+	context->loop_count = 0U;
+	context->max_audio_chunk_size = context->current_audio_chunk_size;
+	context->max_audio_run_chunks = context->audio_run_chunks;
+	context->max_audio_run_bytes = context->audio_run_bytes;
+	context->audio_wait_count = 0U;
+	context->late_drop_count = 0U;
+	context->oversized_drop_count = 0U;
+	context->prebuffer_drop_count = 0U;
+	context->consecutive_late_drops = 0U;
+	context->max_consecutive_late_drops = 0U;
 	context->parser.last_error_offset = 0U;
 	context->parser.last_error_fourcc = 0U;
 	context->parser.last_error_chunk_size = 0U;
@@ -2099,10 +2424,16 @@ static void video_reset_stats(Video_Context_t *context)
 	context->parser.resync_count = 0U;
 	context->parser.last_resync_from = 0U;
 	context->parser.last_resync_to = 0U;
+	context->parser.io_trace.last_ticks = 0U;
+	context->parser.io_trace.max_ticks = 0U;
+	context->parser.io_trace.slow_count = 0U;
 	context->mjpeg.jpeg_eoi_injected = 0U;
 	context->mjpeg.fatfs_read_errors = 0U;
 	context->mjpeg.fatfs_read_calls = 0U;
 	context->mjpeg.fatfs_read_bytes = 0U;
+	context->mjpeg.fatfs_io_trace.last_ticks = 0U;
+	context->mjpeg.fatfs_io_trace.max_ticks = 0U;
+	context->mjpeg.fatfs_io_trace.slow_count = 0U;
 	context->mjpeg.lcd_wait_ticks = 0U;
 	context->mjpeg.max_lcd_wait_ticks = 0U;
 	context->mjpeg.jpeg_arena_peak_bytes = 0U;
@@ -2121,6 +2452,12 @@ static void video_reset_stats(Video_Context_t *context)
 	context->pcm.fatfs_read_errors = 0U;
 	context->pcm.fatfs_read_calls = 0U;
 	context->pcm.fatfs_read_bytes = 0U;
+	context->pcm.fatfs_io_trace.last_ticks = 0U;
+	context->pcm.fatfs_io_trace.max_ticks = 0U;
+	context->pcm.fatfs_io_trace.slow_count = 0U;
+	context->fatfs_io_trace.last_ticks = 0U;
+	context->fatfs_io_trace.max_ticks = 0U;
+	context->fatfs_io_trace.slow_count = 0U;
 	if(context->pcm_opened != 0U)
 	{
 		audio_card_reset_stats();
@@ -2153,6 +2490,73 @@ static const char *video_shell_state_text(Video_State_t state)
 	}
 }
 
+static const char *video_shell_phase_text(u32 phase)
+{
+	switch((Video_Phase_t)phase)
+	{
+		case VIDEO_PHASE_IDLE:
+			return "IDLE";
+		case VIDEO_PHASE_LAUNCH:
+			return "LAUNCH";
+		case VIDEO_PHASE_OPEN:
+			return "OPEN";
+		case VIDEO_PHASE_PLAY_LOOP:
+			return "PLAY_LOOP";
+		case VIDEO_PHASE_DEMUX_NEXT:
+			return "DEMUX_NEXT";
+		case VIDEO_PHASE_AUDIO_READ:
+			return "AUDIO_READ";
+		case VIDEO_PHASE_AUDIO_WAIT_FIFO:
+			return "AUDIO_WAIT_FIFO";
+		case VIDEO_PHASE_VIDEO_WAIT_CLOCK:
+			return "VIDEO_WAIT_CLOCK";
+		case VIDEO_PHASE_JPEG_DECODE:
+			return "JPEG_DECODE";
+		case VIDEO_PHASE_SKIP_CHUNK:
+			return "SKIP_CHUNK";
+		case VIDEO_PHASE_SEEK:
+			return "SEEK";
+		case VIDEO_PHASE_PAUSED:
+			return "PAUSED";
+		case VIDEO_PHASE_EOF_DRAIN:
+			return "EOF_DRAIN";
+		case VIDEO_PHASE_FINISH:
+			return "FINISH";
+		default:
+			return "UNKNOWN";
+	}
+}
+
+static const char *video_shell_io_owner_text(u32 owner)
+{
+	switch((Video_IOOwner_t)owner)
+	{
+		case VIDEO_IO_OWNER_PARSER:
+			return "PARSER";
+		case VIDEO_IO_OWNER_PCM:
+			return "PCM";
+		case VIDEO_IO_OWNER_JPEG:
+			return "JPEG";
+		case VIDEO_IO_OWNER_VIDEO:
+			return "VIDEO";
+		default:
+			return "NONE";
+	}
+}
+
+static const char *video_shell_io_operation_text(u32 operation)
+{
+	switch(operation)
+	{
+		case AVI_IO_OP_SEEK:
+			return "SEEK";
+		case AVI_IO_OP_READ:
+			return "READ";
+		default:
+			return "NONE";
+	}
+}
+
 static void video_shell_fourcc(char *buffer, u32 fourcc)
 {
 	u32 index;
@@ -2178,6 +2582,7 @@ int video_stats_cmd(int argc, char *argv[])
 	char handler[5];
 	char compression[5];
 	char error_fourcc[5];
+	char current_fourcc[5];
 	u32 fps_x1000 = 0U;
 	u32 busy = 0U;
 
@@ -2202,6 +2607,7 @@ int video_stats_cmd(int argc, char *argv[])
 	video_shell_fourcc(handler, info.video_handler);
 	video_shell_fourcc(compression, info.video_compression);
 	video_shell_fourcc(error_fourcc, stats.avi_error_fourcc);
+	video_shell_fourcc(current_fourcc, stats.current_chunk_fourcc);
 	if(info.video_scale != 0U)
 	{
 		fps_x1000 = (info.video_rate / info.video_scale) * 1000U;
@@ -2218,6 +2624,12 @@ int video_stats_cmd(int argc, char *argv[])
 	                  video_shell_state_text(Video_GetState()),
 	                  Video_ResultText(Video_GetResult()),
 	                  (unsigned long)busy);
+	shellPrintEndLine(&shell, "  phase=%s age=%lu loop=%lu cursor=0x%08lX file=0x%08lX\r\n",
+	                  video_shell_phase_text(stats.phase),
+	                  (unsigned long)stats.phase_age_ticks,
+	                  (unsigned long)stats.loop_count,
+	                  (unsigned long)stats.parser_cursor,
+	                  (unsigned long)stats.file_offset);
 	if(context->path[0] != '\0')
 	{
 		shellPrintEndLine(&shell, "  path=%s\r\n", context->path);
@@ -2249,6 +2661,16 @@ int video_stats_cmd(int argc, char *argv[])
 	                  (unsigned long)stats.video_frames_displayed,
 	                  (unsigned long)stats.video_frames_dropped,
 	                  (unsigned long)stats.jpeg_errors);
+	shellPrintEndLine(&shell, "  chunk type=%lu fourcc=%s off=0x%08lX size=%lu\r\n",
+	                  (unsigned long)stats.current_chunk_type,
+	                  current_fourcc,
+	                  (unsigned long)stats.current_chunk_offset,
+	                  (unsigned long)stats.current_chunk_size);
+	shellPrintEndLine(&shell, "  progress parser=%lu video=%lu audio=%lu display=%lu ticks\r\n",
+	                  (unsigned long)stats.parser_progress_age_ticks,
+	                  (unsigned long)stats.video_progress_age_ticks,
+	                  (unsigned long)stats.audio_progress_age_ticks,
+	                  (unsigned long)stats.display_progress_age_ticks);
 	shellPrintEndLine(&shell, "  control position=%lu/1000 volume=%lu seek=%lu failed=%lu\r\n",
 	                  (unsigned long)stats.position_permille,
 	                  (unsigned long)stats.volume,
@@ -2270,6 +2692,34 @@ int video_stats_cmd(int argc, char *argv[])
 	                  (unsigned long)stats.pending_video_frames,
 	                  (unsigned long)stats.pending_audio_chunks,
 	                  (unsigned long)stats.audio_deadline_frames);
+	shellPrintEndLine(&shell, "  pending off=0x%08lX remain=%lu end=0x%08lX age=%lu fifo_free=%lu waits=%lu\r\n",
+	                  (unsigned long)stats.active_audio_offset,
+	                  (unsigned long)stats.active_audio_remaining,
+	                  (unsigned long)stats.active_audio_end,
+	                  (unsigned long)stats.active_audio_age_ticks,
+	                  (unsigned long)stats.audio_fifo_free_bytes,
+	                  (unsigned long)stats.audio_wait_count);
+	shellPrintEndLine(&shell, "  audio chunk=%lu max=%lu run=%lu/%lu max_run=%lu/%lu\r\n",
+	                  (unsigned long)stats.current_audio_chunk_size,
+	                  (unsigned long)stats.max_audio_chunk_size,
+	                  (unsigned long)stats.audio_run_chunks,
+	                  (unsigned long)stats.audio_run_bytes,
+	                  (unsigned long)stats.max_audio_run_chunks,
+	                  (unsigned long)stats.max_audio_run_bytes);
+	shellPrintEndLine(&shell, "  clock epoch=%lu played=%lu media=%lu replay=%lu silence=%lu delta=%ld dma_age=%lu\r\n",
+	                  (unsigned long)stats.seek_count,
+	                  (unsigned long)stats.epoch_played_frames,
+	                  (unsigned long)stats.epoch_media_frames,
+	                  (unsigned long)stats.epoch_replayed_frames,
+	                  (unsigned long)stats.epoch_silence_frames,
+	                  (long)stats.audio_clock_delta_frames,
+	                  (unsigned long)stats.epoch_last_dma_age_ticks);
+	shellPrintEndLine(&shell, "  drop late=%lu oversize=%lu prebuffer=%lu consecutive=%lu max=%lu\r\n",
+	                  (unsigned long)stats.late_drop_count,
+	                  (unsigned long)stats.oversized_drop_count,
+	                  (unsigned long)stats.prebuffer_drop_count,
+	                  (unsigned long)stats.consecutive_late_drops,
+	                  (unsigned long)stats.max_consecutive_late_drops);
 	shellPrintEndLine(&shell, "  audio dma=%lu half=%lu full=%lu collide=%lu late=%lu\r\n",
 	                  (unsigned long)stats.audio_dma_events,
 	                  (unsigned long)stats.audio_dma_half_events,
@@ -2294,6 +2744,26 @@ int video_stats_cmd(int argc, char *argv[])
 	                  (unsigned long)stats.fatfs_read_bytes,
 	                  (unsigned long)stats.fatfs_read_errors,
 	                  (unsigned long)stats.jpeg_eoi_injected);
+	shellPrintEndLine(&shell, "  io active owner=%s op=%s age=%lu off=0x%08lX request=%lu\r\n",
+	                  video_shell_io_owner_text(stats.io_owner),
+	                  video_shell_io_operation_text(stats.io_active_operation),
+	                  (unsigned long)stats.io_active_age_ticks,
+	                  (unsigned long)stats.io_active_offset,
+	                  (unsigned long)stats.io_active_request_bytes);
+	shellPrintEndLine(&shell, "  io ticks parser=%lu/%lu/%lu pcm=%lu/%lu/%lu (last/max/slow)\r\n",
+	                  (unsigned long)stats.parser_io_last_ticks,
+	                  (unsigned long)stats.parser_io_max_ticks,
+	                  (unsigned long)stats.parser_io_slow_count,
+	                  (unsigned long)stats.pcm_io_last_ticks,
+	                  (unsigned long)stats.pcm_io_max_ticks,
+	                  (unsigned long)stats.pcm_io_slow_count);
+	shellPrintEndLine(&shell, "  io ticks jpeg=%lu/%lu/%lu video=%lu/%lu/%lu (last/max/slow)\r\n",
+	                  (unsigned long)stats.jpeg_io_last_ticks,
+	                  (unsigned long)stats.jpeg_io_max_ticks,
+	                  (unsigned long)stats.jpeg_io_slow_count,
+	                  (unsigned long)stats.video_io_last_ticks,
+	                  (unsigned long)stats.video_io_max_ticks,
+	                  (unsigned long)stats.video_io_slow_count);
 	shellPrintEndLine(&shell, "  avi err=%ld off=0x%08lX fourcc=%s size=%lu index_skip=%lu oversize=%lu pcm_tail=%lu\r\n",
 	                  (long)stats.avi_error_result,
 	                  (unsigned long)stats.avi_error_offset,

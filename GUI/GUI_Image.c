@@ -4,7 +4,6 @@
 #include "Malloc.h"
 #include "libjpeg.h"
 #include "jerror.h"
-#include "shell_support.h"
 #include "src/draw/lv_img_cache.h"
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
@@ -25,20 +24,12 @@
 #define GUI_IMAGE_DECODE_STACK_SIZE  8192U
 #define GUI_IMAGE_CLEANUP_DELAY_TICKS 2U
 
-#ifndef GUI_IMAGE_JPEG_LOG_ENABLE
-#define GUI_IMAGE_JPEG_LOG_ENABLE    0U
-#endif
-
 #ifndef GUI_IMAGE_JPEG_LOG_SCANLINE_STEP
 #define GUI_IMAGE_JPEG_LOG_SCANLINE_STEP 32U
 #endif
 
-#if GUI_IMAGE_JPEG_LOG_ENABLE
-extern Shell shell;
-#define GUI_IMAGE_JPEG_LOG(fmt, ...) shellPrintEndLine(&shell, "[IMGJPG] " fmt "\r\n", __VA_ARGS__)
-#else
-#define GUI_IMAGE_JPEG_LOG(fmt, ...) ((void)0)
-#endif
+#define GUI_IMAGE_JPEG_LOG(fmt, ...) \
+	System_DebugLogPrint(SYSTEM_DEBUG_LOG_LIBJPEG, "[IMAGE] " fmt "\r\n", __VA_ARGS__)
 
 typedef enum
 {
@@ -948,10 +939,10 @@ static void GUI_Image_JpegErrorExit(j_common_ptr cinfo)
 
 static void GUI_Image_JpegOutputMessage(j_common_ptr cinfo)
 {
-#if GUI_IMAGE_JPEG_LOG_ENABLE
 	GUI_ImageJpegError_t *err;
 
-	if (cinfo == NULL || cinfo->err == NULL)
+	if (cinfo == NULL || cinfo->err == NULL ||
+	    System_DebugLogEnabled(SYSTEM_DEBUG_LOG_LIBJPEG) == 0U)
 	{
 		return;
 	}
@@ -966,9 +957,6 @@ static void GUI_Image_JpegOutputMessage(j_common_ptr cinfo)
 	GUI_IMAGE_JPEG_LOG("message code=%d msg=%s",
 	                   err->msg_code,
 	                   err->message);
-#else
-	(void)cinfo;
-#endif
 }
 
 static const char *GUI_Image_ResultText(GUI_ImageDecodeResult_t result)
