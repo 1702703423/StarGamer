@@ -70,15 +70,25 @@ void nes_get_gamepadval(void);
 void nes_emulate_frame();
 void debug_6502(u16 reg0,u8 reg1);
 
-void nes_i2s_dma_tx_callback(void);
+typedef struct NES_AudioStats
+{
+	u32 dma_callbacks;
+	u32 dma_sequence_gaps;
+	u32 fill_timeouts;
+	u32 write_errors;
+	u32 queue_overflows;
+} NES_AudioStats_t;
+
+void nes_i2s_dma_tx_callback(u8 idle_index, u32 sequence);
 int nes_sound_open(int samples_per_sync,int sample_rate);
 void nes_sound_close(void);
 void nes_apu_fill_buffer(int samples,u8* wavebuf);
+void nes_audio_get_stats(NES_AudioStats_t *stats);
+void nes_audio_reset_stats(void);
 
 extern u32 get_crc32(u8* buf, u32 len);
 
 #endif
-
 
 
 

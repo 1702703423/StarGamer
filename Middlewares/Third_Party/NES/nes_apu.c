@@ -59,9 +59,19 @@ static const int duty_lut[4] = { 2, 4, 8, 12 };
 
 void apu_enqueue(apudata_t *d)
 {
-   apu->queue[apu->q_head] = *d;
+	int next_head;
 
-   apu->q_head = (apu->q_head + 1) & APUQUEUE_MASK; 
+	next_head = (apu->q_head + 1) & APUQUEUE_MASK;
+	if(next_head == apu->q_tail)
+	{
+		/* Keep the newest register writes instead of making a full queue
+		 * indistinguishable from an empty one. */
+		apu->q_tail = (apu->q_tail + 1) & APUQUEUE_MASK;
+		apu->queue_overflow_count++;
+	}
+
+   apu->queue[apu->q_head] = *d;
+   apu->q_head = next_head;
 }
 
 apudata_t *apu_dequeue(void)
@@ -335,7 +345,7 @@ int apu_noise(noise_t *chan)
 
    APU_VOLUME_DECAY(chan->output_vol);
 
-   if (FALSE == chan->enabled || 0 == chan->vbl_length)
+   if (FALSE == chan->enabled || 0 == chan->vbl_length || 0 == chan->freq)
       return APU_NOISE_OUTPUT;
 
    /* vbl length counter */
@@ -392,8 +402,6 @@ int apu_noise(noise_t *chan)
 
    while (chan->phaseacc < 0)
    {
-      
-	   if(chan->freq==0)break;//*******我加的*****************这个游戏是0/////////////////////////
 	   chan->phaseacc += chan->freq;
 
 #ifdef REALTIME_NOISE
@@ -1138,10 +1146,11 @@ void apu_reset(void)
 	apu->elapsed_cycles = 0;
 	memset(&apu->queue, 0, APUQUEUE_SIZE * sizeof(apudata_t));
 	apu->q_head = apu->q_tail = 0;
+	apu->queue_overflow_count = 0U;
 
 	/* use to avoid bugs =) */
-	for (address = 0x00; address <= 0x13; address++)apu_regwrite(address, 0);
-	apu_regwrite(0x15, 0x00);
+	for (address = APU_WRA0; address <= APU_WRE3; address++)apu_regwrite(address, 0);
+	apu_regwrite(APU_SMASK, 0x00);
 	if (apu->ext)apu->ext->reset();
 }
 
@@ -1208,14 +1217,19 @@ void apu_init(void)
 //apu声音输出
 void apu_soundoutput(void)          
 {	 
-	u16 i;
+	apudata_t *d;
+
 	apu_process(wave_buffers,apu->num_samples);
-	for(i=0;i<30;i++)if(wave_buffers[i]!=wave_buffers[i+1])break;//判断前30个数据,是不是都相等?
-	if(i==30&&wave_buffers[i])//都相等,且不等于0
+
+	/* The CPU and APU timestamps are relative to one emulated frame. Apply
+	 * writes beyond the last generated sample at the frame boundary before
+	 * resetting both clocks, so the next frame starts from the same epoch. */
+	while(FALSE == APU_QEMPTY())
 	{
-		for(i=0;i<apu->num_samples;i++)wave_buffers[i]=0x80;//是暂停状态输出的重复无效数据,直接修改为静音.		
+		d = apu_dequeue();
+		apu_regwrite(d->address, d->value);
 	}
-	clocks=0;
+	clocks = 0U;
+	apu->elapsed_cycles = 0U;
 	nes_apu_fill_buffer(apu->num_samples,(u8*)wave_buffers);
 }
-

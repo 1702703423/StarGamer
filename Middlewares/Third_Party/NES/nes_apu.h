@@ -228,6 +228,7 @@ typedef struct apu_s
 
 	apudata_t queue[APUQUEUE_SIZE];//APUQUEUE_SIZE
 	int q_head, q_tail;
+	u32 queue_overflow_count;
 	u32 elapsed_cycles;
 
 	void *buffer; /* pointer to output buffer输出缓冲区指针 */
@@ -269,7 +270,6 @@ void apu_write4017(u32 address, u8 value);
 }
 #endif  
 #endif  
-
 
 
 

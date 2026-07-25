@@ -69,32 +69,36 @@ u8 nes_xoff=0;	//显示在x轴方向的偏移量(实际显示宽度=256-2*nes_xo
 #define NES_PAD_LEFT               0x40U
 #define NES_PAD_RIGHT              0x80U
 
-static volatile u8 nes_apu_dma_ready_mask = 0;
 static volatile u8 nes_apu_dma_running = 0;
+static volatile u8 nes_apu_dma_idle_index = 0;
+static volatile u32 nes_apu_dma_sequence = 0;
+static u32 nes_apu_dma_consumed_sequence = 0;
 static u16 nes_apu_dma_pkg_size = APU_PCMBUF_SIZE;
+static volatile u32 nes_apu_dma_callback_count = 0;
+static volatile u32 nes_apu_dma_sequence_gap_count = 0;
+static volatile u32 nes_apu_fill_timeout_count = 0;
+static volatile u32 nes_apu_write_error_count = 0;
 
 static int nes_apu_try_take_ready_buffer(void)
 {
 	u32 primask;
-	u8 mask;
-	u8 idle_index;
-	u8 idle_mask;
+	u32 sequence;
+	u32 sequence_delta;
 	int dma_index = -1;
 
 	primask = __get_PRIMASK();
 	__disable_irq();
 
-	mask = nes_apu_dma_ready_mask;
-	idle_index = audio_card_get_idle_buffer_index();
-	idle_mask = (u8)(1U << idle_index);
-	if(mask & idle_mask)
+	sequence = nes_apu_dma_sequence;
+	if(sequence != nes_apu_dma_consumed_sequence)
 	{
-		nes_apu_dma_ready_mask = ((mask & 0x03) == 0x03) ? 0 : (mask & (u8)~idle_mask);
-		dma_index = idle_index;
-	}
-	else if(mask != 0)
-	{
-		nes_apu_dma_ready_mask = 0;
+		sequence_delta = sequence - nes_apu_dma_consumed_sequence;
+		if(sequence_delta > 1U)
+		{
+			nes_apu_dma_sequence_gap_count += sequence_delta - 1U;
+		}
+		nes_apu_dma_consumed_sequence = sequence;
+		dma_index = (int)nes_apu_dma_idle_index;
 	}
 
 	__set_PRIMASK(primask);
@@ -488,8 +492,11 @@ int nes_sound_open(int samples_per_sync,int sample_rate)
 	}
 
 	nes_apu_dma_running = 0;
-	nes_apu_dma_ready_mask = 0;
+	nes_apu_dma_idle_index = 0U;
+	nes_apu_dma_sequence = 0U;
+	nes_apu_dma_consumed_sequence = 0U;
 	nes_apu_dma_pkg_size = pkg_size;
+	nes_audio_reset_stats();
 
 	audio_card_init(NES_APU_VOLUME);
 	if(audio_card_open_prepare(sample_rate, NES_APU_SAMPLE_BITS, NES_APU_CHANNELS, pkg_size) != 0)
@@ -497,7 +504,7 @@ int nes_sound_open(int samples_per_sync,int sample_rate)
 		return 0;
 	}
 
-	audio_card_register_tx(nes_i2s_dma_tx_callback);
+	audio_card_register_tx_index(nes_i2s_dma_tx_callback);
 	nes_apu_make_silence(wave_buffers, pkg_size);
 	audio_card_write_to_buffer(0, wave_buffers, pkg_size);
 	audio_card_write_to_buffer(1, wave_buffers, pkg_size);
@@ -515,8 +522,7 @@ int nes_sound_open(int samples_per_sync,int sample_rate)
 void nes_sound_close(void) 
 { 
 	nes_apu_dma_running = 0;
-	nes_apu_dma_ready_mask = 0;
-	audio_card_register_tx(NULL);
+	audio_card_register_tx_index(NULL);
 	audio_card_close();
 
 }
@@ -548,18 +554,60 @@ void nes_apu_fill_buffer(int samples,u8* wavebuf)
 	dma_index = nes_apu_take_ready_buffer();
 	if(dma_index < 0)
 	{
+		nes_apu_fill_timeout_count++;
 		return;
 	}
 
-	audio_card_write_to_buffer((u8)dma_index, wavebuf, pkg_size);
+	if(audio_card_write_to_buffer((u8)dma_index, wavebuf, pkg_size) != 0)
+	{
+		nes_apu_write_error_count++;
+	}
 }
 
-void nes_i2s_dma_tx_callback(void)
+void nes_i2s_dma_tx_callback(u8 idle_index, u32 sequence)
 {
 	if(!nes_apu_dma_running)
 	{
 		return;
 	}
 
-	nes_apu_dma_ready_mask |= (u8)(1U << audio_card_get_idle_buffer_index());
+	nes_apu_dma_idle_index = idle_index;
+	nes_apu_dma_sequence = sequence;
+	nes_apu_dma_callback_count++;
+}
+
+void nes_audio_get_stats(NES_AudioStats_t *stats)
+{
+	u32 primask;
+
+	if(stats == NULL)
+	{
+		return;
+	}
+
+	primask = __get_PRIMASK();
+	__disable_irq();
+	stats->dma_callbacks = nes_apu_dma_callback_count;
+	stats->dma_sequence_gaps = nes_apu_dma_sequence_gap_count;
+	stats->fill_timeouts = nes_apu_fill_timeout_count;
+	stats->write_errors = nes_apu_write_error_count;
+	stats->queue_overflows = (apu != NULL) ? apu->queue_overflow_count : 0U;
+	__set_PRIMASK(primask);
+}
+
+void nes_audio_reset_stats(void)
+{
+	u32 primask;
+
+	primask = __get_PRIMASK();
+	__disable_irq();
+	nes_apu_dma_callback_count = 0U;
+	nes_apu_dma_sequence_gap_count = 0U;
+	nes_apu_fill_timeout_count = 0U;
+	nes_apu_write_error_count = 0U;
+	if(apu != NULL)
+	{
+		apu->queue_overflow_count = 0U;
+	}
+	__set_PRIMASK(primask);
 }
