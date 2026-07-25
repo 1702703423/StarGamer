@@ -75,6 +75,7 @@ typedef struct System_Settings
 	u8 MemoryDumpCcmEnabled;
 	u8 MemoryDumpMainSramEnabled;
 	u8 MemoryDumpSramexEnabled;
+	u8 ThemeLightEnabled;
 }System_Settings_t;
 
 typedef enum System_DebugLog
@@ -133,6 +134,8 @@ int System_Settings_Save(void);
 u8 System_Settings_FontInstalled(void);
 u8 System_Settings_UsbMscEnabled(void);
 int System_Settings_SetUsbMscEnabled(u8 enabled);
+u8 System_Settings_ThemeLightEnabled(void);
+int System_Settings_SetThemeLightEnabled(u8 enabled);
 u8 System_DebugEnabled(void);
 u8 System_DebugShellEnabled(void);
 u8 System_DebugLogEnabled(System_DebugLog_t source);

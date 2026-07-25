@@ -2,6 +2,7 @@
 
 #include "Arduboy_Games.h"
 #include "Arduboy_Runtime.h"
+#include "GUI_Theme.h"
 #include "System_Status.h"
 
 #include <stdio.h>
@@ -100,7 +101,7 @@ static int GUI_Arduboy_PageBuild(Page_Struct_t *page)
 	s_arduboy.last_result = ARDUBOY_RUNTIME_RESULT_NONE;
 
 	lv_obj_clear_flag(page->screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(page->screen, lv_color_hex(0x101418U), 0);
+	lv_obj_set_style_bg_color(page->screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 	lv_obj_set_style_bg_opa(page->screen, LV_OPA_COVER, 0);
 	GUI_Arduboy_CreateHeader(&s_arduboy);
 	GUI_Arduboy_CreateList(&s_arduboy);
@@ -141,7 +142,7 @@ static void GUI_Arduboy_CreateHeader(GUI_ArduboyContext_t *context)
 
 	title = lv_label_create(context->screen);
 	lv_label_set_text(title, "Arduboy");
-	lv_obj_set_style_text_color(title, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 9);
 
 	context->back_button = lv_btn_create(context->screen);
@@ -149,8 +150,8 @@ static void GUI_Arduboy_CreateHeader(GUI_ArduboyContext_t *context)
 	lv_obj_set_size(context->back_button, 42, 28);
 	lv_obj_set_pos(context->back_button, 268, 6);
 	lv_obj_set_style_radius(context->back_button, 8, 0);
-	lv_obj_set_style_bg_color(context->back_button, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_color(context->back_button, lv_color_hex(0x344150U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->back_button, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(context->back_button, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(context->back_button, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(context->back_button, 0, 0);
 	lv_obj_set_style_border_width(context->back_button, 2, LV_STATE_FOCUSED);
@@ -163,7 +164,7 @@ static void GUI_Arduboy_CreateHeader(GUI_ArduboyContext_t *context)
 
 	icon = lv_label_create(context->back_button);
 	lv_label_set_text(icon, LV_SYMBOL_LEFT);
-	lv_obj_set_style_text_color(icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(icon);
 
 	line = lv_obj_create(context->screen);
@@ -172,7 +173,7 @@ static void GUI_Arduboy_CreateHeader(GUI_ArduboyContext_t *context)
 	lv_obj_set_pos(line, 12, 36);
 	lv_obj_set_style_radius(line, 0, 0);
 	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, lv_color_hex(0x303844U), 0);
+	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
 	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
 }
 
@@ -188,8 +189,8 @@ static void GUI_Arduboy_CreateList(GUI_ArduboyContext_t *context)
 	lv_obj_set_pos(context->list, GUI_ARDUBOY_LIST_X, GUI_ARDUBOY_LIST_Y);
 	lv_obj_set_style_radius(context->list, 6, 0);
 	lv_obj_set_style_border_width(context->list, 1, 0);
-	lv_obj_set_style_border_color(context->list, lv_color_hex(0x303844U), 0);
-	lv_obj_set_style_bg_color(context->list, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_border_color(context->list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BORDER), 0);
+	lv_obj_set_style_bg_color(context->list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BG), 0);
 	lv_obj_set_style_bg_opa(context->list, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->list, 2, 0);
 	lv_obj_set_scrollbar_mode(context->list, LV_SCROLLBAR_MODE_OFF);
@@ -216,16 +217,16 @@ static void GUI_Arduboy_CreateList(GUI_ArduboyContext_t *context)
 		context->game_buttons[i] = button;
 		lv_obj_set_height(button, GUI_ARDUBOY_ROW_H);
 		lv_obj_set_style_radius(button, 4, 0);
-		lv_obj_set_style_bg_color(button, lv_color_hex(0x182028U), 0);
-		lv_obj_set_style_bg_color(button, lv_color_hex(0x263240U), LV_STATE_PRESSED);
-		lv_obj_set_style_bg_color(button, lv_color_hex(0x22303AU), LV_STATE_FOCUSED);
+		lv_obj_set_style_bg_color(button, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+		lv_obj_set_style_bg_color(button, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
+		lv_obj_set_style_bg_color(button, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
 		lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
 		lv_obj_set_style_border_width(button, 0, 0);
 		lv_obj_set_style_border_width(button, 2, LV_STATE_FOCUSED);
 		lv_obj_set_style_border_color(button, lv_color_hex(GUI_ARDUBOY_ACCENT), LV_STATE_FOCUSED);
 		lv_obj_set_style_outline_width(button, 0, 0);
-		lv_obj_set_style_text_color(button, lv_color_hex(0xEEF2F6U), 0);
-		lv_obj_set_style_text_color(button, lv_color_hex(0x6F7A86U), LV_STATE_DISABLED);
+		lv_obj_set_style_text_color(button, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+		lv_obj_set_style_text_color(button, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_DISABLED), LV_STATE_DISABLED);
 		lv_obj_add_event_cb(button, GUI_Arduboy_GameEvent, LV_EVENT_CLICKED, &context->game_indices[i]);
 		lv_obj_add_event_cb(button, GUI_Arduboy_GameEvent, LV_EVENT_KEY, &context->game_indices[i]);
 	}
@@ -234,7 +235,7 @@ static void GUI_Arduboy_CreateList(GUI_ArduboyContext_t *context)
 	lv_label_set_long_mode(context->status_label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(context->status_label, 296);
 	lv_obj_set_pos(context->status_label, 12, GUI_ARDUBOY_STATUS_Y);
-	lv_obj_set_style_text_color(context->status_label, lv_color_hex(0x8E98A4U), 0);
+	lv_obj_set_style_text_color(context->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_MUTED), 0);
 }
 
 static void GUI_Arduboy_BackEvent(lv_event_t *event)

@@ -12,8 +12,9 @@
 
 #define SYSTEM_SETTINGS_EEPROM_ADDR       0U
 #define SYSTEM_SETTINGS_MAGIC             0x53544753UL
-#define SYSTEM_SETTINGS_VERSION           2U
-#define SYSTEM_SETTINGS_LEGACY_VERSION    1U
+#define SYSTEM_SETTINGS_VERSION           3U
+#define SYSTEM_SETTINGS_VERSION_V2        2U
+#define SYSTEM_SETTINGS_VERSION_V1        1U
 #define SYSTEM_SETTINGS_DEFAULT_VOLUME    70UL
 #define SYSTEM_SETTINGS_DEFAULT_LIGHT     100U
 #define SYSTEM_SETTINGS_DEFAULT_FONT_LINE 21U
@@ -35,6 +36,31 @@ typedef struct System_SettingsV1
 	u16 FontMaxUnicode;
 } System_SettingsV1_t;
 
+typedef struct System_SettingsV2
+{
+	u32 volume;
+	u8 Debug;
+	u8 UsbMscEnabled;
+	u16 ScreenLight;
+	u8 FontInstalled;
+	u8 FontBpp;
+	u8 FontLineHeight;
+	u8 FontBaseLine;
+	u32 FontFlashAddress;
+	u32 FontSize;
+	u16 FontMinUnicode;
+	u16 FontMaxUnicode;
+	u8 DebugShellEnabled;
+	u8 DebugAudioLogEnabled;
+	u8 DebugVideoLogEnabled;
+	u8 DebugLibjpegLogEnabled;
+	u8 DebugFatfsLogEnabled;
+	u8 MemoryDumpEnabled;
+	u8 MemoryDumpCcmEnabled;
+	u8 MemoryDumpMainSramEnabled;
+	u8 MemoryDumpSramexEnabled;
+} System_SettingsV2_t;
+
 typedef struct System_Settings_Record
 {
 	u32 magic;
@@ -43,6 +69,15 @@ typedef struct System_Settings_Record
 	System_Settings_t settings;
 	u32 checksum;
 }System_Settings_Record_t;
+
+typedef struct System_Settings_RecordV2
+{
+	u32 magic;
+	u16 version;
+	u16 size;
+	System_SettingsV2_t settings;
+	u32 checksum;
+} System_Settings_RecordV2_t;
 
 typedef struct System_Settings_RecordV1
 {
@@ -56,6 +91,7 @@ typedef struct System_Settings_RecordV1
 typedef union System_Settings_Storage
 {
 	System_Settings_Record_t current;
+	System_Settings_RecordV2_t v2;
 	System_Settings_RecordV1_t legacy;
 } System_Settings_Storage_t;
 
@@ -532,6 +568,7 @@ void System_Settings_SetDefaults(System_Settings_t* settings)
 	settings->MemoryDumpMainSramEnabled = 1U;
 	settings->MemoryDumpSramexEnabled = 1U;
 	settings->UsbMscEnabled = 0U;
+	settings->ThemeLightEnabled = 0U;
 	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
 	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
 	settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
@@ -564,6 +601,7 @@ int System_Settings_Load(void)
 {
 	System_Settings_Storage_t storage;
 	System_Settings_Record_t* record;
+	System_Settings_RecordV2_t* v2;
 	System_Settings_RecordV1_t* legacy;
 	u32 checksum;
 	AT24C02_StatusTypeDef status;
@@ -588,11 +626,45 @@ int System_Settings_Load(void)
 		return SYSTEM_STATUS_OK;
 	}
 
+	v2 = &storage.v2;
+	checksum = System_Settings_Checksum((const u8*)v2,
+		(u16)(sizeof(*v2) - sizeof(v2->checksum)));
+	if (v2->magic == SYSTEM_SETTINGS_MAGIC &&
+	    v2->version == SYSTEM_SETTINGS_VERSION_V2 &&
+	    v2->size == (u16)sizeof(System_SettingsV2_t) &&
+	    v2->checksum == checksum)
+	{
+		System_Settings_SetDefaults(&System_Settings);
+		System_Settings.volume = v2->settings.volume;
+		System_Settings.Debug = v2->settings.Debug;
+		System_Settings.UsbMscEnabled = v2->settings.UsbMscEnabled;
+		System_Settings.ScreenLight = v2->settings.ScreenLight;
+		System_Settings.FontInstalled = v2->settings.FontInstalled;
+		System_Settings.FontBpp = v2->settings.FontBpp;
+		System_Settings.FontLineHeight = v2->settings.FontLineHeight;
+		System_Settings.FontBaseLine = v2->settings.FontBaseLine;
+		System_Settings.FontFlashAddress = v2->settings.FontFlashAddress;
+		System_Settings.FontSize = v2->settings.FontSize;
+		System_Settings.FontMinUnicode = v2->settings.FontMinUnicode;
+		System_Settings.FontMaxUnicode = v2->settings.FontMaxUnicode;
+		System_Settings.DebugShellEnabled = v2->settings.DebugShellEnabled;
+		System_Settings.DebugAudioLogEnabled = v2->settings.DebugAudioLogEnabled;
+		System_Settings.DebugVideoLogEnabled = v2->settings.DebugVideoLogEnabled;
+		System_Settings.DebugLibjpegLogEnabled = v2->settings.DebugLibjpegLogEnabled;
+		System_Settings.DebugFatfsLogEnabled = v2->settings.DebugFatfsLogEnabled;
+		System_Settings.MemoryDumpEnabled = v2->settings.MemoryDumpEnabled;
+		System_Settings.MemoryDumpCcmEnabled = v2->settings.MemoryDumpCcmEnabled;
+		System_Settings.MemoryDumpMainSramEnabled = v2->settings.MemoryDumpMainSramEnabled;
+		System_Settings.MemoryDumpSramexEnabled = v2->settings.MemoryDumpSramexEnabled;
+		System_Settings_Normalize(&System_Settings);
+		return System_Settings_Save();
+	}
+
 	legacy = &storage.legacy;
 	checksum = System_Settings_Checksum((const u8*)legacy,
 		(u16)(sizeof(*legacy) - sizeof(legacy->checksum)));
 	if (legacy->magic != SYSTEM_SETTINGS_MAGIC ||
-	    legacy->version != SYSTEM_SETTINGS_LEGACY_VERSION ||
+	    legacy->version != SYSTEM_SETTINGS_VERSION_V1 ||
 	    legacy->size != (u16)sizeof(System_SettingsV1_t) ||
 	    legacy->checksum != checksum)
 	{
@@ -661,6 +733,27 @@ int System_Settings_SetUsbMscEnabled(u8 enabled)
 	if (code != SYSTEM_STATUS_OK)
 	{
 		System_Settings.UsbMscEnabled = old_enabled;
+	}
+
+	return code;
+}
+
+u8 System_Settings_ThemeLightEnabled(void)
+{
+	return (System_Settings.ThemeLightEnabled != 0U) ? 1U : 0U;
+}
+
+int System_Settings_SetThemeLightEnabled(u8 enabled)
+{
+	u8 old_enabled;
+	int code;
+
+	old_enabled = System_Settings.ThemeLightEnabled;
+	System_Settings.ThemeLightEnabled = (enabled != 0U) ? 1U : 0U;
+	code = System_Settings_Save();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		System_Settings.ThemeLightEnabled = old_enabled;
 	}
 
 	return code;
@@ -806,6 +899,7 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 	settings->MemoryDumpMainSramEnabled = (settings->MemoryDumpMainSramEnabled != 0U) ? 1U : 0U;
 	settings->MemoryDumpSramexEnabled = (settings->MemoryDumpSramexEnabled != 0U) ? 1U : 0U;
 	settings->UsbMscEnabled = (settings->UsbMscEnabled != 0U) ? 1U : 0U;
+	settings->ThemeLightEnabled = (settings->ThemeLightEnabled != 0U) ? 1U : 0U;
 	valid_font = (settings->FontInstalled != 0U &&
 	              settings->FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&
 	              settings->FontSize > 0U &&

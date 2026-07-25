@@ -1,5 +1,6 @@
 #include "GUI_Font.h"
 #include "GUI_FileManage.h"
+#include "GUI_Theme.h"
 #include "System_Status.h"
 #include "Malloc.h"
 #include "w25q64.h"
@@ -286,7 +287,7 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 	lv_bar_set_range(context->progress_bar, 0, 100);
 	lv_bar_set_value(context->progress_bar, 0, LV_ANIM_OFF);
 	lv_obj_set_style_radius(context->progress_bar, 2, 0);
-	lv_obj_set_style_bg_color(context->progress_bar, lv_color_hex(0x252D36U), 0);
+	lv_obj_set_style_bg_color(context->progress_bar, GUI_Theme_LvColor(GUI_THEME_COLOR_SLIDER_BG), 0);
 	lv_obj_set_style_bg_opa(context->progress_bar, LV_OPA_COVER, 0);
 	lv_obj_set_style_bg_color(context->progress_bar, lv_color_hex(GUI_FONT_ACCENT), LV_PART_INDICATOR);
 	lv_obj_set_style_bg_opa(context->progress_bar, LV_OPA_COVER, LV_PART_INDICATOR);
@@ -296,7 +297,7 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 	lv_obj_set_width(context->progress_label, 52);
 	lv_obj_set_pos(context->progress_label, 258, 207);
 	lv_obj_set_style_text_align(context->progress_label, LV_TEXT_ALIGN_RIGHT, 0);
-	lv_obj_set_style_text_color(context->progress_label, lv_color_hex(0xAEB7C2U), 0);
+	lv_obj_set_style_text_color(context->progress_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
 
 	context->timer = lv_timer_create(GUI_Font_Timer, 100U, context);
 	if (context->timer == NULL)

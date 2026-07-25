@@ -1,6 +1,7 @@
 #include "GUI_Text.h"
 #include "GUI_FileManage.h"
 #include "GUI_Font.h"
+#include "GUI_Theme.h"
 #include "System_Status.h"
 #include "Malloc.h"
 #include "ff.h"
@@ -315,7 +316,7 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 	lv_obj_set_pos(context->viewer, 0, 0);
 	lv_obj_set_style_radius(context->viewer, 0, 0);
 	lv_obj_set_style_border_width(context->viewer, 0, 0);
-	lv_obj_set_style_bg_color(context->viewer, lv_color_hex(0x101418U), 0);
+	lv_obj_set_style_bg_color(context->viewer, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 	lv_obj_set_style_bg_opa(context->viewer, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->viewer, 0, 0);
 
@@ -331,7 +332,7 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 	lv_label_set_long_mode(context->title_label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(context->title_label, 170);
 	lv_obj_set_pos(context->title_label, 52, 10);
-	lv_obj_set_style_text_color(context->title_label, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(context->title_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 
 	line = lv_obj_create(context->viewer);
 	if (line == NULL)
@@ -343,7 +344,7 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 	lv_obj_set_pos(line, 12, 36);
 	lv_obj_set_style_radius(line, 0, 0);
 	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, lv_color_hex(0x303844U), 0);
+	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
 	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
 
 	context->text_panel = lv_obj_create(context->viewer);
@@ -358,13 +359,13 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 	lv_obj_set_scrollbar_mode(context->text_panel, LV_SCROLLBAR_MODE_AUTO);
 	lv_obj_set_style_radius(context->text_panel, 6, 0);
 	lv_obj_set_style_border_width(context->text_panel, 1, 0);
-	lv_obj_set_style_border_color(context->text_panel, lv_color_hex(0x304150U), 0);
+	lv_obj_set_style_border_color(context->text_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BORDER), 0);
 	lv_obj_set_style_border_width(context->text_panel, 2, LV_STATE_FOCUSED);
 	lv_obj_set_style_border_color(context->text_panel, lv_color_hex(GUI_TEXT_ACCENT), LV_STATE_FOCUSED);
 	lv_obj_set_style_outline_width(context->text_panel, 2, LV_STATE_FOCUSED);
 	lv_obj_set_style_outline_pad(context->text_panel, 1, LV_STATE_FOCUSED);
 	lv_obj_set_style_outline_color(context->text_panel, lv_color_hex(GUI_TEXT_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_bg_color(context->text_panel, lv_color_hex(0x151D25U), 0);
+	lv_obj_set_style_bg_color(context->text_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_VIEWER_BG), 0);
 	lv_obj_set_style_bg_opa(context->text_panel, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->text_panel, 8, 0);
 	lv_obj_add_event_cb(context->text_panel, GUI_Text_ViewerEvent, LV_EVENT_KEY, context);
@@ -376,7 +377,7 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 	}
 	lv_label_set_long_mode(context->text_label, LV_LABEL_LONG_WRAP);
 	lv_obj_set_width(context->text_label, 280);
-	lv_obj_set_style_text_color(context->text_label, lv_color_hex(0xE8EEF4U), 0);
+	lv_obj_set_style_text_color(context->text_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
 	lv_obj_set_style_text_line_space(context->text_label, 2, 0);
 	lv_label_set_text_static(context->text_label, "");
 
@@ -388,7 +389,7 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 	lv_label_set_long_mode(context->status_label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(context->status_label, 296);
 	lv_obj_set_pos(context->status_label, 12, 216);
-	lv_obj_set_style_text_color(context->status_label, lv_color_hex(0xAEB7C2U), 0);
+	lv_obj_set_style_text_color(context->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
 	lv_label_set_text(context->status_label, "");
 
 	lv_obj_add_flag(context->viewer, LV_OBJ_FLAG_HIDDEN);
@@ -409,9 +410,9 @@ static lv_obj_t *GUI_Text_CreateIconButton(lv_obj_t *parent, const char *symbol,
 	lv_obj_set_size(btn, 36, 28);
 	lv_obj_set_pos(btn, x, 5);
 	lv_obj_set_style_radius(btn, 8, 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x344150U), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x1B2128U), LV_STATE_DISABLED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_DISABLED), LV_STATE_DISABLED);
 	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
 	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
@@ -426,7 +427,7 @@ static lv_obj_t *GUI_Text_CreateIconButton(lv_obj_t *parent, const char *symbol,
 
 	icon = lv_label_create(btn);
 	lv_label_set_text(icon, symbol);
-	lv_obj_set_style_text_color(icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(icon);
 
 	return btn;

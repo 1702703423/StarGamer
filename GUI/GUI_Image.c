@@ -1,5 +1,6 @@
 #include "GUI_Image.h"
 #include "GUI_FileManage.h"
+#include "GUI_Theme.h"
 #include "System_Status.h"
 #include "Malloc.h"
 #include "libjpeg.h"
@@ -356,7 +357,7 @@ static void GUI_Image_CreateViewer(GUI_ImageContext_t *context)
 	lv_obj_set_pos(context->viewer, 0, 0);
 	lv_obj_set_style_radius(context->viewer, 0, 0);
 	lv_obj_set_style_border_width(context->viewer, 0, 0);
-	lv_obj_set_style_bg_color(context->viewer, lv_color_black(), 0);
+	lv_obj_set_style_bg_color(context->viewer, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 	lv_obj_set_style_bg_opa(context->viewer, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->viewer, 0, 0);
 
@@ -368,8 +369,8 @@ static void GUI_Image_CreateViewer(GUI_ImageContext_t *context)
 	lv_obj_set_size(context->close_btn, GUI_IMAGE_CLOSE_W, GUI_IMAGE_CLOSE_H);
 	lv_obj_set_pos(context->close_btn, GUI_IMAGE_SCREEN_W - GUI_IMAGE_CLOSE_W - 6, 6);
 	lv_obj_set_style_radius(context->close_btn, 6, 0);
-	lv_obj_set_style_bg_color(context->close_btn, lv_color_hex(0x1D232AU), 0);
-	lv_obj_set_style_bg_color(context->close_btn, lv_color_hex(0x333B45U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(context->close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(context->close_btn, LV_OPA_80, 0);
 	lv_obj_set_style_border_width(context->close_btn, 0, 0);
 	lv_obj_set_style_border_width(context->close_btn, 2, LV_STATE_FOCUSED);
@@ -384,7 +385,7 @@ static void GUI_Image_CreateViewer(GUI_ImageContext_t *context)
 
 	context->close_icon = lv_label_create(context->close_btn);
 	lv_label_set_text(context->close_icon, LV_SYMBOL_CLOSE);
-	lv_obj_set_style_text_color(context->close_icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(context->close_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(context->close_icon);
 
 	lv_obj_add_flag(context->viewer, LV_OBJ_FLAG_HIDDEN);

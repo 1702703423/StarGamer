@@ -1,6 +1,7 @@
 #include "GUI_Player.h"
 #include "GUI_FileManage.h"
 #include "GUI_Font.h"
+#include "GUI_Theme.h"
 #include "Player.h"
 #include "i2s.h"
 #include "System_Status.h"
@@ -286,8 +287,8 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_obj_set_pos(context->info_panel, GUI_PLAYER_INFO_X, GUI_PLAYER_INFO_Y);
 	lv_obj_set_style_radius(context->info_panel, 6, 0);
 	lv_obj_set_style_border_width(context->info_panel, 1, 0);
-	lv_obj_set_style_border_color(context->info_panel, lv_color_hex(0x304150U), 0);
-	lv_obj_set_style_bg_color(context->info_panel, lv_color_hex(0x151D25U), 0);
+	lv_obj_set_style_border_color(context->info_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BORDER), 0);
+	lv_obj_set_style_bg_color(context->info_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_VIEWER_BG), 0);
 	lv_obj_set_style_bg_opa(context->info_panel, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->info_panel, 0, 0);
 
@@ -295,21 +296,21 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_label_set_long_mode(context->track_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
 	lv_obj_set_width(context->track_label, 280);
 	lv_obj_set_pos(context->track_label, 10, 5);
-	lv_obj_set_style_text_color(context->track_label, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(context->track_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	GUI_Player_ApplyTrackFont(context->track_label);
 
 	context->state_label = lv_label_create(context->info_panel);
 	lv_label_set_long_mode(context->state_label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(context->state_label, 138);
 	lv_obj_set_pos(context->state_label, 10, 28);
-	lv_obj_set_style_text_color(context->state_label, lv_color_hex(0x95A3B0U), 0);
+	lv_obj_set_style_text_color(context->state_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_MUTED), 0);
 
 	context->time_label = lv_label_create(context->info_panel);
 	lv_label_set_long_mode(context->time_label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(context->time_label, 138);
 	lv_obj_set_pos(context->time_label, 152, 28);
 	lv_obj_set_style_text_align(context->time_label, LV_TEXT_ALIGN_RIGHT, 0);
-	lv_obj_set_style_text_color(context->time_label, lv_color_hex(0xDDE5ECU), 0);
+	lv_obj_set_style_text_color(context->time_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
 
 	context->seek_slider = lv_slider_create(context->info_panel);
 	lv_obj_clear_flag(context->seek_slider, LV_OBJ_FLAG_SCROLLABLE);
@@ -318,9 +319,9 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_slider_set_range(context->seek_slider, 0, GUI_PLAYER_SEEK_MAX);
 	lv_obj_set_style_radius(context->seek_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
 	lv_obj_set_style_radius(context->seek_slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-	lv_obj_set_style_bg_color(context->seek_slider, lv_color_hex(0x2B3642U), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(context->seek_slider, GUI_Theme_LvColor(GUI_THEME_COLOR_SLIDER_BG), LV_PART_MAIN);
 	lv_obj_set_style_bg_color(context->seek_slider, lv_color_hex(GUI_PLAYER_ACCENT), LV_PART_INDICATOR);
-	lv_obj_set_style_bg_color(context->seek_slider, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+	lv_obj_set_style_bg_color(context->seek_slider, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_KNOB), LV_PART_KNOB);
 	lv_obj_set_style_width(context->seek_slider, 8, LV_PART_KNOB);
 	lv_obj_set_style_height(context->seek_slider, 8, LV_PART_KNOB);
 	lv_obj_set_style_outline_width(context->seek_slider, 2, LV_STATE_FOCUSED);
@@ -349,7 +350,7 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	context->volume_icon = lv_label_create(context->file_manage.screen);
 	lv_label_set_text(context->volume_icon, LV_SYMBOL_VOLUME_MID);
 	lv_obj_set_pos(context->volume_icon, 92, GUI_PLAYER_CTRL_Y + 6);
-	lv_obj_set_style_text_color(context->volume_icon, lv_color_hex(0xAEB7C2U), 0);
+	lv_obj_set_style_text_color(context->volume_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
 
 	context->volume_slider = lv_slider_create(context->file_manage.screen);
 	lv_obj_clear_flag(context->volume_slider, LV_OBJ_FLAG_SCROLLABLE);
@@ -358,9 +359,9 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_slider_set_range(context->volume_slider, 0, GUI_PLAYER_VOLUME_MAX);
 	lv_obj_set_style_radius(context->volume_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
 	lv_obj_set_style_radius(context->volume_slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-	lv_obj_set_style_bg_color(context->volume_slider, lv_color_hex(0x2B3642U), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(context->volume_slider, GUI_Theme_LvColor(GUI_THEME_COLOR_SLIDER_BG), LV_PART_MAIN);
 	lv_obj_set_style_bg_color(context->volume_slider, lv_color_hex(GUI_PLAYER_ACCENT), LV_PART_INDICATOR);
-	lv_obj_set_style_bg_color(context->volume_slider, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+	lv_obj_set_style_bg_color(context->volume_slider, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_KNOB), LV_PART_KNOB);
 	lv_obj_set_style_width(context->volume_slider, 14, LV_PART_KNOB);
 	lv_obj_set_style_height(context->volume_slider, 14, LV_PART_KNOB);
 	lv_obj_set_style_outline_width(context->volume_slider, 2, LV_STATE_FOCUSED);
@@ -374,7 +375,7 @@ static void GUI_Player_CreateControls(GUI_Player_Context_t *context)
 	lv_obj_set_width(context->volume_label, 48);
 	lv_obj_set_pos(context->volume_label, 260, GUI_PLAYER_CTRL_Y + 4);
 	lv_obj_set_style_text_align(context->volume_label, LV_TEXT_ALIGN_RIGHT, 0);
-	lv_obj_set_style_text_color(context->volume_label, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(context->volume_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	GUI_Player_UpdateVolumeView(context, context->volume);
 }
 
@@ -388,9 +389,9 @@ static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, l
 	lv_obj_set_size(btn, GUI_PLAYER_CTRL_SIZE, GUI_PLAYER_CTRL_SIZE);
 	lv_obj_set_pos(btn, x, y);
 	lv_obj_set_style_radius(btn, 7, 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x243140U), 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x33485EU), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x26313AU), LV_STATE_DISABLED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_DISABLED), LV_STATE_DISABLED);
 	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
 	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
@@ -405,7 +406,7 @@ static lv_obj_t *GUI_Player_CreateButton(lv_obj_t *parent, const char *symbol, l
 
 	icon = lv_label_create(btn);
 	lv_label_set_text(icon, symbol);
-	lv_obj_set_style_text_color(icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(icon);
 
 	return btn;

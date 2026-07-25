@@ -26,6 +26,7 @@
 #include "lv_port_disp_template.h"
 #include "../GUI/GUI_Main.h"
 #include "../GUI/GUI_Start.h"
+#include "../GUI/GUI_Theme.h"
 
 /* External globals */
 extern Shell shell;
@@ -873,6 +874,7 @@ static void lvgl_init()
 {
 	lv_init();
 	lv_port_disp_init();
+	(void)GUI_Theme_Apply();
 	lv_port_indev_init();
 	#if LV_USE_LOG == 1
 	if(SCI.Debug)

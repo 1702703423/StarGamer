@@ -1,5 +1,6 @@
 #include "GUI_Settings.h"
 #include "GUI_Font.h"
+#include "GUI_Theme.h"
 #include "IAP.h"
 #include "System_Status.h"
 #include "usb_device.h"
@@ -88,6 +89,8 @@ typedef struct
 	lv_obj_t *debug_switches[GUI_SETTINGS_DEBUG_ITEM_COUNT];
 	lv_obj_t *font_install_btn;
 	lv_obj_t *font_uninstall_btn;
+	lv_obj_t *theme_btn;
+	lv_obj_t *theme_switch;
 	lv_obj_t *usb_msc_btn;
 	lv_obj_t *usb_msc_switch;
 	lv_obj_t *about_btn;
@@ -104,6 +107,7 @@ static void GUI_Settings_ApplyScreenBase(lv_obj_t *screen);
 static void GUI_Settings_CreateHeader(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb);
 static void GUI_Settings_CreateList(GUI_SettingsContext_t *context);
+static void GUI_Settings_CreateThemeSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item);
 static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context);
@@ -111,6 +115,7 @@ static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context);
 static void GUI_Settings_AddDebugItem(GUI_SettingsContext_t *context, const GUI_SettingsDebugItem_t *item);
 static void GUI_Settings_BackEvent(lv_event_t *event);
 static void GUI_Settings_ItemEvent(lv_event_t *event);
+static void GUI_Settings_ThemeEvent(lv_event_t *event);
 static void GUI_Settings_UsbMscEvent(lv_event_t *event);
 static void GUI_Settings_AboutCloseEvent(lv_event_t *event);
 static void GUI_Settings_DebugCloseEvent(lv_event_t *event);
@@ -129,6 +134,9 @@ static void GUI_Settings_ToggleDebugItem(GUI_SettingsContext_t *context, GUI_Set
 static u8 GUI_Settings_DebugItemValue(GUI_SettingsDebugItemId_t id);
 static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context);
 static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context);
+static void GUI_Settings_UpdateThemeSwitch(GUI_SettingsContext_t *context);
+static void GUI_Settings_SetThemeLightEnabled(GUI_SettingsContext_t *context, u8 enabled);
+static void GUI_Settings_ThemeReloadAsync(void *user_data);
 static void GUI_Settings_UpdateUsbMscSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_SetUsbMscEnabled(GUI_SettingsContext_t *context, u8 enabled);
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled);
@@ -205,6 +213,7 @@ static int GUI_Settings_PageBuild(Page_Struct_t *page)
 	GUI_Settings_CreateAboutPanel(&s_settings);
 	GUI_Settings_CreateDebugPanel(&s_settings);
 	GUI_Settings_SetStatus(&s_settings, "Ready");
+	GUI_Settings_UpdateThemeSwitch(&s_settings);
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
 	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_UpdateFontState(&s_settings);
@@ -218,6 +227,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 	(void)user_data;
 
 	GUI_Settings_UpdateFontState(&s_settings);
+	GUI_Settings_UpdateThemeSwitch(&s_settings);
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
 	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_RebuildFocus(&s_settings, s_settings.first_item_btn);
@@ -230,7 +240,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 static void GUI_Settings_ApplyScreenBase(lv_obj_t *screen)
 {
 	lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(screen, lv_color_hex(0x101418U), 0);
+	lv_obj_set_style_bg_color(screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 	lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 }
 
@@ -241,7 +251,7 @@ static void GUI_Settings_CreateHeader(GUI_SettingsContext_t *context)
 
 	label = lv_label_create(context->screen);
 	lv_label_set_text(label, "Settings");
-	lv_obj_set_style_text_color(label, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_align(label, LV_ALIGN_TOP_LEFT, 12, 9);
 
 	GUI_Settings_CreateToolButton(&context->back_btn, context->screen, LV_SYMBOL_LEFT, GUI_SETTINGS_BACK_X, GUI_Settings_BackEvent);
@@ -252,7 +262,7 @@ static void GUI_Settings_CreateHeader(GUI_SettingsContext_t *context)
 	lv_obj_set_pos(line, 12, 36);
 	lv_obj_set_style_radius(line, 0, 0);
 	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, lv_color_hex(0x303844U), 0);
+	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
 	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
 }
 
@@ -265,8 +275,8 @@ static void GUI_Settings_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, cons
 	lv_obj_set_size(*btn, 42, 28);
 	lv_obj_set_pos(*btn, x, 6);
 	lv_obj_set_style_radius(*btn, 8, 0);
-	lv_obj_set_style_bg_color(*btn, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_color(*btn, lv_color_hex(0x344150U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(*btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(*btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(*btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(*btn, 0, 0);
 	lv_obj_set_style_border_width(*btn, 2, LV_STATE_FOCUSED);
@@ -281,7 +291,7 @@ static void GUI_Settings_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, cons
 
 	icon = lv_label_create(*btn);
 	lv_label_set_text(icon, symbol);
-	lv_obj_set_style_text_color(icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(icon);
 }
 
@@ -294,13 +304,14 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 	lv_obj_set_pos(context->list, GUI_SETTINGS_LIST_X, GUI_SETTINGS_LIST_Y);
 	lv_obj_set_style_radius(context->list, 6, 0);
 	lv_obj_set_style_border_width(context->list, 1, 0);
-	lv_obj_set_style_border_color(context->list, lv_color_hex(0x303844U), 0);
-	lv_obj_set_style_bg_color(context->list, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_border_color(context->list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BORDER), 0);
+	lv_obj_set_style_bg_color(context->list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BG), 0);
 	lv_obj_set_style_bg_opa(context->list, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->list, 2, 0);
 	lv_obj_set_style_pad_row(context->list, 0, 0);
 	lv_obj_set_scrollbar_mode(context->list, LV_SCROLLBAR_MODE_OFF);
 
+	GUI_Settings_CreateThemeSwitch(context);
 	GUI_Settings_CreateUsbMscSwitch(context);
 
 	for (i = 0U; i < (u8)(sizeof(s_setting_items) / sizeof(s_setting_items[0])); i++)
@@ -312,7 +323,61 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 	lv_label_set_long_mode(context->status_label, LV_LABEL_LONG_DOT);
 	lv_obj_set_width(context->status_label, GUI_SETTINGS_SCREEN_W - 24);
 	lv_obj_set_pos(context->status_label, 12, GUI_SETTINGS_STATUS_Y);
-	lv_obj_set_style_text_color(context->status_label, lv_color_hex(0x8E98A4U), 0);
+	lv_obj_set_style_text_color(context->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_MUTED), 0);
+}
+
+static void GUI_Settings_CreateThemeSwitch(GUI_SettingsContext_t *context)
+{
+	lv_obj_t *icon;
+	lv_obj_t *label;
+
+	if (context == NULL || context->list == NULL)
+	{
+		return;
+	}
+
+	context->theme_btn = lv_btn_create(context->list);
+	lv_obj_clear_flag(context->theme_btn, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(context->theme_btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+	lv_obj_set_size(context->theme_btn, GUI_SETTINGS_LIST_W - 8, GUI_SETTINGS_ROW_H);
+	lv_obj_set_style_radius(context->theme_btn, 4, 0);
+	lv_obj_set_style_bg_color(context->theme_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+	lv_obj_set_style_bg_color(context->theme_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->theme_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_opa(context->theme_btn, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_width(context->theme_btn, 0, 0);
+	lv_obj_set_style_border_width(context->theme_btn, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_border_color(context->theme_btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_width(context->theme_btn, 0, 0);
+	lv_obj_set_style_pad_all(context->theme_btn, 0, 0);
+	lv_obj_add_event_cb(context->theme_btn, GUI_Settings_ThemeEvent, LV_EVENT_KEY, context);
+
+	icon = lv_label_create(context->theme_btn);
+	lv_label_set_text(icon, LV_SYMBOL_EYE_OPEN);
+	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_pos(icon, 12, 7);
+
+	label = lv_label_create(context->theme_btn);
+	lv_label_set_text(label, "Light Theme");
+	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_FOCUSED), LV_STATE_FOCUSED);
+	lv_obj_set_pos(label, 38, 7);
+
+	context->theme_switch = lv_switch_create(context->theme_btn);
+	lv_obj_clear_flag(context->theme_switch, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_set_size(context->theme_switch, GUI_SETTINGS_SWITCH_W, GUI_SETTINGS_SWITCH_H);
+	lv_obj_set_pos(context->theme_switch, GUI_SETTINGS_SWITCH_X, GUI_SETTINGS_SWITCH_Y);
+	lv_obj_set_style_bg_color(context->theme_switch, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_BG), 0);
+	lv_obj_set_style_bg_color(context->theme_switch, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_BG), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(context->theme_switch, lv_color_hex(GUI_SETTINGS_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
+	lv_obj_set_style_bg_color(context->theme_switch, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_KNOB), LV_PART_KNOB);
+
+	GUI_Settings_UpdateThemeSwitch(context);
+
+	if (context->first_item_btn == NULL)
+	{
+		context->first_item_btn = context->theme_btn;
+	}
 }
 
 static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context)
@@ -330,9 +395,9 @@ static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context)
 	lv_obj_add_flag(context->usb_msc_btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
 	lv_obj_set_size(context->usb_msc_btn, GUI_SETTINGS_LIST_W - 8, GUI_SETTINGS_ROW_H);
 	lv_obj_set_style_radius(context->usb_msc_btn, 4, 0);
-	lv_obj_set_style_bg_color(context->usb_msc_btn, lv_color_hex(0x182028U), 0);
-	lv_obj_set_style_bg_color(context->usb_msc_btn, lv_color_hex(0x263240U), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(context->usb_msc_btn, lv_color_hex(0x22303AU), LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_color(context->usb_msc_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+	lv_obj_set_style_bg_color(context->usb_msc_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->usb_msc_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
 	lv_obj_set_style_bg_opa(context->usb_msc_btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(context->usb_msc_btn, 0, 0);
 	lv_obj_set_style_border_width(context->usb_msc_btn, 2, LV_STATE_FOCUSED);
@@ -343,23 +408,23 @@ static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context)
 
 	icon = lv_label_create(context->usb_msc_btn);
 	lv_label_set_text(icon, LV_SYMBOL_USB);
-	lv_obj_set_style_text_color(icon, lv_color_hex(0xEEF2F6U), 0);
+	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
 	lv_obj_set_pos(icon, 12, 7);
 
 	label = lv_label_create(context->usb_msc_btn);
 	lv_label_set_text(label, "USB MSC");
-	lv_obj_set_style_text_color(label, lv_color_hex(0xEEF2F6U), 0);
-	lv_obj_set_style_text_color(label, lv_color_white(), LV_STATE_FOCUSED);
+	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_FOCUSED), LV_STATE_FOCUSED);
 	lv_obj_set_pos(label, 38, 7);
 
 	context->usb_msc_switch = lv_switch_create(context->usb_msc_btn);
 	lv_obj_clear_flag(context->usb_msc_switch, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_set_size(context->usb_msc_switch, GUI_SETTINGS_SWITCH_W, GUI_SETTINGS_SWITCH_H);
 	lv_obj_set_pos(context->usb_msc_switch, GUI_SETTINGS_SWITCH_X, GUI_SETTINGS_SWITCH_Y);
-	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(0x303844U), 0);
-	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(0x303844U), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_BG), 0);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_BG), LV_PART_INDICATOR);
 	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(GUI_SETTINGS_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
-	lv_obj_set_style_bg_color(context->usb_msc_switch, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+	lv_obj_set_style_bg_color(context->usb_msc_switch, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_KNOB), LV_PART_KNOB);
 
 	GUI_Settings_UpdateUsbMscSwitch(context);
 
@@ -384,18 +449,18 @@ static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_S
 	lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
 	lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
 	lv_obj_set_style_radius(btn, 4, 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x263240U), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x22303AU), LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
 	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
 	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
 	lv_obj_set_style_border_color(btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
 	lv_obj_set_style_outline_width(btn, 0, 0);
-	lv_obj_set_style_text_color(btn, lv_color_hex(0xEEF2F6U), 0);
-	lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_FOCUSED);
-	lv_obj_set_style_text_color(btn, lv_color_hex(0x6F7A86U), LV_STATE_DISABLED);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x151A20U), LV_STATE_DISABLED);
+	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_FOCUSED), LV_STATE_FOCUSED);
+	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_DISABLED), LV_STATE_DISABLED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_DISABLED), LV_STATE_DISABLED);
 	lv_obj_add_event_cb(btn, GUI_Settings_ItemEvent, LV_EVENT_CLICKED, (void *)item);
 	lv_obj_add_event_cb(btn, GUI_Settings_ItemEvent, LV_EVENT_KEY, (void *)item);
 
@@ -441,13 +506,13 @@ static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context)
 	lv_obj_set_style_radius(context->about_panel, 6, 0);
 	lv_obj_set_style_border_width(context->about_panel, 1, 0);
 	lv_obj_set_style_border_color(context->about_panel, lv_color_hex(GUI_SETTINGS_ACCENT), 0);
-	lv_obj_set_style_bg_color(context->about_panel, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_bg_color(context->about_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BG), 0);
 	lv_obj_set_style_bg_opa(context->about_panel, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->about_panel, 0, 0);
 
 	title = lv_label_create(context->about_panel);
 	lv_label_set_text(title, "About");
-	lv_obj_set_style_text_color(title, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_set_pos(title, 10, 8);
 
 	context->about_close_btn = lv_btn_create(context->about_panel);
@@ -455,8 +520,8 @@ static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context)
 	lv_obj_set_size(context->about_close_btn, 32, 24);
 	lv_obj_set_pos(context->about_close_btn, 258, 5);
 	lv_obj_set_style_radius(context->about_close_btn, 6, 0);
-	lv_obj_set_style_bg_color(context->about_close_btn, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_color(context->about_close_btn, lv_color_hex(0x344150U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->about_close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(context->about_close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(context->about_close_btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(context->about_close_btn, 0, 0);
 	lv_obj_set_style_border_width(context->about_close_btn, 2, LV_STATE_FOCUSED);
@@ -471,14 +536,14 @@ static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context)
 
 	close_icon = lv_label_create(context->about_close_btn);
 	lv_label_set_text(close_icon, LV_SYMBOL_CLOSE);
-	lv_obj_set_style_text_color(close_icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(close_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(close_icon);
 
 	context->about_label = lv_label_create(context->about_panel);
 	lv_label_set_long_mode(context->about_label, LV_LABEL_LONG_WRAP);
 	lv_obj_set_width(context->about_label, 280);
 	lv_obj_set_pos(context->about_label, 10, 32);
-	lv_obj_set_style_text_color(context->about_label, lv_color_hex(0xDCE3EAU), 0);
+	lv_obj_set_style_text_color(context->about_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
 	lv_obj_set_style_text_line_space(context->about_label, 1, 0);
 
 	GUI_Settings_HideAbout(context);
@@ -497,13 +562,13 @@ static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context)
 	lv_obj_set_style_radius(context->debug_panel, 6, 0);
 	lv_obj_set_style_border_width(context->debug_panel, 1, 0);
 	lv_obj_set_style_border_color(context->debug_panel, lv_color_hex(GUI_SETTINGS_ACCENT), 0);
-	lv_obj_set_style_bg_color(context->debug_panel, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_bg_color(context->debug_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BG), 0);
 	lv_obj_set_style_bg_opa(context->debug_panel, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->debug_panel, 0, 0);
 
 	title = lv_label_create(context->debug_panel);
 	lv_label_set_text(title, "Debug");
-	lv_obj_set_style_text_color(title, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_set_pos(title, 10, 8);
 
 	context->debug_close_btn = lv_btn_create(context->debug_panel);
@@ -511,8 +576,8 @@ static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context)
 	lv_obj_set_size(context->debug_close_btn, 32, 24);
 	lv_obj_set_pos(context->debug_close_btn, 258, 5);
 	lv_obj_set_style_radius(context->debug_close_btn, 6, 0);
-	lv_obj_set_style_bg_color(context->debug_close_btn, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_color(context->debug_close_btn, lv_color_hex(0x344150U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->debug_close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(context->debug_close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(context->debug_close_btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(context->debug_close_btn, 0, 0);
 	lv_obj_set_style_border_width(context->debug_close_btn, 2, LV_STATE_FOCUSED);
@@ -527,7 +592,7 @@ static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context)
 
 	close_icon = lv_label_create(context->debug_close_btn);
 	lv_label_set_text(close_icon, LV_SYMBOL_CLOSE);
-	lv_obj_set_style_text_color(close_icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(close_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(close_icon);
 
 	context->debug_list = lv_list_create(context->debug_panel);
@@ -535,7 +600,7 @@ static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context)
 	lv_obj_set_pos(context->debug_list, GUI_SETTINGS_DEBUG_LIST_X, GUI_SETTINGS_DEBUG_LIST_Y);
 	lv_obj_set_style_radius(context->debug_list, 4, 0);
 	lv_obj_set_style_border_width(context->debug_list, 0, 0);
-	lv_obj_set_style_bg_color(context->debug_list, lv_color_hex(0x141A20U), 0);
+	lv_obj_set_style_bg_color(context->debug_list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BG), 0);
 	lv_obj_set_style_bg_opa(context->debug_list, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(context->debug_list, 0, 0);
 	lv_obj_set_style_pad_row(context->debug_list, 0, 0);
@@ -570,15 +635,16 @@ static void GUI_Settings_AddDebugItem(GUI_SettingsContext_t *context,
 	lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
 	lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
 	lv_obj_set_style_radius(btn, 4, 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x182028U), 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x263240U), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x22303AU), LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
 	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(btn, 0, 0);
 	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
 	lv_obj_set_style_border_color(btn, lv_color_hex(GUI_SETTINGS_ACCENT), LV_STATE_FOCUSED);
 	lv_obj_set_style_outline_width(btn, 0, 0);
-	lv_obj_set_style_text_color(btn, lv_color_hex(0xEEF2F6U), 0);
+	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_FOCUSED), LV_STATE_FOCUSED);
 	lv_obj_add_event_cb(btn, GUI_Settings_DebugItemEvent, LV_EVENT_CLICKED, (void *)item);
 	lv_obj_add_event_cb(btn, GUI_Settings_DebugItemEvent, LV_EVENT_KEY, (void *)item);
 
@@ -586,10 +652,10 @@ static void GUI_Settings_AddDebugItem(GUI_SettingsContext_t *context,
 	lv_obj_clear_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_set_size(toggle, GUI_SETTINGS_SWITCH_W, GUI_SETTINGS_SWITCH_H);
 	lv_obj_set_pos(toggle, GUI_SETTINGS_DEBUG_SWITCH_X, GUI_SETTINGS_SWITCH_Y);
-	lv_obj_set_style_bg_color(toggle, lv_color_hex(0x303844U), 0);
-	lv_obj_set_style_bg_color(toggle, lv_color_hex(0x303844U), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(toggle, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_BG), 0);
+	lv_obj_set_style_bg_color(toggle, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_BG), LV_PART_INDICATOR);
 	lv_obj_set_style_bg_color(toggle, lv_color_hex(GUI_SETTINGS_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
-	lv_obj_set_style_bg_color(toggle, lv_color_hex(0xF5F7FAU), LV_PART_KNOB);
+	lv_obj_set_style_bg_color(toggle, GUI_Theme_LvColor(GUI_THEME_COLOR_SWITCH_KNOB), LV_PART_KNOB);
 
 	context->debug_btns[index] = btn;
 	context->debug_switches[index] = toggle;
@@ -695,6 +761,42 @@ static void GUI_Settings_ItemEvent(lv_event_t *event)
 	else if (code == LV_EVENT_KEY)
 	{
 		(void)GUI_Settings_HandleKey(lv_event_get_key(event));
+	}
+}
+
+static void GUI_Settings_ThemeEvent(lv_event_t *event)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+	u8 enabled;
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	if (context->about_visible != 0U || context->debug_visible != 0U)
+	{
+		return;
+	}
+
+	if (code == LV_EVENT_KEY)
+	{
+		key = lv_event_get_key(event);
+		if (GUI_Settings_IsSwitchToggleKey(key) != 0U || key == LV_KEY_RIGHT)
+		{
+			enabled = (System_Settings_ThemeLightEnabled() == 0U) ? 1U : 0U;
+			GUI_Settings_SetThemeLightEnabled(context, enabled);
+		}
+		else if (key == LV_KEY_ESC || key == LV_KEY_LEFT)
+		{
+			(void)Page_Back();
+		}
+		else
+		{
+			(void)GUI_Settings_HandleKey(key);
+		}
 	}
 }
 
@@ -1203,6 +1305,77 @@ static void GUI_Settings_UpdateFontState(GUI_SettingsContext_t *context)
 	}
 }
 
+static void GUI_Settings_UpdateThemeSwitch(GUI_SettingsContext_t *context)
+{
+	if (context == NULL || context->theme_switch == NULL)
+	{
+		return;
+	}
+
+	if (System_Settings_ThemeLightEnabled() != 0U)
+	{
+		lv_obj_add_state(context->theme_switch, LV_STATE_CHECKED);
+	}
+	else
+	{
+		lv_obj_clear_state(context->theme_switch, LV_STATE_CHECKED);
+	}
+}
+
+static void GUI_Settings_SetThemeLightEnabled(GUI_SettingsContext_t *context, u8 enabled)
+{
+	u8 old_enabled;
+
+	if (context == NULL)
+	{
+		return;
+	}
+
+	old_enabled = System_Settings_ThemeLightEnabled();
+	enabled = (enabled != 0U) ? 1U : 0U;
+	if (old_enabled == enabled)
+	{
+		GUI_Settings_UpdateThemeSwitch(context);
+		return;
+	}
+
+	if (System_Settings_SetThemeLightEnabled(enabled) != SYSTEM_STATUS_OK)
+	{
+		GUI_Settings_UpdateThemeSwitch(context);
+		GUI_Settings_SetStatus(context, "Theme save failed");
+		return;
+	}
+
+	if (GUI_Theme_Apply() != SYSTEM_STATUS_OK)
+	{
+		(void)System_Settings_SetThemeLightEnabled(old_enabled);
+		(void)GUI_Theme_Apply();
+		GUI_Settings_UpdateThemeSwitch(context);
+		GUI_Settings_SetStatus(context, "Theme apply failed");
+		return;
+	}
+
+	GUI_Settings_UpdateThemeSwitch(context);
+	GUI_Settings_SetStatus(context, (enabled != 0U) ? "Light theme enabled" : "Dark theme enabled");
+	GUI_Settings_WaitInputRelease();
+	if (lv_async_call(GUI_Settings_ThemeReloadAsync, NULL) != LV_RES_OK)
+	{
+		GUI_Settings_SetStatus(context, "Reopen Settings to refresh theme");
+	}
+}
+
+static void GUI_Settings_ThemeReloadAsync(void *user_data)
+{
+	(void)user_data;
+
+	if (Page_GetCurrent() == GUI_PAGE_SETTINGS)
+	{
+		(void)Page_Delete(GUI_PAGE_SETTINGS);
+		(void)GUI_Settings_Register();
+		(void)GUI_Settings_Show();
+	}
+}
+
 static void GUI_Settings_UpdateUsbMscSwitch(GUI_SettingsContext_t *context)
 {
 	if (context == NULL || context->usb_msc_switch == NULL)
@@ -1380,6 +1553,10 @@ static u8 GUI_Settings_IsInternalSwitch(lv_obj_t *object)
 	u32 index;
 
 	if (object == s_settings.usb_msc_switch)
+	{
+		return 1U;
+	}
+	if (object == s_settings.theme_switch)
 	{
 		return 1U;
 	}

@@ -1,4 +1,5 @@
 #include "GUI_Manage.h"
+#include "GUI_Theme.h"
 
 #define PAGE_HISTORY_DEPTH 8U
 
@@ -105,7 +106,7 @@ static int Page_LoadFallback(void)
 		if (s_fallback_screen != NULL)
 		{
 			lv_obj_clear_flag(s_fallback_screen, LV_OBJ_FLAG_SCROLLABLE);
-			lv_obj_set_style_bg_color(s_fallback_screen, lv_color_black(), 0);
+			lv_obj_set_style_bg_color(s_fallback_screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 			lv_obj_set_style_bg_opa(s_fallback_screen, LV_OPA_COVER, 0);
 		}
 	}

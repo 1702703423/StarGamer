@@ -1,4 +1,5 @@
 #include "GUI_Start.h"
+#include "GUI_Theme.h"
 #include "System_Status.h"
 #include "lvgl.h"
 
@@ -33,7 +34,7 @@ int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 	}
 
 	lv_obj_clear_flag(s_start_screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(s_start_screen, lv_color_hex(0x101418U), 0);
+	lv_obj_set_style_bg_color(s_start_screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 	lv_obj_set_style_bg_opa(s_start_screen, LV_OPA_COVER, 0);
 	lv_obj_set_style_pad_all(s_start_screen, 0, 0);
 
@@ -44,7 +45,7 @@ int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 		return OUT_OF_HEAP_MEMORY;
 	}
 	lv_label_set_text(title, "Star Gamer");
-	lv_obj_set_style_text_color(title, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_align(title, LV_ALIGN_CENTER, 0, -54);
 
 	accent = lv_obj_create(s_start_screen);
@@ -71,7 +72,7 @@ int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 	}
 	lv_obj_set_size(s_start_spinner, 46, 46);
 	lv_obj_set_style_arc_width(s_start_spinner, 4, LV_PART_MAIN);
-	lv_obj_set_style_arc_color(s_start_spinner, lv_color_hex(0x344047U), LV_PART_MAIN);
+	lv_obj_set_style_arc_color(s_start_spinner, GUI_Theme_LvColor(GUI_THEME_COLOR_SLIDER_BG), LV_PART_MAIN);
 	lv_obj_set_style_arc_width(s_start_spinner, 4, LV_PART_INDICATOR);
 	lv_obj_set_style_arc_color(s_start_spinner, lv_color_hex(0x26A69AU), LV_PART_INDICATOR);
 	lv_obj_center(s_start_spinner);
@@ -83,7 +84,7 @@ int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 		return OUT_OF_HEAP_MEMORY;
 	}
 	lv_label_set_text(s_start_status, "Starting GUI...");
-	lv_obj_set_style_text_color(s_start_status, lv_color_hex(0xAEB7C2U), 0);
+	lv_obj_set_style_text_color(s_start_status, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
 	lv_obj_align(s_start_status, LV_ALIGN_CENTER, 0, 46);
 
 	s_start_timer = lv_timer_create(GUI_Start_TimerCallback, GUI_START_DELAY_MS, NULL);

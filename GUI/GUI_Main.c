@@ -6,6 +6,7 @@
 #include "GUI_Image.h"
 #include "GUI_Text.h"
 #include "GUI_Settings.h"
+#include "GUI_Theme.h"
 
 #define GUI_MENU_ITEM_W 72
 #define GUI_MENU_ITEM_H 78
@@ -72,7 +73,7 @@ static const GUI_MenuItem_t *GUI_FindMenuItem(Page_ID_t id)
 static void GUI_ApplyScreenBase(lv_obj_t *screen)
 {
 	lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(screen, lv_color_hex(0x101418U), 0);
+	lv_obj_set_style_bg_color(screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
 	lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 }
 
@@ -83,7 +84,7 @@ static void GUI_CreateHeader(lv_obj_t *screen, const char *title)
 
 	label = lv_label_create(screen);
 	lv_label_set_text(label, title);
-	lv_obj_set_style_text_color(label, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_align(label, LV_ALIGN_TOP_LEFT, 12, 9);
 
 	line = lv_obj_create(screen);
@@ -92,7 +93,7 @@ static void GUI_CreateHeader(lv_obj_t *screen, const char *title)
 	lv_obj_set_pos(line, 12, 36);
 	lv_obj_set_style_radius(line, 0, 0);
 	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, lv_color_hex(0x303844U), 0);
+	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
 	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
 }
 
@@ -138,8 +139,8 @@ static void GUI_CreateMenuButton(lv_obj_t *screen, const GUI_MenuItem_t *item, u
 	lv_obj_set_size(btn, GUI_MENU_ITEM_W, GUI_MENU_ITEM_H);
 	lv_obj_set_pos(btn, x, y);
 	lv_obj_set_style_radius(btn, 8, 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x171D24U), 0);
-	lv_obj_set_style_bg_color(btn, lv_color_hex(0x222C35U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(btn, 1, 0);
 	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
@@ -162,7 +163,7 @@ static void GUI_CreateMenuButton(lv_obj_t *screen, const GUI_MenuItem_t *item, u
 	lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
 	lv_obj_set_width(name, GUI_MENU_ITEM_W - 8);
 	lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_text_color(name, lv_color_hex(0xEEF2F6U), 0);
+	lv_obj_set_style_text_color(name, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
 	lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -8);
 }
 
@@ -218,8 +219,8 @@ static int GUI_AppShellBuild(Page_Struct_t *page)
 	lv_obj_set_size(back, 42, 28);
 	lv_obj_set_pos(back, 268, 6);
 	lv_obj_set_style_radius(back, 8, 0);
-	lv_obj_set_style_bg_color(back, lv_color_hex(0x252D36U), 0);
-	lv_obj_set_style_bg_color(back, lv_color_hex(0x344150U), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(back, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
+	lv_obj_set_style_bg_color(back, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
 	lv_obj_set_style_bg_opa(back, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_width(back, 0, 0);
 	lv_obj_set_style_border_width(back, 2, LV_STATE_FOCUSED);
@@ -233,7 +234,7 @@ static int GUI_AppShellBuild(Page_Struct_t *page)
 
 	back_icon = lv_label_create(back);
 	lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-	lv_obj_set_style_text_color(back_icon, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(back_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_center(back_icon);
 
 	badge = GUI_CreateIconBadge(page->screen, symbol, color, 72);
@@ -241,12 +242,12 @@ static int GUI_AppShellBuild(Page_Struct_t *page)
 
 	title = lv_label_create(page->screen);
 	lv_label_set_text(title, name);
-	lv_obj_set_style_text_color(title, lv_color_hex(0xF5F7FAU), 0);
+	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
 	lv_obj_align(title, LV_ALIGN_CENTER, 0, 36);
 
 	state = lv_label_create(page->screen);
 	lv_label_set_text(state, "Ready");
-	lv_obj_set_style_text_color(state, lv_color_hex(0x8E98A4U), 0);
+	lv_obj_set_style_text_color(state, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_MUTED), 0);
 	lv_obj_align(state, LV_ALIGN_CENTER, 0, 58);
 
 	return SYSTEM_STATUS_OK;

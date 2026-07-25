@@ -4720,6 +4720,16 @@
               <FileType>5</FileType>
               <FilePath>..\GUI\GUI_Arduboy.h</FilePath>
             </File>
+            <File>
+              <FileName>GUI_Theme.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Theme.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Theme.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Theme.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
