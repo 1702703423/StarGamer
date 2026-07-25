@@ -93,6 +93,8 @@ typedef struct
 	lv_obj_t *theme_switch;
 	lv_obj_t *usb_msc_btn;
 	lv_obj_t *usb_msc_switch;
+	lv_obj_t *axf_stack_btn;
+	lv_obj_t *axf_stack_value;
 	lv_obj_t *about_btn;
 	lv_obj_t *debug_btn;
 	lv_obj_t *first_item_btn;
@@ -109,6 +111,7 @@ static void GUI_Settings_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, cons
 static void GUI_Settings_CreateList(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateThemeSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context);
+static void GUI_Settings_CreateAxfStackSelector(GUI_SettingsContext_t *context);
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item);
 static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context);
@@ -117,6 +120,7 @@ static void GUI_Settings_BackEvent(lv_event_t *event);
 static void GUI_Settings_ItemEvent(lv_event_t *event);
 static void GUI_Settings_ThemeEvent(lv_event_t *event);
 static void GUI_Settings_UsbMscEvent(lv_event_t *event);
+static void GUI_Settings_AxfStackEvent(lv_event_t *event);
 static void GUI_Settings_AboutCloseEvent(lv_event_t *event);
 static void GUI_Settings_DebugCloseEvent(lv_event_t *event);
 static void GUI_Settings_DebugItemEvent(lv_event_t *event);
@@ -139,6 +143,8 @@ static void GUI_Settings_SetThemeLightEnabled(GUI_SettingsContext_t *context, u8
 static void GUI_Settings_ThemeReloadAsync(void *user_data);
 static void GUI_Settings_UpdateUsbMscSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_SetUsbMscEnabled(GUI_SettingsContext_t *context, u8 enabled);
+static void GUI_Settings_UpdateAxfStack(GUI_SettingsContext_t *context);
+static void GUI_Settings_SetAxfStackLevel(GUI_SettingsContext_t *context, u8 level);
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled);
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text);
 static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *focus_obj);
@@ -146,6 +152,11 @@ static void GUI_Settings_AddFocusableChildren(lv_group_t *group, lv_obj_t *paren
 static u8 GUI_Settings_IsInternalSwitch(lv_obj_t *object);
 
 static GUI_SettingsContext_t s_settings;
+
+static const char * const s_axf_stack_labels[SYSTEM_AXF_STACK_LEVEL_COUNT] =
+{
+	"4 KB", "8 KB", "12 KB", "16 KB", "24 KB"
+};
 
 static const GUI_SettingsItem_t s_setting_items[] =
 {
@@ -215,6 +226,7 @@ static int GUI_Settings_PageBuild(Page_Struct_t *page)
 	GUI_Settings_SetStatus(&s_settings, "Ready");
 	GUI_Settings_UpdateThemeSwitch(&s_settings);
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
+	GUI_Settings_UpdateAxfStack(&s_settings);
 	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_UpdateFontState(&s_settings);
 
@@ -229,6 +241,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 	GUI_Settings_UpdateFontState(&s_settings);
 	GUI_Settings_UpdateThemeSwitch(&s_settings);
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
+	GUI_Settings_UpdateAxfStack(&s_settings);
 	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_RebuildFocus(&s_settings, s_settings.first_item_btn);
 	GUI_Settings_WaitInputRelease();
@@ -313,6 +326,7 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 
 	GUI_Settings_CreateThemeSwitch(context);
 	GUI_Settings_CreateUsbMscSwitch(context);
+	GUI_Settings_CreateAxfStackSelector(context);
 
 	for (i = 0U; i < (u8)(sizeof(s_setting_items) / sizeof(s_setting_items[0])); i++)
 	{
@@ -432,6 +446,68 @@ static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context)
 	{
 		context->first_item_btn = context->usb_msc_btn;
 	}
+}
+
+static void GUI_Settings_CreateAxfStackSelector(GUI_SettingsContext_t *context)
+{
+	lv_obj_t *icon;
+	lv_obj_t *label;
+
+	if (context == NULL || context->list == NULL)
+	{
+		return;
+	}
+
+	context->axf_stack_btn = lv_btn_create(context->list);
+	lv_obj_clear_flag(context->axf_stack_btn, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(context->axf_stack_btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+	lv_obj_set_size(context->axf_stack_btn, GUI_SETTINGS_LIST_W - 8,
+	                GUI_SETTINGS_ROW_H);
+	lv_obj_set_style_radius(context->axf_stack_btn, 4, 0);
+	lv_obj_set_style_bg_color(context->axf_stack_btn,
+	                         GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
+	lv_obj_set_style_bg_color(context->axf_stack_btn,
+	                         GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED),
+	                         LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(context->axf_stack_btn,
+	                         GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED),
+	                         LV_STATE_FOCUSED);
+	lv_obj_set_style_bg_opa(context->axf_stack_btn, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_width(context->axf_stack_btn, 0, 0);
+	lv_obj_set_style_border_width(context->axf_stack_btn, 2, LV_STATE_FOCUSED);
+	lv_obj_set_style_border_color(context->axf_stack_btn,
+	                             lv_color_hex(GUI_SETTINGS_ACCENT),
+	                             LV_STATE_FOCUSED);
+	lv_obj_set_style_outline_width(context->axf_stack_btn, 0, 0);
+	lv_obj_set_style_pad_all(context->axf_stack_btn, 0, 0);
+	lv_obj_add_event_cb(context->axf_stack_btn, GUI_Settings_AxfStackEvent,
+	                    LV_EVENT_CLICKED, context);
+	lv_obj_add_event_cb(context->axf_stack_btn, GUI_Settings_AxfStackEvent,
+	                    LV_EVENT_KEY, context);
+
+	icon = lv_label_create(context->axf_stack_btn);
+	lv_label_set_text(icon, LV_SYMBOL_UPLOAD);
+	lv_obj_set_style_text_color(icon,
+	                            GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_pos(icon, 12, 7);
+
+	label = lv_label_create(context->axf_stack_btn);
+	lv_label_set_text(label, "AXF Stack");
+	lv_obj_set_style_text_color(label,
+	                            GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_style_text_color(label,
+	                            GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_FOCUSED),
+	                            LV_STATE_FOCUSED);
+	lv_obj_set_pos(label, 38, 7);
+
+	context->axf_stack_value = lv_label_create(context->axf_stack_btn);
+	lv_label_set_long_mode(context->axf_stack_value, LV_LABEL_LONG_CLIP);
+	lv_obj_set_width(context->axf_stack_value, 58);
+	lv_obj_set_style_text_align(context->axf_stack_value, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_set_style_text_color(context->axf_stack_value,
+	                            lv_color_hex(GUI_SETTINGS_ACCENT), 0);
+	lv_obj_set_pos(context->axf_stack_value, 222, 7);
+	GUI_Settings_UpdateAxfStack(context);
 }
 
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item)
@@ -833,6 +909,54 @@ static void GUI_Settings_UsbMscEvent(lv_event_t *event)
 		{
 			(void)GUI_Settings_HandleKey(key);
 		}
+	}
+}
+
+static void GUI_Settings_AxfStackEvent(lv_event_t *event)
+{
+	GUI_SettingsContext_t *context =
+		(GUI_SettingsContext_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+	u8 level;
+
+	if (context == NULL || context->about_visible != 0U ||
+	    context->debug_visible != 0U)
+	{
+		return;
+	}
+
+	level = System_Settings_AxfStackLevel();
+	if (code == LV_EVENT_CLICKED)
+	{
+		level = (u8)((level + 1U) % SYSTEM_AXF_STACK_LEVEL_COUNT);
+		GUI_Settings_SetAxfStackLevel(context, level);
+		return;
+	}
+	if (code != LV_EVENT_KEY)
+	{
+		return;
+	}
+
+	key = lv_event_get_key(event);
+	if (key == LV_KEY_RIGHT)
+	{
+		level = (u8)((level + 1U) % SYSTEM_AXF_STACK_LEVEL_COUNT);
+		GUI_Settings_SetAxfStackLevel(context, level);
+	}
+	else if (key == LV_KEY_LEFT)
+	{
+		level = (level == 0U) ? (SYSTEM_AXF_STACK_LEVEL_COUNT - 1U) :
+		        (u8)(level - 1U);
+		GUI_Settings_SetAxfStackLevel(context, level);
+	}
+	else if (key == LV_KEY_ESC)
+	{
+		(void)Page_Back();
+	}
+	else if (key != LV_KEY_ENTER)
+	{
+		(void)GUI_Settings_HandleKey(key);
 	}
 }
 
@@ -1427,6 +1551,39 @@ static void GUI_Settings_SetUsbMscEnabled(GUI_SettingsContext_t *context, u8 ena
 
 	GUI_Settings_UpdateUsbMscSwitch(context);
 	GUI_Settings_SetStatus(context, (enabled != 0U) ? "USB MSC enabled" : "USB MSC disabled");
+}
+
+static void GUI_Settings_UpdateAxfStack(GUI_SettingsContext_t *context)
+{
+	u8 level;
+
+	if (context == NULL || context->axf_stack_value == NULL)
+	{
+		return;
+	}
+	level = System_Settings_AxfStackLevel();
+	if (level >= SYSTEM_AXF_STACK_LEVEL_COUNT)
+	{
+		level = SYSTEM_AXF_STACK_16KB;
+	}
+	lv_label_set_text(context->axf_stack_value, s_axf_stack_labels[level]);
+}
+
+static void GUI_Settings_SetAxfStackLevel(GUI_SettingsContext_t *context, u8 level)
+{
+	if (context == NULL || level >= SYSTEM_AXF_STACK_LEVEL_COUNT)
+	{
+		return;
+	}
+	if (System_Settings_SetAxfStackLevel(level) != SYSTEM_STATUS_OK)
+	{
+		GUI_Settings_UpdateAxfStack(context);
+		GUI_Settings_SetStatus(context, "AXF stack save failed");
+		return;
+	}
+
+	GUI_Settings_UpdateAxfStack(context);
+	GUI_Settings_SetStatus(context, s_axf_stack_labels[level]);
 }
 
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled)

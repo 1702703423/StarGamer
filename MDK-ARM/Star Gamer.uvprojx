@@ -340,7 +340,7 @@
               <MiscControls>-Wno-deprecated-non-prototype</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx,USER_VECT_TAB_ADDRESS,VECT_TAB_OFFSET=0x00010000U</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Middlewares/libhelix;../Middlewares/libhelix/port;../Drivers/LCD;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../IAP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall;../USB_DEVICE/App;../USB_DEVICE/Target;../Middlewares/ST/STM32_USB_Device_Library/Core/Inc;../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc;..\ELF Loader</IncludePath>
+              <IncludePath>../Core/Inc;../FATFS/Target;../FATFS/App;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/FatFs/src;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../System;../../StarGamer;../MDK-ARM;../LIBJPEG/App;../LIBJPEG/Target;../Middlewares/Third_Party/LibJPEG/include;../Middlewares/Third_Party/NES;../Middlewares/libhelix;../Middlewares/libhelix/port;../Drivers/LCD;../Debug;../Debug/fs_support;../Debug/shell_support;../Media;../BSP;../IAP;../Middlewares/Third_Party/LVGL/GUI/lvgl;../Middlewares/Third_Party/LVGL/GUI/lvgl/src;../Middlewares/Third_Party/LVGL/GUI;../Middlewares/Third_Party/LVGL/GUI/lvgl/examples/porting;../Middlewares/Third_Party/LVGL/GUI_APP/demos/stress;../Middlewares/Third_Party/LVGL/GUI_APP/demos;../APP/Arduboy;../Middlewares/Third_Party/Arduboy/src;../Middlewares/Third_Party/Arduboy/Buttons;../Middlewares/Third_Party/Arduboy/Dino;../Middlewares/Third_Party/Arduboy/FlappyBall;../USB_DEVICE/App;../USB_DEVICE/Target;../Middlewares/ST/STM32_USB_Device_Library/Core/Inc;../Middlewares/ST/STM32_USB_Device_Library/Class/MSC/Inc;..\ELF Loader;..\EXTERN API</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -4721,6 +4721,16 @@
               <FilePath>..\GUI\GUI_Arduboy.h</FilePath>
             </File>
             <File>
+              <FileName>GUI_Axf.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Axf.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Axf.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Axf.h</FilePath>
+            </File>
+            <File>
               <FileName>GUI_Theme.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\GUI\GUI_Theme.c</FilePath>
@@ -4866,9 +4876,9 @@
               <FilePath>..\ELF Loader\dl_user_api.h</FilePath>
             </File>
             <File>
-              <FileName>dl_vector.c</FileName>
+              <FileName>dl_vector_api.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\ELF Loader\dl_vector.c</FilePath>
+              <FilePath>..\ELF Loader\dl_vector_api.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -4884,6 +4894,26 @@
               <FileName>dl_string_lib.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\ELF Loader\common\dl_string_lib.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>EXTERN API</GroupName>
+          <Files>
+            <File>
+              <FileName>Extern_API.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\EXTERN API\Extern_API.c</FilePath>
+            </File>
+            <File>
+              <FileName>Extern_API.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\EXTERN API\Extern_API.h</FilePath>
+            </File>
+            <File>
+              <FileName>stargamer_axf_api.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\EXTERN API\stargamer_axf_api.h</FilePath>
             </File>
           </Files>
         </Group>

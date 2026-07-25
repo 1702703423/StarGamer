@@ -33,23 +33,23 @@ Post-build actions automatically generate `.bin` files from the ELF output.
 |------|---------|
 | `Core/Src/`, `Core/Inc/` | Entry point (`main.c`), peripheral init, FreeRTOS task creation (`freertos.c`), ISRs (`stm32f4xx_it.c`), HAL MSP/timebase |
 | `Drivers/` | CMSIS headers, STM32F4xx HAL drivers, **LCD driver** (ST7789 SPI with RGB565 block transfer/scaling, DMA timeout handling) |
-| `System/` | Core utilities: `sys.h` (ubiquitous types, bit-band macros), `Malloc` (dual-bank CCM+SRAMEX allocator), `System_Status` (state/errors/resources/settings), `firmware_start.c` (init + HardFault LCD dump), `adt_chain` (linked list), `kfifo` (Linux-style generic kernel FIFO for PCM audio) |
+| `System/` | Core utilities: `sys.h` (ubiquitous types, bit-band macros), `Malloc` (dual-bank CCM+SRAMEX allocator), `System_Status` (state/errors/resources/settings), `firmware_start.c` (init + HardFault LCD dump), `Memory_Dump` (HardFault memory dump to W25Q64 / SD card), `adt_chain` (linked list), `kfifo` (Linux-style generic kernel FIFO for PCM audio) |
 | `BSP/` | Board support: `w25q64` (SPI NOR Flash), `i2s` (I2S3 audio+DMA with collision stats), `at24c02` (I2C EEPROM), `key` (8-button driver) |
-| `Middlewares/` | FreeRTOS, FatFs (SDIO, codepage 936), LibJPEG (custom `jpeg_memory_provider`), LVGL, NES emulator, Arduboy compat layer, **Helix MP3** (ARM Cortex-M4 fixed-point, 24 source files incl. ARM asm) |
+| `Middlewares/` | FreeRTOS, FatFs (SDIO, codepage 936), LibJPEG (custom `jpeg_memory_provider`), LVGL, NES emulator, Arduboy compat layer, BMP image library (stub), **Helix MP3** (ARM Cortex-M4 fixed-point, 24 source files incl. ARM asm) |
 | `GUI/` | LVGL page manager: `GUI_Manage`, `GUI_Main`, `GUI_NES`, `GUI_Arduboy`, `GUI_Player` (with Seek UI), `GUI_Image`, `GUI_Text`, `GUI_Settings`, `GUI_Video`, `GUI_Font` (install+uninstall), `GUI_FileManage`, `GUI_Start` |
 | `Media/` | Player subsystem: `Player.c` (orchestration, codec abstraction, Seek), `Player_Codec.h` (`read_pcm`/`seek`/`tell_seconds`/`close`), `Player_WAV`, `Player_MP3` (Helix wrapper), `Video.c` (AVI state machine, A/V sync, frame drop, deadline scheduling), `AVI_Parser` (chunk tolerance, Seek), `Video_MJPEG` (tunable stripe height), `Video_PCM` (32 KB kfifo + DMA double-buffer), `Video_Memory` (77 KB aligned pool) |
-| `BootLoader/` | Independent CubeMX project (64 KB bare-metal firmware updater, Flash sectors 0-3), pre-built `.hex`/`.bin`/`.axf` available |
+| `BootLoader/` | Independent CubeMX project (64 KB bare-metal firmware updater, Flash sectors 0-3), `Boot/` modular layers (`bootloader` orchestration / `boot_crc` CRC32 / `boot_storage` storage / `boot_ui` UI / `boot_platform` platform), pre-built `.hex`/`.bin`/`.axf` available |
 | `USB_DEVICE/` | USB MSC device stack (`App/` + `Target/`), SD card as USB mass storage, ST official USB device library |
-| `Debug/` | Letter Shell v3.1.2 UART console, `shell_ext.c`, `shell_companion.c`, `fs_support/`, `videostat`/`audiostat` perf commands |
-| `ELF Loader/` | Dynamic ELF loader (`dl_lib`, `dl_elf.h`, `dl_arch.c`) for runtime `.axf` loading from SD card, DLL-like mechanism for Cortex-M |
+| `Debug/` | Letter Shell v3.1.2 UART console, `shell_ext.c`, `shell_support/` (Shell infrastructure: mutex/UART R/W/idle hook/System_init), `fs_support/` (filesystem commands cd/ls), `shell_companion.c`, `videostat`/`audiostat` perf commands, `UART1_Debug.c` (printf redirect) |
+| `ELF Loader/` | Dynamic ELF loader (`dl_lib`, `dl_elf.h`, `dl_arch.c`, `dl_vector.c`), `common/` (C stdlib SVC shims), runtime `.axf` loading from SD card, host function sharing via SVC |
 | `APP/Arduboy/` | Arduboy game runtime (`Arduboy_Runtime` state machine, `Arduboy_Port` HW layer, `Arduboy_Games` registry) |
 | `FATFS/`, `LIBJPEG/` | CubeMX-generated middleware shims (App + Target) |
 | `IAP/` | In-Application Programming: CRC32, EEPROM dual-slot records, W25Q64 staging/backup, vector table validation, progress callback |
 | `EXTERN API/` | External API interface (empty directory, planned) |
 | `PCB/` | LCEDA hardware design project (`ProPrj_StarGamer_*.epro2`) |
-| `Docs/` | Design docs: AVI player (full design + tearing analysis + high-bitrate optimization), BootLoader, Arduboy port, Helix MP3, CCM stack, GUI SRAM, SRAMEX optimization |
+| `Docs/` | Design docs: AVI player (full design + tearing analysis + high-bitrate optimization + log analysis), BootLoader, Arduboy port, Helix MP3, CCM stack, GUI SRAM, SRAMEX optimization |
 | `Tools/` | PC dev tools: `hexdump` (hex viewer, C+Python), `map_analyzer` (ARMCLANG .map memory analyzer, C+Python tkinter + PyInstaller .exe) |
-| `Tests/AVI_Parser_Host/` | AVI parser PC-hosted regression tests (boundary-condition unit tests + real AVI samples under `Tests/样本/`) |
+| `Tests/AVI_Parser_Host/`, `Tests/SDIO_Config_Host/` | AVI parser PC-hosted regression tests (boundary-condition unit tests + real AVI samples under `Tests/样本/`); SDIO IRQ priority validation script (verifies DMA stream IRQ priority > SDIO IRQ) |
 
 ### Boot Sequence
 
@@ -72,6 +72,8 @@ Unified page architecture based on `GUI_Manage.c/h`:
 | `GUI_PAGE_SETTINGS` | `GUI_Settings.c` | System settings |
 | `GUI_PAGE_VIDEO` | `GUI_Video.c` | AVI video player (MJPEG+PCM, with Seek) |
 | `GUI_PAGE_FONT` | `GUI_Font.c` | XBF font installation & uninstallation |
+
+- **Theme**: `GUI_Theme.c/h` — dark/light theme toggle, 20+ color tokens (`GUI_ThemeColor_t`), unified GUI color management
 
 - **Splash**: `GUI_Start.c` — startup spinner + status text, ready callback support
 - **File browser**: `GUI_FileManage.c/h` — reusable FatFs browser, async pagination (`GUI_FILEMANAGE_MAX_ITEMS=32`)
@@ -107,7 +109,7 @@ Unified page architecture based on `GUI_Manage.c/h`:
 
 - **LCD**: ST7789 240×320 RGB565, **SPI interface** (DMA writes). Driver `Drivers/LCD/LCD.c`, extended RGB565 block transfer & crop/scale. Backlight PWM (TIM12 CH2), `USE_HORIZONTAL = 1`. DMA timeout handling improved
 - **Audio**: I2S3 (SPI3) + DMA → external DAC. `BSP/i2s.c` "sound card" API: `audio_card_init()`, `audio_card_open_prepare()`, `audio_card_open()`, `audio_card_write()`, double-buffered DMA with callback (`audio_card_register_tx()`), collision stats
-- **Storage**: SD card SDIO 4-bit + DMA; W25Q64 8 MB SPI Flash (font 2MB + reserved 4MB + FW staging 1MB + FW backup 1MB); AT24C02 256B I2C EEPROM (IAP dual-slot records + system settings). FatFs with `ENABLE_SCRATCH_BUFFER` for DMA alignment
+- **Storage**: SD card SDIO 4-bit + DMA; W25Q64 8 MB SPI Flash (font 2MB + memory dump 4MB + FW staging 1MB + FW backup 1MB); AT24C02 256B I2C EEPROM (IAP dual-slot records + system settings). FatFs with `ENABLE_SCRATCH_BUFFER` for DMA alignment
 - **NES Emulator**: Entry `nes_main.c`, core `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`, `NES_SKIP_FRAME = 2`, 240+ mappers. Rendering adapted for this hardware
 - **Arduboy**: `Middlewares/Third_Party/Arduboy/` Arduboy2 engine core + 3 games. 128×64 1bpp framebuffer, runtime via `APP/Arduboy/Arduboy_Runtime.c`, port layer in `Arduboy_Port.c`
 - **Helix MP3**: `Middlewares/libhelix/` fixed-point Layer III decoder. 14 C files + 2 ARM asm files + port adapter `port/helix_support.c`. Adapted via `Player_MP3.c` implementing the codec interface
@@ -116,6 +118,7 @@ Unified page architecture based on `GUI_Manage.c/h`:
 - **HardFault**: `firmware_start.c` — standalone handler reinitializes SPI1+LCD GPIO, draws register dump on LCD. Memory-allocation HardFault fixed
 - **Buttons**: `BSP/key.c` 8-button, bitmask macros, game aliases (`KEY_GAME_UP/DOWN/LEFT/RIGHT/OK/A/B/SELECT/START`). Button adaptation complete
 - **IAP**: `IAP/IAP.c` — `IAP_PrepareUpdate()` from SD `update.bin` → CRC32 verify → W25Q64 staging → EEPROM dual-slot record. Power-loss recovery, vector table validation, progress callback. Shared protocol in `IAP_Protocol.h` used by both App and BootLoader
+- **Memory_Dump**: `System/Memory_Dump.c` — on HardFault, automatically dumps CCM/main SRAM/external SRAM to W25Q64 reserved partition (4 MB). Exportable to SD card `hardfault_dump.bin` via Shell command. FNV-1a checksum, progress callback, compile-time partition boundary checks
 
 ### BootLoader
 
@@ -124,6 +127,7 @@ Independent CubeMX project at `BootLoader/StarGamerBootLoader/`. Design doc: `Do
 - **Flash layout**: BootLoader 64 KB (sectors 0-3, 0x08000000–0x0800FFFF), Application 960 KB (sectors 4-11, 0x08010000–0x080FFFFF)
 - **Update flow**: SD `update.bin` → W25Q64 staging (0x600000) → CRC32 verify → erase internal Flash → verify → jump to App
 - **Safety**: Dual backup (W25Q64 backup at 0x700000), EEPROM dual-slot records, power-loss tolerance, CRC throughout
+- **Modular layers** (`Boot/`): `bootloader.c` (top-level orchestration), `boot_crc.c` (CRC32), `boot_storage.c` (storage abstraction), `boot_ui.c` (LCD display), `boot_platform.h` (platform types)
 - **Pre-built**: `.hex`, `.bin`, `.axf` binaries available
 
 ### LVGL Integration
@@ -133,6 +137,7 @@ Independent CubeMX project at `BootLoader/StarGamerBootLoader/`. Design doc: `Do
 - **Input**: `lv_port_indev_init()` for button input
 - **Video playback**: `lvgl_stop_ui()` / `lvgl_start_ui()` to release/reclaim LCD/SPI1
 - **Startup safety**: Fixed HardFault caused by LVGL/GUI startup thread-static initialization
+- **Theme**: `GUI_Theme.c/h` provides dark/light dual themes, switchable via `GUI_Theme_Apply()`. All GUI pages use `GUI_Theme_Color()` / `GUI_Theme_LvColor()` for unified colors
 
 ### ELF Dynamic Loader
 
@@ -142,6 +147,8 @@ Independent CubeMX project at `BootLoader/StarGamerBootLoader/`. Design doc: `Do
 - **ELF parsing**: `dl_elf.h` — full ELF format structures
 - **Arch adapter**: `dl_arch.c` — relocation instruction handling
 - **Port layer**: `dl_port.c/h` — memory/file IO abstraction
+- **Vector table**: `dl_vector.c` — function export table, SVC 8 mechanism for dynamic code to access host C stdlib (memcpy/memset/strlen etc., 22 functions)
+- **Stdlib shims**: `common/` — `dl_extern_lib.h` (SVC call macros) / `dl_string_lib.h` / `dl_stdio_lib.h` / `dl_stdlib_lib.h` / `dl_time_lib.h`
 - **User API**: `dl_user_api.h`
 
 ### AVI Video Player Status

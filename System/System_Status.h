@@ -10,6 +10,17 @@
 #define SYSTEM_FONT_FLASH_ADDR   (0UL)
 #define SYSTEM_FONT_FLASH_SIZE   (2UL * 1024UL * 1024UL)
 
+#define SYSTEM_AXF_STACK_LEVEL_COUNT 5U
+
+typedef enum System_AxfStackLevel
+{
+	SYSTEM_AXF_STACK_4KB = 0,
+	SYSTEM_AXF_STACK_8KB,
+	SYSTEM_AXF_STACK_12KB,
+	SYSTEM_AXF_STACK_16KB,
+	SYSTEM_AXF_STACK_24KB
+} System_AxfStackLevel_t;
+
 //system error code start-------------------
 
 #define SYSTEM_STATUS_OK			  0x00
@@ -76,6 +87,7 @@ typedef struct System_Settings
 	u8 MemoryDumpMainSramEnabled;
 	u8 MemoryDumpSramexEnabled;
 	u8 ThemeLightEnabled;
+	u8 AxfStackLevel;
 }System_Settings_t;
 
 typedef enum System_DebugLog
@@ -126,6 +138,7 @@ int SysUnregisterThread(osThreadId_t tid);
 int SysTerminateThread(osThreadId_t tid);
 int lvgl_start_ui(void);
 int lvgl_stop_ui(void);
+int lvgl_recover_ui(osThreadId_t owner);
 u8 lvgl_ui_pause_point(void);
 void System_Settings_SetDefaults(System_Settings_t* settings);
 int System_Settings_Init(void);
@@ -136,6 +149,9 @@ u8 System_Settings_UsbMscEnabled(void);
 int System_Settings_SetUsbMscEnabled(u8 enabled);
 u8 System_Settings_ThemeLightEnabled(void);
 int System_Settings_SetThemeLightEnabled(u8 enabled);
+u8 System_Settings_AxfStackLevel(void);
+u32 System_Settings_AxfStackSize(void);
+int System_Settings_SetAxfStackLevel(u8 level);
 u8 System_DebugEnabled(void);
 u8 System_DebugShellEnabled(void);
 u8 System_DebugLogEnabled(System_DebugLog_t source);

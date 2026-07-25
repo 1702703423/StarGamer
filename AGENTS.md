@@ -26,23 +26,23 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 |------|------|------|
 | **Core** | `Core/Src/`, `Core/Inc/` | `main.c`（入口、外设初始化），`freertos.c`（空闲/定时器任务），`stm32f4xx_it.c`（ISR），HAL MSP/timebase |
 | **Drivers** | `Drivers/` | CMSIS、STM32F4 HAL、`LCD/`（ST7789 SPI 显示驱动，含 RGB565 块传输/缩放裁剪） |
-| **System** | `System/` | `sys.h`（u8/u16/u32、位带宏 PAout/PAin），`Malloc`（CCM + SRAMEX 双堆分配器），`System_Status`（系统状态/错误码/资源表/设置持久化），`firmware_start.c`（系统初始化 + HardFault LCD 显示），`adt_chain`（链表），`kfifo`（内核 FIFO，Linux 风格泛型队列，用于 PCM 音频缓冲），`ccm_memory.h`、`StarGamer_CCM.sct`（链接脚本） |
+| **System** | `System/` | `sys.h`（u8/u16/u32、位带宏 PAout/PAin），`Malloc`（CCM + SRAMEX 双堆分配器），`System_Status`（系统状态/错误码/资源表/设置持久化），`firmware_start.c`（系统初始化 + HardFault LCD 显示），`Memory_Dump`（HardFault 内存转储到 W25Q64 / SD 卡），`adt_chain`（链表），`kfifo`（内核 FIFO，Linux 风格泛型队列，用于 PCM 音频缓冲），`ccm_memory.h`、`StarGamer_CCM.sct`（链接脚本） |
 | **BSP** | `BSP/` | `w25q64`（SPI NOR Flash），`i2s`（I2S3 音频输出 + DMA，增强 API：`audio_card_open_prepare`，含碰撞统计），`at24c02`（I2C EEPROM），`key`（8 键驱动 + 游戏键位别名） |
-| **Middlewares** | `Middlewares/` | FreeRTOS、FatFs（SDIO，codepage 936）、LibJPEG（自定义 `jpeg_memory_provider`）、LVGL、NES 模拟器、Arduboy 兼容层、**Helix MP3 解码库**（ARM Cortex-M4 定点优化，24 个源文件含 ARM 汇编） |
+| **Middlewares** | `Middlewares/` | FreeRTOS、FatFs（SDIO，codepage 936）、LibJPEG（自定义 `jpeg_memory_provider`）、LVGL、NES 模拟器、Arduboy 兼容层、BMP 图像库（占位）、**Helix MP3 解码库**（ARM Cortex-M4 定点优化，24 个源文件含 ARM 汇编） |
 | **GUI** | `GUI/` | LVGL 页面管理器架构（见下方 GUI 章节） |
 | **Media** | `Media/` | 播放器子系统（见下方 Media 章节） |
-| **BootLoader** | `BootLoader/StarGamerBootLoader/` | 独立 CubeMX 工程，64 KB 裸机固件更新器（Flash 扇区 0–3），已编译生成 .hex/.bin/.axf，无 RTOS/FATFS/LVGL |
+| **BootLoader** | `BootLoader/StarGamerBootLoader/` | 独立 CubeMX 工程，64 KB 裸机固件更新器（Flash 扇区 0–3），`Boot/` 模块化分层（`bootloader` 编排 / `boot_crc` CRC32 / `boot_storage` 存储 / `boot_ui` UI / `boot_platform` 平台定义），已编译生成 .hex/.bin/.axf，无 RTOS/FATFS/LVGL |
 | **USB_DEVICE** | `USB_DEVICE/` | USB MSC 设备栈（`App/` + `Target/`），SD 卡模拟 U 盘 |
-| **Debug** | `Debug/` | Letter Shell v3.1.2（UART 控制台），`shell_ext.c`（用户命令），`fs_support/`（文件系统命令），`shell_companion.c`，`videostat`/`audiostat` 性能统计命令 |
-| **ELF Loader** | `ELF Loader/` | 动态 ELF 加载器（`dl_lib`、`dl_elf.h`、`dl_arch.c`），从 SD 卡运行时加载 `.axf` 可重定位代码，类 Windows DLL 机制 |
+| **Debug** | `Debug/` | Letter Shell v3.1.2（UART 控制台），`shell_ext.c`（用户命令），`shell_support/`（Shell 基础设施：mutex/UART 读写/空闲钩子/System_init），`fs_support/`（文件系统命令 cd/ls），`shell_companion.c`，`videostat`/`audiostat` 性能统计命令，`UART1_Debug.c`（printf 重定向） |
+| **ELF Loader** | `ELF Loader/` | 动态 ELF 加载器（`dl_lib`、`dl_elf.h`、`dl_arch.c`、`dl_vector.c`），`common/`（C 标准库 SVC shim），从 SD 卡运行时加载 `.axf` 可重定位代码，通过 SVC 调用共享宿主函数 |
 | **APP** | `APP/Arduboy/` | Arduboy 游戏运行时（`Arduboy_Runtime` — 状态机管理、`Arduboy_Port` — 硬件移植层、`Arduboy_Games` — 游戏注册表） |
 | **FATFS / LIBJPEG** | `FATFS/`, `LIBJPEG/` | CubeMX 生成的中间件适配层（App + Target） |
 | **IAP** | `IAP/` | 在应用编程模块（CRC32 校验、EEPROM 双槽容错记录、W25Q64 暂存/备份区管理、中断向量验证、进度回调） |
 | **EXTERN API** | `EXTERN API/` | 外部 API 接口（空目录，规划中） |
 | **PCB** | `PCB/` | 立创 EDA 硬件设计工程文件（`ProPrj_StarGamer_*.epro2`） |
-| **Docs** | `Docs/` | 架构设计文档：AVI 视频播放器（完整设计 + 撕裂分析 + 高码率卡顿优化方案）、BootLoader 设计、Arduboy 移植、Helix MP3 移植、CCM 栈优化、GUI SRAM 优化、SRAMEX 优化方案 |
+| **Docs** | `Docs/` | 架构设计文档：AVI 视频播放器（完整设计 + 撕裂分析 + 高码率卡顿优化方案 + 日志优化点）、BootLoader 设计、Arduboy 移植、Helix MP3 移植、CCM 栈优化、GUI SRAM 优化、SRAMEX 优化方案 |
 | **Tools** | `Tools/` | PC 端开发工具：`hexdump`（文件十六进制查看，C + Python）、`map_analyzer`（ARMCLANG .map 内存分析，C + Python tkinter GUI + PyInstaller 打包 .exe） |
-| **Tests** | `Tests/AVI_Parser_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`） |
+| **Tests** | `Tests/AVI_Parser_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`）；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
 
 ### 启动流程
 
@@ -73,6 +73,8 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | `GUI_PAGE_FONT` | `GUI_Font.c` | XBF 字库安装与卸载 |
 | `GUI_PAGE_AXF_LOADER` | `GUI_Axf.c` | AXF 加载器（占位，0 字节） |
 
+- **主题系统**: `GUI_Theme.c/h` — 深色/浅色主题切换，定义 20+ 颜色 token（`GUI_ThemeColor_t`），统一管理 GUI 配色
+
 - **起始页**: `GUI_Start.c` — 启动动画（spinner + 状态文字），初始化完成后回调进入主菜单，支持 ready 回调
 - **文件浏览器**: `GUI_FileManage.c/h` — 可复用的 FatFs 文件浏览器组件，支持扩展过滤、OEM/UTF-8 转码、异步分页加载（`GUI_FILEMANAGE_MAX_ITEMS=32`）
 - **生命周期**: `Page_Create(init, callback)` → `Page_Show(id)` / `Page_Show_Anim()` → `Page_Back()` → `Page_Delete(id)`
@@ -91,7 +93,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | **AVI 解析** | `AVI_Parser.c/h` | RIFF/AVI 容器解析，小端读取，流索引，chunk 边界容错，Seek 支持 |
 | **MJPEG 解码** | `Video_MJPEG.c/h` | MJPEG 帧解码管线，LibJPEG 流式输入，可调条带高度（`VIDEO_MJPEG_STRIPE_LINES`），JPEG arena 峰值统计 |
 | **PCM 音频** | `Video_PCM.c/h` | AVI PCM 音频流解码，32 KB kfifo 缓冲，DMA 双半缓冲补数，欠载/碰撞统计，预缓冲水位线 |
-| **视频内存** | `Video_Memory.c/h` | 视频帧缓冲池管理（SRAMEX），条带缓冲，77 KB 对齐分配器 |
+| **视频内存** | `Video_Memory.c/h` | 视频帧缓冲池管理（SRAMEX），条带缓冲，80 KB 对齐分配器 |
 
 ### 内存架构
 
@@ -114,7 +116,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
   - NES APU、MP3/WAV 播放器、AVI PCM 均通过回调推送到 I2S
 - **存储**:
   - SD 卡 SDIO 4-bit + DMA（RX: DMA2_Stream3，TX: DMA2_Stream6），FatFs codepage 936，已启用 512 B 对齐 scratch buffer
-  - W25Q64（8 MB）SPI Flash（SPI2）：分区为字体区 2 MB + 预留区 4 MB + 固件暂存区 1 MB + 固件备份区 1 MB
+  - W25Q64（8 MB）SPI Flash（SPI2）：分区为字体区 2 MB + 内存转储区 4 MB + 固件暂存区 1 MB + 固件备份区 1 MB
   - AT24C02（256 B）I2C EEPROM：用于 IAP 双槽容错记录 + 系统设置持久化
 - **NES 模拟器**: 入口 `nes_main.c`，核心 `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`，`NES_SKIP_FRAME = 2`（跳帧），mapper 文件 `000.cpp`–`255.cpp`。渲染逻辑已适配优化
 - **Arduboy 游戏**: `Middlewares/Third_Party/Arduboy/` 含兼容层（Arduboy2 引擎核心）+ 3 款游戏（Buttons / Dino / FlappyBall）。128×64 1bpp framebuffer，通过 `APP/Arduboy/Arduboy_Runtime.c` 管理生命周期，`Arduboy_Port.c` 对接 LCD 显示和按键
@@ -124,6 +126,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **HardFault 处理**: `firmware_start.c` 内嵌完整 HardFault Handler — 独立重新初始化 SPI1 + LCD GPIO，在 LCD 上绘制寄存器转储（R0-R3/R12/LR/PC/xPSR/CFSR/HFSR/MMFAR/BFAR），无需依赖 HAL 或 RTOS。内存分配 HardFault 已修复
 - **按键**: 8 键驱动（`BSP/key.c`），`KEY_Id_t` 枚举 + 位掩码宏，预定义游戏键位别名（`KEY_GAME_UP/DOWN/LEFT/RIGHT/OK/A/B/SELECT/START`），按键适配已完成
 - **IAP 固件更新**: `IAP/IAP.c` — `IAP_PrepareUpdate()` 从 SD 卡 `update.bin` → CRC32 校验 → W25Q64 暂存 → EEPROM 双槽记录。支持断电恢复、中断向量验证、进度回调。共享协议定义 `IAP_Protocol.h` 供 App 和 BootLoader 共用
+- **Memory_Dump**: `System/Memory_Dump.c` — HardFault 时自动将 CCM/主 SRAM/外部 SRAM 完整内存映像写入 W25Q64 保留分区（2 MB），可通过 Shell 命令导出到 SD 卡 `hardfault_dump.bin`。支持 FNV-1a 校验和、进度回调、分区边界编译期检查
 
 ### BootLoader
 
@@ -133,6 +136,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **更新流程**: SD 卡 `update.bin` → 写入 W25Q64 暂存区（0x600000）→ CRC32 校验 → 擦写内部 Flash → 校验后跳转 App
 - **安全机制**: 双备份（W25Q64 备份区 0x700000）、EEPROM 双槽记录、断电容错、CRC 全程校验
 - **外设**: 仅依赖 SPI1,SPI2（LCD / W25Q64 / 按键）、内部 Flash HAL、CRC
+- **模块化分层**（`Boot/`）: `bootloader.c`（顶层编排）、`boot_crc.c`（CRC32）、`boot_storage.c`（存储抽象）、`boot_ui.c`（LCD 显示）、`boot_platform.h`（平台类型定义）
 - **产物**: 已编译生成 `StarGamerBootLoader.hex`、`.bin`、`.axf`
 
 ### LVGL 集成
@@ -142,6 +146,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **输入设备**: `lv_port_indev_init()` 注册按键输入
 - **视频播放期间**: 通过 `lvgl_stop_ui()` / `lvgl_start_ui()` 暂停/恢复 LVGL，释放 LCD/SPI1 所有权给 Video Task
 - **启动安全**: 修复了 LVGL 与 GUI 启动时线程静态变量引发的 HardFault
+- **主题**: `GUI_Theme.c/h` 提供深色/浅色双主题，通过 `GUI_Theme_Apply()` 一键切换，所有 GUI 页面通过 `GUI_Theme_Color()` / `GUI_Theme_LvColor()` 获取统一配色
 
 ### ELF 动态加载器
 
@@ -151,6 +156,8 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **ELF 解析**: `dl_elf.h` — 完整的 ELF 格式解析结构体
 - **架构适配**: `dl_arch.c` — 重定位指令处理
 - **移植层**: `dl_port.c/h` — 内存分配/文件 IO 抽象
+- **向量表**: `dl_vector.c` — 函数导出表，通过 SVC 8 调用让动态加载代码访问宿主 C 标准库（memcpy/memset/strlen 等 22 个函数）
+- **标准库 shim**: `common/` — `dl_extern_lib.h`（SVC 调用宏）/ `dl_string_lib.h` / `dl_stdio_lib.h` / `dl_stdlib_lib.h` / `dl_time_lib.h`
 - **用户 API**: `dl_user_api.h` — 用户侧 API 声明
 
 ### AVI 视频播放器架构
@@ -201,6 +208,8 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - `IAP/` 已完整实现，App 和 BootLoader 通过 `IAP_Protocol.h` 共享协议定义
 - `PCB/` 含立创 EDA 硬件设计工程文件
 - `Docs/` 目录含详细设计文档，修改前应查阅相关文档
-- `Tests/` 含 AVI 解析器 PC 端回归测试和真实 AVI 样本文件
+- `Tests/` 含 AVI 解析器 PC 端回归测试 + SDIO IRQ 优先级验证脚本 + 真实 AVI 样本文件
 - `Middlewares/libhelix/port/helix_support.c` 为 Helix MP3 移植适配层
+- `Middlewares/Third_Party/BMP/` 为 BMP 图像库占位，尚未实现
 - ELF Loader 源自 `dl_lib`（Cortex-M 系列通用），当前适配 STM32F407
+- Memory_Dump 使用 W25Q64 的 4 MB 内存转储分区（原预留区），通过编译期断言验证分区边界不重叠

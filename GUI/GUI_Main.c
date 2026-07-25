@@ -6,6 +6,7 @@
 #include "GUI_Image.h"
 #include "GUI_Text.h"
 #include "GUI_Settings.h"
+#include "GUI_Axf.h"
 #include "GUI_Theme.h"
 
 #define GUI_MENU_ITEM_W 72
@@ -430,6 +431,7 @@ int GUI_Main_Init(void)
 		    s_menu_items[i].page_id == GUI_PAGE_VIDEO ||
 		    s_menu_items[i].page_id == GUI_PAGE_IMAGE ||
 		    s_menu_items[i].page_id == GUI_PAGE_TEXT ||
+		    s_menu_items[i].page_id == GUI_PAGE_AXF_LOADER ||
 		    s_menu_items[i].page_id == GUI_PAGE_SETTINGS)
 		{
 			continue;
@@ -466,6 +468,8 @@ static int GUI_Main_ShowPage(Page_ID_t id)
 			return GUI_Image_Show();
 		case GUI_PAGE_TEXT:
 			return GUI_Text_Show();
+		case GUI_PAGE_AXF_LOADER:
+			return GUI_Axf_Show();
 		case GUI_PAGE_SETTINGS:
 			return GUI_Settings_Show();
 		default:

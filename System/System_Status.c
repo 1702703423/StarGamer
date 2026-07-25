@@ -12,13 +12,24 @@
 
 #define SYSTEM_SETTINGS_EEPROM_ADDR       0U
 #define SYSTEM_SETTINGS_MAGIC             0x53544753UL
-#define SYSTEM_SETTINGS_VERSION           3U
+#define SYSTEM_SETTINGS_VERSION           4U
+#define SYSTEM_SETTINGS_VERSION_V3        3U
 #define SYSTEM_SETTINGS_VERSION_V2        2U
 #define SYSTEM_SETTINGS_VERSION_V1        1U
 #define SYSTEM_SETTINGS_DEFAULT_VOLUME    70UL
 #define SYSTEM_SETTINGS_DEFAULT_LIGHT     100U
 #define SYSTEM_SETTINGS_DEFAULT_FONT_LINE 21U
+#define SYSTEM_SETTINGS_DEFAULT_AXF_STACK SYSTEM_AXF_STACK_16KB
 #define SYSTEM_DEBUG_LOG_BUFFER_SIZE       192U
+
+static const u32 s_system_axf_stack_sizes[SYSTEM_AXF_STACK_LEVEL_COUNT] =
+{
+	4UL * 1024UL,
+	8UL * 1024UL,
+	12UL * 1024UL,
+	16UL * 1024UL,
+	24UL * 1024UL
+};
 
 typedef struct System_SettingsV1
 {
@@ -61,6 +72,32 @@ typedef struct System_SettingsV2
 	u8 MemoryDumpSramexEnabled;
 } System_SettingsV2_t;
 
+typedef struct System_SettingsV3
+{
+	u32 volume;
+	u8 Debug;
+	u8 UsbMscEnabled;
+	u16 ScreenLight;
+	u8 FontInstalled;
+	u8 FontBpp;
+	u8 FontLineHeight;
+	u8 FontBaseLine;
+	u32 FontFlashAddress;
+	u32 FontSize;
+	u16 FontMinUnicode;
+	u16 FontMaxUnicode;
+	u8 DebugShellEnabled;
+	u8 DebugAudioLogEnabled;
+	u8 DebugVideoLogEnabled;
+	u8 DebugLibjpegLogEnabled;
+	u8 DebugFatfsLogEnabled;
+	u8 MemoryDumpEnabled;
+	u8 MemoryDumpCcmEnabled;
+	u8 MemoryDumpMainSramEnabled;
+	u8 MemoryDumpSramexEnabled;
+	u8 ThemeLightEnabled;
+} System_SettingsV3_t;
+
 typedef struct System_Settings_Record
 {
 	u32 magic;
@@ -79,6 +116,15 @@ typedef struct System_Settings_RecordV2
 	u32 checksum;
 } System_Settings_RecordV2_t;
 
+typedef struct System_Settings_RecordV3
+{
+	u32 magic;
+	u16 version;
+	u16 size;
+	System_SettingsV3_t settings;
+	u32 checksum;
+} System_Settings_RecordV3_t;
+
 typedef struct System_Settings_RecordV1
 {
 	u32 magic;
@@ -91,6 +137,7 @@ typedef struct System_Settings_RecordV1
 typedef union System_Settings_Storage
 {
 	System_Settings_Record_t current;
+	System_Settings_RecordV3_t v3;
 	System_Settings_RecordV2_t v2;
 	System_Settings_RecordV1_t legacy;
 } System_Settings_Storage_t;
@@ -389,6 +436,7 @@ extern osThreadId_t lvglThreadId;
 static volatile u8 s_lvgl_pause_requested;
 static volatile u8 s_lvgl_paused;
 static osThreadId_t s_lvgl_display_owner;
+static osThreadId_t s_lvgl_resume_waiter;
 
 int lvgl_start_ui(void)
 {
@@ -408,12 +456,14 @@ int lvgl_start_ui(void)
 	{
 		return OPERATE_FAILED;
 	}
-	if (s_lvgl_display_owner != current || s_lvgl_pause_requested == 0U || s_lvgl_paused == 0U)
+	if (s_lvgl_display_owner != current || s_lvgl_pause_requested == 0U ||
+	    s_lvgl_paused == 0U || s_lvgl_resume_waiter != NULL)
 	{
 		(void)osKernelRestoreLock(lock_state);
 		return OPERATE_FAILED;
 	}
 
+	s_lvgl_resume_waiter = current;
 	s_lvgl_pause_requested = 0U;
 	__DMB();
 	(void)osKernelRestoreLock(lock_state);
@@ -445,7 +495,8 @@ int lvgl_stop_ui(void)
 	{
 		return OPERATE_FAILED;
 	}
-	if (s_lvgl_display_owner != NULL || s_lvgl_pause_requested != 0U || s_lvgl_paused != 0U)
+	if (s_lvgl_display_owner != NULL || s_lvgl_resume_waiter != NULL ||
+	    s_lvgl_pause_requested != 0U || s_lvgl_paused != 0U)
 	{
 		(void)osKernelRestoreLock(lock_state);
 		return OPERATE_FAILED;
@@ -476,9 +527,65 @@ int lvgl_stop_ui(void)
 	return OPERATE_FAILED;
 }
 
+int lvgl_recover_ui(osThreadId_t owner)
+{
+	osThreadId_t current;
+	u32 flags;
+	s32 lock_state;
+	u8 already_recovered;
+
+	current = osThreadGetId();
+	if (lvglThreadId == NULL || current == NULL || owner == NULL ||
+	    current == lvglThreadId)
+	{
+		return OPERATE_FAILED;
+	}
+
+	(void)osThreadFlagsClear(LVGL_UI_FLAG_RESUMED);
+	lock_state = osKernelLock();
+	if (lock_state < 0)
+	{
+		return OPERATE_FAILED;
+	}
+	if (s_lvgl_display_owner != owner)
+	{
+		already_recovered = (s_lvgl_display_owner == NULL &&
+		                     s_lvgl_paused == 0U) ? 1U : 0U;
+		(void)osKernelRestoreLock(lock_state);
+		return (already_recovered != 0U) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+	}
+
+	if (s_lvgl_paused == 0U && s_lvgl_pause_requested != 0U)
+	{
+		/* Cancel an ownership request before LVGL enters its pause point. */
+		s_lvgl_pause_requested = 0U;
+		s_lvgl_resume_waiter = NULL;
+		s_lvgl_display_owner = NULL;
+		__DMB();
+		(void)osKernelRestoreLock(lock_state);
+		return SYSTEM_STATUS_OK;
+	}
+
+	s_lvgl_resume_waiter = current;
+	s_lvgl_pause_requested = 0U;
+	__DMB();
+	(void)osKernelRestoreLock(lock_state);
+
+	flags = osThreadFlagsSet(lvglThreadId, LVGL_UI_FLAG_RESUME);
+	if ((flags & osFlagsError) != 0U)
+	{
+		return OPERATE_FAILED;
+	}
+
+	flags = osThreadFlagsWait(LVGL_UI_FLAG_RESUMED, osFlagsWaitAny,
+	                          LVGL_UI_HANDSHAKE_TIMEOUT);
+	return ((flags & osFlagsError) == 0U) ? SYSTEM_STATUS_OK : OPERATE_FAILED;
+}
+
 u8 lvgl_ui_pause_point(void)
 {
 	osThreadId_t owner;
+	osThreadId_t waiter;
 	u32 flags;
 	u32 acknowledge_flags;
 	s32 lock_state;
@@ -537,12 +644,17 @@ u8 lvgl_ui_pause_point(void)
 	{
 		s_lvgl_paused = 0U;
 		__DMB();
+		waiter = s_lvgl_resume_waiter;
+		s_lvgl_resume_waiter = NULL;
 		if (s_lvgl_display_owner == owner)
 		{
-			(void)osThreadFlagsSet(owner, LVGL_UI_FLAG_RESUMED);
 			s_lvgl_display_owner = NULL;
 		}
 		(void)osKernelRestoreLock(lock_state);
+		if (waiter != NULL)
+		{
+			(void)osThreadFlagsSet(waiter, LVGL_UI_FLAG_RESUMED);
+		}
 	}
 
 	return paused;
@@ -569,6 +681,7 @@ void System_Settings_SetDefaults(System_Settings_t* settings)
 	settings->MemoryDumpSramexEnabled = 1U;
 	settings->UsbMscEnabled = 0U;
 	settings->ThemeLightEnabled = 0U;
+	settings->AxfStackLevel = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;
 	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
 	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
 	settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
@@ -601,6 +714,7 @@ int System_Settings_Load(void)
 {
 	System_Settings_Storage_t storage;
 	System_Settings_Record_t* record;
+	System_Settings_RecordV3_t* v3;
 	System_Settings_RecordV2_t* v2;
 	System_Settings_RecordV1_t* legacy;
 	u32 checksum;
@@ -624,6 +738,41 @@ int System_Settings_Load(void)
 		System_Settings = record->settings;
 		System_Settings_Normalize(&System_Settings);
 		return SYSTEM_STATUS_OK;
+	}
+
+	v3 = &storage.v3;
+	checksum = System_Settings_Checksum((const u8*)v3,
+		(u16)(sizeof(*v3) - sizeof(v3->checksum)));
+	if (v3->magic == SYSTEM_SETTINGS_MAGIC &&
+	    v3->version == SYSTEM_SETTINGS_VERSION_V3 &&
+	    v3->size == (u16)sizeof(System_SettingsV3_t) &&
+	    v3->checksum == checksum)
+	{
+		System_Settings_SetDefaults(&System_Settings);
+		System_Settings.volume = v3->settings.volume;
+		System_Settings.Debug = v3->settings.Debug;
+		System_Settings.UsbMscEnabled = v3->settings.UsbMscEnabled;
+		System_Settings.ScreenLight = v3->settings.ScreenLight;
+		System_Settings.FontInstalled = v3->settings.FontInstalled;
+		System_Settings.FontBpp = v3->settings.FontBpp;
+		System_Settings.FontLineHeight = v3->settings.FontLineHeight;
+		System_Settings.FontBaseLine = v3->settings.FontBaseLine;
+		System_Settings.FontFlashAddress = v3->settings.FontFlashAddress;
+		System_Settings.FontSize = v3->settings.FontSize;
+		System_Settings.FontMinUnicode = v3->settings.FontMinUnicode;
+		System_Settings.FontMaxUnicode = v3->settings.FontMaxUnicode;
+		System_Settings.DebugShellEnabled = v3->settings.DebugShellEnabled;
+		System_Settings.DebugAudioLogEnabled = v3->settings.DebugAudioLogEnabled;
+		System_Settings.DebugVideoLogEnabled = v3->settings.DebugVideoLogEnabled;
+		System_Settings.DebugLibjpegLogEnabled = v3->settings.DebugLibjpegLogEnabled;
+		System_Settings.DebugFatfsLogEnabled = v3->settings.DebugFatfsLogEnabled;
+		System_Settings.MemoryDumpEnabled = v3->settings.MemoryDumpEnabled;
+		System_Settings.MemoryDumpCcmEnabled = v3->settings.MemoryDumpCcmEnabled;
+		System_Settings.MemoryDumpMainSramEnabled = v3->settings.MemoryDumpMainSramEnabled;
+		System_Settings.MemoryDumpSramexEnabled = v3->settings.MemoryDumpSramexEnabled;
+		System_Settings.ThemeLightEnabled = v3->settings.ThemeLightEnabled;
+		System_Settings_Normalize(&System_Settings);
+		return System_Settings_Save();
 	}
 
 	v2 = &storage.v2;
@@ -754,6 +903,44 @@ int System_Settings_SetThemeLightEnabled(u8 enabled)
 	if (code != SYSTEM_STATUS_OK)
 	{
 		System_Settings.ThemeLightEnabled = old_enabled;
+	}
+
+	return code;
+}
+
+u8 System_Settings_AxfStackLevel(void)
+{
+	return System_Settings.AxfStackLevel;
+}
+
+u32 System_Settings_AxfStackSize(void)
+{
+	u8 level = System_Settings_AxfStackLevel();
+
+	if (level >= SYSTEM_AXF_STACK_LEVEL_COUNT)
+	{
+		level = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;
+	}
+
+	return s_system_axf_stack_sizes[level];
+}
+
+int System_Settings_SetAxfStackLevel(u8 level)
+{
+	u8 old_level;
+	int code;
+
+	if (level >= SYSTEM_AXF_STACK_LEVEL_COUNT)
+	{
+		return OPERATE_FAILED;
+	}
+
+	old_level = System_Settings.AxfStackLevel;
+	System_Settings.AxfStackLevel = level;
+	code = System_Settings_Save();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		System_Settings.AxfStackLevel = old_level;
 	}
 
 	return code;
@@ -900,6 +1087,10 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 	settings->MemoryDumpSramexEnabled = (settings->MemoryDumpSramexEnabled != 0U) ? 1U : 0U;
 	settings->UsbMscEnabled = (settings->UsbMscEnabled != 0U) ? 1U : 0U;
 	settings->ThemeLightEnabled = (settings->ThemeLightEnabled != 0U) ? 1U : 0U;
+	if (settings->AxfStackLevel >= SYSTEM_AXF_STACK_LEVEL_COUNT)
+	{
+		settings->AxfStackLevel = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;
+	}
 	valid_font = (settings->FontInstalled != 0U &&
 	              settings->FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&
 	              settings->FontSize > 0U &&

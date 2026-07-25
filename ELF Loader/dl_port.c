@@ -18,13 +18,21 @@ extern void *aligned_alloc(size_t align_byte,size_t size);
 //size:内存大小
 //返回值：void* 内存地址，分配失败时返回NULL
 void* dl_port_aligned_alloc(size_t align_byte,size_t size){
-	return sys_malloc(1,size);
+	u32 alignment = (u32)align_byte;
+
+	if(alignment < 4U){
+		alignment = 4U;
+	}
+	if((alignment & (alignment - 1U)) != 0U){
+		return NULL;
+	}
+	return sys_malloc_aligned(SRAMEX,(u32)size,alignment);
 }
 
 //释放对齐分配的内存
 //ptr:对齐内存的地址
 void dl_port_aligned_free(void* ptr){
-	sys_free(1,ptr);
+	sys_free_aligned(SRAMEX,ptr);
 }
 
 //分配一块指定大小的内存
@@ -94,4 +102,3 @@ void dl_port_cache_process(void* addr,size_t size){
 	SCB_InvalidateICache_by_Addr(addr,size);
 }
 #endif
-
