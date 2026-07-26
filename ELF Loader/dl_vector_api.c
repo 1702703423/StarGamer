@@ -49,6 +49,7 @@ static __attribute__((used)) void * const DL_Vector_Table[
 	DL_VECTOR_USER(ExternAPI_KeyGetState, DL_USER_KEY_GET_STATE)
 	DL_VECTOR_USER(ExternAPI_KeyGetRawState, DL_USER_KEY_GET_RAW_STATE)
 	DL_VECTOR_USER(ExternAPI_AXF_ShouldExit, DL_USER_SHOULD_EXIT)
+	DL_VECTOR_USER(ExternAPI_AXF_Delay, DL_USER_AXF_DELAY)
 };
 
 int UserAdd(int a, int b)

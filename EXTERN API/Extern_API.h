@@ -25,6 +25,7 @@ u16 ExternAPI_LCD_GetHeight(void);
 u32 ExternAPI_KeyGetState(void);
 u32 ExternAPI_KeyGetRawState(void);
 u8 ExternAPI_AXF_ShouldExit(void);
+void ExternAPI_AXF_Delay(u32 milliseconds);
 
 #ifdef __cplusplus
 }

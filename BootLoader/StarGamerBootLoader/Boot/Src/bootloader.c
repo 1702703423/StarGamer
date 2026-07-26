@@ -30,6 +30,7 @@ static u8 Boot_BackupApp(Boot_Record_t *record);
 static u8 Boot_EraseAppFlash(const char *title);
 static u8 Boot_ProgramFromW25(u32 source, u32 length, const char *title);
 static u8 Boot_VerifyWithW25(u32 source, u32 length, const char *title);
+static void Boot_FlushFlashCaches(void);
 static u8 Boot_RestoreBackup(Boot_Record_t *record);
 static u8 Boot_UpdateFailure(Boot_Record_t *record, const char *reason);
 static u8 Boot_InstallUpdate(Boot_Record_t *record);
@@ -244,7 +245,14 @@ static u8 Boot_ProgramFromW25(u32 source, u32 length, const char *title)
 		processed += chunk;
 		Boot_ShowProgress(title, "PROGRAMMING APP", processed, length);
 	}
-	return (HAL_FLASH_Lock() == HAL_OK) ? 1U : 0U;
+	if (HAL_FLASH_Lock() != HAL_OK)
+	{
+		return 0U;
+	}
+
+	/* HAL flushes ART caches after erase, but not after word programming. */
+	Boot_FlushFlashCaches();
+	return 1U;
 }
 
 static u8 Boot_VerifyWithW25(u32 source, u32 length, const char *title)
@@ -269,6 +277,13 @@ static u8 Boot_VerifyWithW25(u32 source, u32 length, const char *title)
 		Boot_ShowProgress(title, "VERIFYING APP", processed, length);
 	}
 	return 1U;
+}
+
+static void Boot_FlushFlashCaches(void)
+{
+	FLASH_FlushCaches();
+	__DSB();
+	__ISB();
 }
 
 static u8 Boot_RestoreBackup(Boot_Record_t *record)
@@ -312,9 +327,9 @@ static u8 Boot_RestoreBackup(Boot_Record_t *record)
 	{
 		return 0U;
 	}
-	Boot_UI_Message("RESTORE APP", "RESTORE COMPLETE", "STARTING APP");
+	Boot_UI_Message("RESTORE APP", "RESTORE COMPLETE", "RESTARTING");
 	Boot_DelayMs(400U);
-	Boot_JumpToApp();
+	NVIC_SystemReset();
 }
 
 static u8 Boot_UpdateFailure(Boot_Record_t *record, const char *reason)
@@ -415,9 +430,9 @@ static u8 Boot_InstallUpdate(Boot_Record_t *record)
 		Boot_UI_Message("INSTALL UPDATE", "STATE SAVE FAILED", "UPDATE WILL RETRY");
 		return 0U;
 	}
-	Boot_UI_Message("INSTALL UPDATE", "UPDATE COMPLETE", "STARTING APP");
+	Boot_UI_Message("INSTALL UPDATE", "UPDATE COMPLETE", "RESTARTING");
 	Boot_DelayMs(400U);
-	Boot_JumpToApp();
+	NVIC_SystemReset();
 }
 
 static void Boot_Menu(Boot_Record_t *record)
@@ -520,9 +535,6 @@ static void Boot_JumpToApp(void)
 		}
 		Boot_Menu(&record);
 	}
-	msp = *(const u32 *)IAP_APP_START_ADDRESS;
-	reset_handler = *(const u32 *)(IAP_APP_START_ADDRESS + 4U);
-
 	__disable_irq();
 	SysTick->CTRL = 0U;
 	SysTick->LOAD = 0U;
@@ -547,8 +559,13 @@ static void Boot_JumpToApp(void)
 	RCC->APB1RSTR = 0U;
 	RCC->APB2RSTR = 0U;
 
+	Boot_FlushFlashCaches();
+	msp = *(const u32 *)IAP_APP_START_ADDRESS;
+	reset_handler = *(const u32 *)(IAP_APP_START_ADDRESS + 4U);
+
 	__set_BASEPRI(0U);
 	__set_FAULTMASK(0U);
+	__set_CONTROL(0);
 	SCB->VTOR = IAP_APP_START_ADDRESS;
 	__DSB();
 	__ISB();

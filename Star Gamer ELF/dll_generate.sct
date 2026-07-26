@@ -1,0 +1,14 @@
+LR_IROM1 0 RELOC{    ; load region size_region
+  ER_IROM1 +0 {  ; load address = execution address
+   .ANY (+RO)
+   .ANY (ENTRY,+XO)
+  }
+}
+LR_IRAM1 +0{
+	RW_IRAM1 +0 {  ; RW data
+	   .ANY (+RW)
+	}
+	ZI_IRAM2 +0 {
+	   .ANY (+ZI)
+	}
+}

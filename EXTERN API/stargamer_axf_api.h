@@ -102,6 +102,13 @@ static inline uint8_t SG_ShouldExit(void)
 	return DL_FUNC_NAME(SG_ShouldExit)();
 }
 
+static inline void SG_AXF_Delay(uint32_t milliseconds)
+{
+	DL_DECLARE_EXTERN_LIB_FUNC(SG_AXF_Delay, DL_USER_LIB_BASE,
+		DL_USER_LIB_NUM, DL_USER_AXF_DELAY, void, uint32_t);
+	DL_FUNC_NAME(SG_AXF_Delay)(milliseconds);
+}
+
 #ifdef __cplusplus
 }
 #endif

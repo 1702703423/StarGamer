@@ -1372,7 +1372,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	if (status == W25Q64_OK)
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.0.2-preview\n"
+		               "Star Gamer 1.1.1-preview\n"
 		               "Author: ZLK\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"

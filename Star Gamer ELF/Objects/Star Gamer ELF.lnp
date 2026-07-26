@@ -1,0 +1,8 @@
+--cpu=Cortex-M4.fp.sp
+".\objects\axf_demo.o"
+".\objects\dl_string_lib.o"
+".\objects\dl_user_api.o"
+--strict --scatter ".\dll_generate.sct"
+--base_platform --entry=dl_main --no_comment_section --no_debug --export_dynamic --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list ".\Listings\Star Gamer ELF.map" -o ".\Objects\Star Gamer ELF.axf"

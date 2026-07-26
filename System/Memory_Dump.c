@@ -143,8 +143,8 @@ static void memory_dump_spi_init(void)
 	GPIOB->OTYPER &= ~GPIO_PIN_13;
 	GPIOB->OSPEEDR |= MEMORY_DUMP_GPIO_SPEED_HIGH(13U);
 	GPIOB->PUPDR &= ~mask;
-	mask = MEMORY_DUMP_GPIO_AFR_MASK(13U);
-	GPIOB->AFR[1] = (GPIOB->AFR[1] & ~mask) | MEMORY_DUMP_GPIO_AFR_AF5(13U);
+	mask = MEMORY_DUMP_GPIO_AFR_MASK(5U);
+	GPIOB->AFR[1] = (GPIOB->AFR[1] & ~mask) | MEMORY_DUMP_GPIO_AFR_AF5(5U);
 
 	mask = MEMORY_DUMP_GPIO_MODE_MASK(6U);
 	GPIOE->MODER = (GPIOE->MODER & ~mask) | MEMORY_DUMP_GPIO_MODE_OUT(6U);
@@ -384,6 +384,7 @@ Memory_Dump_Result_t Memory_Dump_Capture(
 	u32 block;
 	u32 region;
 	u32 offset;
+	u32 remaining;
 	u32 written = 0U;
 	u32 checksum = MEMORY_DUMP_FNV_OFFSET;
 	u8 previous_percent = 0xFFU;
@@ -453,11 +454,9 @@ Memory_Dump_Result_t Memory_Dump_Capture(
 		for (offset = 0U; offset < s_memory_dump_header.regions[region].length;
 		     offset += chunk)
 		{
-			chunk = (u16)(s_memory_dump_header.regions[region].length - offset);
-			if (chunk > W25Q64_PAGE_SIZE)
-			{
-				chunk = W25Q64_PAGE_SIZE;
-			}
+			remaining = s_memory_dump_header.regions[region].length - offset;
+			chunk = (remaining > W25Q64_PAGE_SIZE) ?
+			        (u16)W25Q64_PAGE_SIZE : (u16)remaining;
 			if (memory_dump_flash_program(
 				MEMORY_DUMP_FLASH_ADDRESS + s_memory_dump_header.regions[region].file_offset + offset,
 				(const volatile u8*)(s_memory_dump_header.regions[region].base_address + offset),

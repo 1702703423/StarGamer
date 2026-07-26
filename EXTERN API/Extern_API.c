@@ -302,6 +302,16 @@ u8 ExternAPI_AXF_ShouldExit(void)
 	return (s_exit_requested != 0U) ? 1U : 0U;
 }
 
+void ExternAPI_AXF_Delay(u32 milliseconds)
+{
+	if (ExternAPI_IsCurrentAXF() == 0U)
+	{
+		return;
+	}
+
+	osDelay(milliseconds);
+}
+
 static u8 ExternAPI_IsCurrentAXF(void)
 {
 	osThreadId_t current = osThreadGetId();
