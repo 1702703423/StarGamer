@@ -71,6 +71,20 @@ static void MX_TIM13_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+void SystemClock_SwitchToHSI(void)
+{
+    __HAL_RCC_SYSCLK_CONFIG(RCC_SYSCLKSOURCE_HSI);
+ 
+    while (__HAL_RCC_GET_SYSCLK_SOURCE() != RCC_SYSCLKSOURCE_STATUS_HSI) {}
+}
+
+void SystemClock_SwitchToPLL(void)
+{
+    __HAL_RCC_SYSCLK_CONFIG(RCC_SYSCLKSOURCE_PLLCLK);
+ 
+    while (__HAL_RCC_GET_SYSCLK_SOURCE() != RCC_SYSCLKSOURCE_STATUS_PLLCLK) {}
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -140,6 +154,7 @@ void SystemClock_Config(void)
   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+	SystemClock_SwitchToHSI();
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -170,6 +185,8 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+	
+	SystemClock_SwitchToPLL();
 }
 
 /**

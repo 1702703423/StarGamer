@@ -36,20 +36,21 @@ Post-build actions automatically generate `.bin` files from the ELF output.
 | `System/` | Core utilities: `sys.h` (ubiquitous types, bit-band macros), `Malloc` (dual-bank CCM+SRAMEX allocator), `System_Status` (state/errors/resources/settings), `firmware_start.c` (init + HardFault LCD dump), `Memory_Dump` (HardFault memory dump to W25Q64 / SD card), `adt_chain` (linked list), `kfifo` (Linux-style generic kernel FIFO for PCM audio) |
 | `BSP/` | Board support: `w25q64` (SPI NOR Flash), `i2s` (I2S3 audio+DMA with collision stats), `at24c02` (I2C EEPROM), `key` (8-button driver) |
 | `Middlewares/` | FreeRTOS, FatFs (SDIO, codepage 936), LibJPEG (custom `jpeg_memory_provider`), LVGL, NES emulator, Arduboy compat layer, BMP image library (stub), **Helix MP3** (ARM Cortex-M4 fixed-point, 24 source files incl. ARM asm) |
-| `GUI/` | LVGL page manager: `GUI_Manage`, `GUI_Main`, `GUI_NES`, `GUI_Arduboy`, `GUI_Player` (with Seek UI), `GUI_Image`, `GUI_Text`, `GUI_Settings`, `GUI_Video`, `GUI_Font` (install+uninstall), `GUI_FileManage`, `GUI_Start` |
+| `GUI/` | LVGL page manager: `GUI_Manage`, `GUI_Main`, `GUI_NES`, `GUI_Arduboy`, `GUI_Player` (with Seek UI), `GUI_Image`, `GUI_Text`, `GUI_Settings`, `GUI_Video`, `GUI_Font` (install+uninstall), `GUI_FileManage`, `GUI_Start`, `GUI_Axf` (AXF loader with state machine/monitor/stack reclaim) |
 | `Media/` | Player subsystem: `Player.c` (orchestration, codec abstraction, Seek), `Player_Codec.h` (`read_pcm`/`seek`/`tell_seconds`/`close`), `Player_WAV`, `Player_MP3` (Helix wrapper), `Video.c` (AVI state machine, A/V sync, frame drop, deadline scheduling), `AVI_Parser` (chunk tolerance, Seek), `Video_MJPEG` (tunable stripe height), `Video_PCM` (32 KB kfifo + DMA double-buffer), `Video_Memory` (77 KB aligned pool) |
 | `BootLoader/` | Independent CubeMX project (64 KB bare-metal firmware updater, Flash sectors 0-3), `Boot/` modular layers (`bootloader` orchestration / `boot_crc` CRC32 / `boot_storage` storage / `boot_ui` UI / `boot_platform` platform), pre-built `.hex`/`.bin`/`.axf` available |
 | `USB_DEVICE/` | USB MSC device stack (`App/` + `Target/`), SD card as USB mass storage, ST official USB device library |
 | `Debug/` | Letter Shell v3.1.2 UART console, `shell_ext.c`, `shell_support/` (Shell infrastructure: mutex/UART R/W/idle hook/System_init), `fs_support/` (filesystem commands cd/ls), `shell_companion.c`, `videostat`/`audiostat` perf commands, `UART1_Debug.c` (printf redirect) |
-| `ELF Loader/` | Dynamic ELF loader (`dl_lib`, `dl_elf.h`, `dl_arch.c`, `dl_vector.c`), `common/` (C stdlib SVC shims), runtime `.axf` loading from SD card, host function sharing via SVC |
+| `ELF Loader/` | Dynamic ELF loader (`dl_lib`, `dl_elf.h`, `dl_arch.c`, `dl_vector.c`, `dl_vector_api.c`), `common/` (C stdlib SVC shims), runtime `.axf` loading from SD card, host function sharing via SVC |
 | `APP/Arduboy/` | Arduboy game runtime (`Arduboy_Runtime` state machine, `Arduboy_Port` HW layer, `Arduboy_Games` registry) |
 | `FATFS/`, `LIBJPEG/` | CubeMX-generated middleware shims (App + Target) |
 | `IAP/` | In-Application Programming: CRC32, EEPROM dual-slot records, W25Q64 staging/backup, vector table validation, progress callback |
-| `EXTERN API/` | External API interface (empty directory, planned) |
+| `EXTERN API/` | AXF host-side API (`Extern_API.c/h` — LCD/key/delay SVC services, `stargamer_axf_api.h` — AXF app-side header with `SG_*` prefix, `README.md` — usage docs) |
 | `PCB/` | LCEDA hardware design project (`ProPrj_StarGamer_*.epro2`) |
-| `Docs/` | Design docs: AVI player (full design + tearing analysis + high-bitrate optimization + log analysis), BootLoader, Arduboy port, Helix MP3, CCM stack, GUI SRAM, SRAMEX optimization |
+| `Star Gamer ELF/` | Independent Keil ARMCLANG project for AXF demo app (`axf_demo.c` — graphics + button counters); output `.axf` loaded from SD card by AXF Loader page |
+| `Docs/` | Design docs: AVI player (full design + tearing analysis + high-bitrate optimization + log analysis), BootLoader, Arduboy port, Helix MP3, CCM stack, GUI SRAM |
 | `Tools/` | PC dev tools: `hexdump` (hex viewer, C+Python), `map_analyzer` (ARMCLANG .map memory analyzer, C+Python tkinter + PyInstaller .exe) |
-| `Tests/AVI_Parser_Host/`, `Tests/SDIO_Config_Host/` | AVI parser PC-hosted regression tests (boundary-condition unit tests + real AVI samples under `Tests/样本/`); SDIO IRQ priority validation script (verifies DMA stream IRQ priority > SDIO IRQ) |
+| `Tests/AVI_Parser_Host/`, `Tests/AXF_Loader_Host/`, `Tests/SDIO_Config_Host/` | AVI parser PC-hosted regression tests (boundary-condition unit tests + real AVI samples under `Tests/样本/`); AXF loader host-side validation (`validate_axf.py`); SDIO IRQ priority validation script |
 
 ### Boot Sequence
 
@@ -72,6 +73,7 @@ Unified page architecture based on `GUI_Manage.c/h`:
 | `GUI_PAGE_SETTINGS` | `GUI_Settings.c` | System settings |
 | `GUI_PAGE_VIDEO` | `GUI_Video.c` | AVI video player (MJPEG+PCM, with Seek) |
 | `GUI_PAGE_FONT` | `GUI_Font.c` | XBF font installation & uninstallation |
+| `GUI_PAGE_AXF_LOADER` | `GUI_Axf.c` | AXF dynamic loader (file browser, state machine, run monitor, stack reclaim) |
 
 - **Theme**: `GUI_Theme.c/h` — dark/light theme toggle, 20+ color tokens (`GUI_ThemeColor_t`), unified GUI color management
 
@@ -117,7 +119,7 @@ Unified page architecture based on `GUI_Manage.c/h`:
 - **Font**: XBF font loaded from SD to SPI Flash (0x000000, 2 MB reserved). `myFont.c` proxy `lv_font_t`. Font uninstallation supported. Parameters persisted in `System_Settings_t`
 - **HardFault**: `firmware_start.c` — standalone handler reinitializes SPI1+LCD GPIO, draws register dump on LCD. Memory-allocation HardFault fixed
 - **Buttons**: `BSP/key.c` 8-button, bitmask macros, game aliases (`KEY_GAME_UP/DOWN/LEFT/RIGHT/OK/A/B/SELECT/START`). Button adaptation complete
-- **IAP**: `IAP/IAP.c` — `IAP_PrepareUpdate()` from SD `update.bin` → CRC32 verify → W25Q64 staging → EEPROM dual-slot record. Power-loss recovery, vector table validation, progress callback. Shared protocol in `IAP_Protocol.h` used by both App and BootLoader
+- **IAP**: `IAP/IAP.c` — `IAP_PrepareUpdate()` from SD `update.bin` → CRC32 verify → W25Q64 staging → EEPROM dual-slot record. Power-loss recovery, vector table validation, progress callback. Flash ART cache flush + CONTROL register clear before jump. Shared protocol in `IAP_Protocol.h` used by both App and BootLoader
 - **Memory_Dump**: `System/Memory_Dump.c` — on HardFault, automatically dumps CCM/main SRAM/external SRAM to W25Q64 reserved partition (4 MB). Exportable to SD card `hardfault_dump.bin` via Shell command. FNV-1a checksum, progress callback, compile-time partition boundary checks
 
 ### BootLoader
@@ -147,9 +149,10 @@ Independent CubeMX project at `BootLoader/StarGamerBootLoader/`. Design doc: `Do
 - **ELF parsing**: `dl_elf.h` — full ELF format structures
 - **Arch adapter**: `dl_arch.c` — relocation instruction handling
 - **Port layer**: `dl_port.c/h` — memory/file IO abstraction
-- **Vector table**: `dl_vector.c` — function export table, SVC 8 mechanism for dynamic code to access host C stdlib (memcpy/memset/strlen etc., 22 functions)
+- **Vector table**: `dl_vector.c` — function export table, SVC 8 mechanism for dynamic code to access host C stdlib (memcpy/memset/strlen etc., 22 functions); `dl_vector_api.c` — extended vector API linking to `EXTERN API/`
 - **Stdlib shims**: `common/` — `dl_extern_lib.h` (SVC call macros) / `dl_string_lib.h` / `dl_stdio_lib.h` / `dl_stdlib_lib.h` / `dl_time_lib.h`
-- **User API**: `dl_user_api.h`
+- **User API**: `dl_user_api.h` — user-side API declarations (13 AXF functions: LCD control, key input, delay); kept in sync with `Star Gamer ELF/dl_User_api.h`
+- **Demo project**: `Star Gamer ELF/` — independent Keil project building the AXF demo app; `Tests/AXF_Loader_Host/validate_axf.py` — host-side AXF compatibility validation
 
 ### AVI Video Player Status
 

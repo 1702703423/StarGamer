@@ -11,6 +11,14 @@
 #define SYSTEM_FONT_FLASH_SIZE   (2UL * 1024UL * 1024UL)
 
 #define SYSTEM_AXF_STACK_LEVEL_COUNT 5U
+#define SYSTEM_CLOCK_PROFILE_COUNT   3U
+
+typedef enum System_ClockProfile
+{
+	SYSTEM_CLOCK_192MHZ = 0,
+	SYSTEM_CLOCK_216MHZ,
+	SYSTEM_CLOCK_240MHZ
+} System_ClockProfile_t;
 
 typedef enum System_AxfStackLevel
 {
@@ -88,6 +96,7 @@ typedef struct System_Settings
 	u8 MemoryDumpSramexEnabled;
 	u8 ThemeLightEnabled;
 	u8 AxfStackLevel;
+	u8 ClockProfile;
 }System_Settings_t;
 
 typedef enum System_DebugLog
@@ -152,6 +161,11 @@ int System_Settings_SetThemeLightEnabled(u8 enabled);
 u8 System_Settings_AxfStackLevel(void);
 u32 System_Settings_AxfStackSize(void);
 int System_Settings_SetAxfStackLevel(u8 level);
+u8 System_Settings_ClockProfile(void);
+u32 System_Settings_ClockFrequencyMHz(void);
+u32 System_Settings_ClockPllN(void);
+u32 System_Settings_ClockPllQ(void);
+int System_Settings_SetClockProfile(u8 profile);
 u8 System_DebugEnabled(void);
 u8 System_DebugShellEnabled(void);
 u8 System_DebugLogEnabled(System_DebugLog_t source);

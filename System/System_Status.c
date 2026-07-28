@@ -12,7 +12,8 @@
 
 #define SYSTEM_SETTINGS_EEPROM_ADDR       0U
 #define SYSTEM_SETTINGS_MAGIC             0x53544753UL
-#define SYSTEM_SETTINGS_VERSION           4U
+#define SYSTEM_SETTINGS_VERSION           5U
+#define SYSTEM_SETTINGS_VERSION_V4        4U
 #define SYSTEM_SETTINGS_VERSION_V3        3U
 #define SYSTEM_SETTINGS_VERSION_V2        2U
 #define SYSTEM_SETTINGS_VERSION_V1        1U
@@ -20,6 +21,7 @@
 #define SYSTEM_SETTINGS_DEFAULT_LIGHT     100U
 #define SYSTEM_SETTINGS_DEFAULT_FONT_LINE 21U
 #define SYSTEM_SETTINGS_DEFAULT_AXF_STACK SYSTEM_AXF_STACK_16KB
+#define SYSTEM_SETTINGS_DEFAULT_CLOCK      SYSTEM_CLOCK_240MHZ
 #define SYSTEM_DEBUG_LOG_BUFFER_SIZE       192U
 
 static const u32 s_system_axf_stack_sizes[SYSTEM_AXF_STACK_LEVEL_COUNT] =
@@ -98,6 +100,33 @@ typedef struct System_SettingsV3
 	u8 ThemeLightEnabled;
 } System_SettingsV3_t;
 
+typedef struct System_SettingsV4
+{
+	u32 volume;
+	u8 Debug;
+	u8 UsbMscEnabled;
+	u16 ScreenLight;
+	u8 FontInstalled;
+	u8 FontBpp;
+	u8 FontLineHeight;
+	u8 FontBaseLine;
+	u32 FontFlashAddress;
+	u32 FontSize;
+	u16 FontMinUnicode;
+	u16 FontMaxUnicode;
+	u8 DebugShellEnabled;
+	u8 DebugAudioLogEnabled;
+	u8 DebugVideoLogEnabled;
+	u8 DebugLibjpegLogEnabled;
+	u8 DebugFatfsLogEnabled;
+	u8 MemoryDumpEnabled;
+	u8 MemoryDumpCcmEnabled;
+	u8 MemoryDumpMainSramEnabled;
+	u8 MemoryDumpSramexEnabled;
+	u8 ThemeLightEnabled;
+	u8 AxfStackLevel;
+} System_SettingsV4_t;
+
 typedef struct System_Settings_Record
 {
 	u32 magic;
@@ -125,6 +154,15 @@ typedef struct System_Settings_RecordV3
 	u32 checksum;
 } System_Settings_RecordV3_t;
 
+typedef struct System_Settings_RecordV4
+{
+	u32 magic;
+	u16 version;
+	u16 size;
+	System_SettingsV4_t settings;
+	u32 checksum;
+} System_Settings_RecordV4_t;
+
 typedef struct System_Settings_RecordV1
 {
 	u32 magic;
@@ -137,6 +175,7 @@ typedef struct System_Settings_RecordV1
 typedef union System_Settings_Storage
 {
 	System_Settings_Record_t current;
+	System_Settings_RecordV4_t v4;
 	System_Settings_RecordV3_t v3;
 	System_Settings_RecordV2_t v2;
 	System_Settings_RecordV1_t legacy;
@@ -146,6 +185,11 @@ typedef char System_Settings_RecordSizeCheck[(sizeof(System_Settings_Record_t) <
 
 static u32 System_Settings_Checksum(const u8* data, u16 length);
 static void System_Settings_Normalize(System_Settings_t* settings);
+static u32 System_Settings_ClockFrequencyForProfile(u8 profile);
+static u32 System_Settings_ClockPllNForProfile(u8 profile);
+static u32 System_Settings_ClockPllQForProfile(u8 profile);
+
+static u8 s_system_settings_initialized;
 
 extern SRAM_HandleTypeDef hsram3;
 extern SD_HandleTypeDef hsd;
@@ -682,6 +726,7 @@ void System_Settings_SetDefaults(System_Settings_t* settings)
 	settings->UsbMscEnabled = 0U;
 	settings->ThemeLightEnabled = 0U;
 	settings->AxfStackLevel = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;
+	settings->ClockProfile = SYSTEM_SETTINGS_DEFAULT_CLOCK;
 	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
 	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
 	settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
@@ -691,6 +736,13 @@ int System_Settings_Init(void)
 {
 	AT24C02_StatusTypeDef at_status;
 	int code;
+
+	if (s_system_settings_initialized != 0U)
+	{
+		/* MX_GPIO_Init may have restored PB8/PB9 to their CubeMX mode. */
+		return (AT24C02_Init() == AT24C02_OK) ?
+		       SYSTEM_STATUS_OK : OPERATE_FAILED;
+	}
 
 	System_Settings_SetDefaults(&System_Settings);
 
@@ -703,17 +755,24 @@ int System_Settings_Init(void)
 	code = System_Settings_Load();
 	if (code == SYSTEM_STATUS_OK)
 	{
+		s_system_settings_initialized = 1U;
 		return SYSTEM_STATUS_OK;
 	}
 
 	System_Settings_SetDefaults(&System_Settings);
-	return System_Settings_Save();
+	code = System_Settings_Save();
+	if (code == SYSTEM_STATUS_OK)
+	{
+		s_system_settings_initialized = 1U;
+	}
+	return code;
 }
 
 int System_Settings_Load(void)
 {
 	System_Settings_Storage_t storage;
 	System_Settings_Record_t* record;
+	System_Settings_RecordV4_t* v4;
 	System_Settings_RecordV3_t* v3;
 	System_Settings_RecordV2_t* v2;
 	System_Settings_RecordV1_t* legacy;
@@ -738,6 +797,42 @@ int System_Settings_Load(void)
 		System_Settings = record->settings;
 		System_Settings_Normalize(&System_Settings);
 		return SYSTEM_STATUS_OK;
+	}
+
+	v4 = &storage.v4;
+	checksum = System_Settings_Checksum((const u8*)v4,
+		(u16)(sizeof(*v4) - sizeof(v4->checksum)));
+	if (v4->magic == SYSTEM_SETTINGS_MAGIC &&
+	    v4->version == SYSTEM_SETTINGS_VERSION_V4 &&
+	    v4->size == (u16)sizeof(System_SettingsV4_t) &&
+	    v4->checksum == checksum)
+	{
+		System_Settings_SetDefaults(&System_Settings);
+		System_Settings.volume = v4->settings.volume;
+		System_Settings.Debug = v4->settings.Debug;
+		System_Settings.UsbMscEnabled = v4->settings.UsbMscEnabled;
+		System_Settings.ScreenLight = v4->settings.ScreenLight;
+		System_Settings.FontInstalled = v4->settings.FontInstalled;
+		System_Settings.FontBpp = v4->settings.FontBpp;
+		System_Settings.FontLineHeight = v4->settings.FontLineHeight;
+		System_Settings.FontBaseLine = v4->settings.FontBaseLine;
+		System_Settings.FontFlashAddress = v4->settings.FontFlashAddress;
+		System_Settings.FontSize = v4->settings.FontSize;
+		System_Settings.FontMinUnicode = v4->settings.FontMinUnicode;
+		System_Settings.FontMaxUnicode = v4->settings.FontMaxUnicode;
+		System_Settings.DebugShellEnabled = v4->settings.DebugShellEnabled;
+		System_Settings.DebugAudioLogEnabled = v4->settings.DebugAudioLogEnabled;
+		System_Settings.DebugVideoLogEnabled = v4->settings.DebugVideoLogEnabled;
+		System_Settings.DebugLibjpegLogEnabled = v4->settings.DebugLibjpegLogEnabled;
+		System_Settings.DebugFatfsLogEnabled = v4->settings.DebugFatfsLogEnabled;
+		System_Settings.MemoryDumpEnabled = v4->settings.MemoryDumpEnabled;
+		System_Settings.MemoryDumpCcmEnabled = v4->settings.MemoryDumpCcmEnabled;
+		System_Settings.MemoryDumpMainSramEnabled = v4->settings.MemoryDumpMainSramEnabled;
+		System_Settings.MemoryDumpSramexEnabled = v4->settings.MemoryDumpSramexEnabled;
+		System_Settings.ThemeLightEnabled = v4->settings.ThemeLightEnabled;
+		System_Settings.AxfStackLevel = v4->settings.AxfStackLevel;
+		System_Settings_Normalize(&System_Settings);
+		return System_Settings_Save();
 	}
 
 	v3 = &storage.v3;
@@ -946,6 +1041,89 @@ int System_Settings_SetAxfStackLevel(u8 level)
 	return code;
 }
 
+static u32 System_Settings_ClockFrequencyForProfile(u8 profile)
+{
+	/* HSE=8 MHz, PLLM=4 and PLLP=2 make SYSCLK equal PLLN MHz. */
+	switch (profile)
+	{
+		case SYSTEM_CLOCK_192MHZ:
+			return 192UL;
+		case SYSTEM_CLOCK_216MHZ:
+			return 216UL;
+		case SYSTEM_CLOCK_240MHZ:
+		default:
+			return 240UL;
+	}
+}
+
+static u32 System_Settings_ClockPllNForProfile(u8 profile)
+{
+	return System_Settings_ClockFrequencyForProfile(profile);
+}
+
+static u32 System_Settings_ClockPllQForProfile(u8 profile)
+{
+	/* PLL48CLK = (8 / 4 * PLLN) / PLLQ = 48 MHz for every profile. */
+	switch (profile)
+	{
+		case SYSTEM_CLOCK_192MHZ:
+			return 8UL;
+		case SYSTEM_CLOCK_216MHZ:
+			return 9UL;
+		case SYSTEM_CLOCK_240MHZ:
+		default:
+			return 10UL;
+	}
+}
+
+u8 System_Settings_ClockProfile(void)
+{
+	u8 profile = System_Settings.ClockProfile;
+
+	if (profile >= SYSTEM_CLOCK_PROFILE_COUNT)
+	{
+		profile = SYSTEM_SETTINGS_DEFAULT_CLOCK;
+	}
+
+	return profile;
+}
+
+u32 System_Settings_ClockFrequencyMHz(void)
+{
+	return System_Settings_ClockFrequencyForProfile(System_Settings_ClockProfile());
+}
+
+u32 System_Settings_ClockPllN(void)
+{
+	return System_Settings_ClockPllNForProfile(System_Settings_ClockProfile());
+}
+
+u32 System_Settings_ClockPllQ(void)
+{
+	return System_Settings_ClockPllQForProfile(System_Settings_ClockProfile());
+}
+
+int System_Settings_SetClockProfile(u8 profile)
+{
+	u8 old_profile;
+	int code;
+
+	if (profile >= SYSTEM_CLOCK_PROFILE_COUNT)
+	{
+		return OPERATE_FAILED;
+	}
+
+	old_profile = System_Settings.ClockProfile;
+	System_Settings.ClockProfile = profile;
+	code = System_Settings_Save();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		System_Settings.ClockProfile = old_profile;
+	}
+
+	return code;
+}
+
 u8 System_DebugEnabled(void)
 {
 	return (System_Settings.Debug != 0U) ? 1U : 0U;
@@ -1087,6 +1265,10 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 	settings->MemoryDumpSramexEnabled = (settings->MemoryDumpSramexEnabled != 0U) ? 1U : 0U;
 	settings->UsbMscEnabled = (settings->UsbMscEnabled != 0U) ? 1U : 0U;
 	settings->ThemeLightEnabled = (settings->ThemeLightEnabled != 0U) ? 1U : 0U;
+	if (settings->ClockProfile >= SYSTEM_CLOCK_PROFILE_COUNT)
+	{
+		settings->ClockProfile = SYSTEM_SETTINGS_DEFAULT_CLOCK;
+	}
 	if (settings->AxfStackLevel >= SYSTEM_AXF_STACK_LEVEL_COUNT)
 	{
 		settings->AxfStackLevel = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;

@@ -4,7 +4,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 
 ## 项目
 
-- **MCU**: STM32F407ZGT6（Cortex-M4F @ 168 MHz，1 MB Flash，192 KB 内部 SRAM + 1 MB 外部 SRAM）
+- **MCU**: STM32F407ZGT6（Cortex-M4F @ 168 MHz (OverClock 216Mhz)，1 MB Flash，192 KB 内部 SRAM + 1 MB 外部 SRAM）
 - **屏幕**: ST7789，320×240，16-bit RGB565，SPI 接口
 - **工具链**: Keil MDK-ARM V5.32（ARMCLANG / AC6 编译器）
 - **配置**: 双 CubeMX 工程 — 主固件 `Star Gamer.ioc` + BootLoader `BootLoader/StarGamerBootLoader/StarGamerBootLoader.ioc`
@@ -38,11 +38,12 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | **APP** | `APP/Arduboy/` | Arduboy 游戏运行时（`Arduboy_Runtime` — 状态机管理、`Arduboy_Port` — 硬件移植层、`Arduboy_Games` — 游戏注册表） |
 | **FATFS / LIBJPEG** | `FATFS/`, `LIBJPEG/` | CubeMX 生成的中间件适配层（App + Target） |
 | **IAP** | `IAP/` | 在应用编程模块（CRC32 校验、EEPROM 双槽容错记录、W25Q64 暂存/备份区管理、中断向量验证、进度回调） |
-| **EXTERN API** | `EXTERN API/` | 外部 API 接口（空目录，规划中） |
+| **EXTERN API** | `EXTERN API/` | AXF 动态加载器宿主端 API（`Extern_API.c/h` — LCD 控制/按键/延时 SVC 服务，`stargamer_axf_api.h` — AXF 应用侧头文件，含 `README.md` 使用文档） |
 | **PCB** | `PCB/` | 立创 EDA 硬件设计工程文件（`ProPrj_StarGamer_*.epro2`） |
-| **Docs** | `Docs/` | 架构设计文档：AVI 视频播放器（完整设计 + 撕裂分析 + 高码率卡顿优化方案 + 日志优化点）、BootLoader 设计、Arduboy 移植、Helix MP3 移植、CCM 栈优化、GUI SRAM 优化、SRAMEX 优化方案 |
+| **Docs** | `Docs/` | 架构设计文档：AVI 视频播放器（完整设计 + 撕裂分析 + 高码率卡顿优化方案 + 日志优化点）、BootLoader 设计、Arduboy 移植、Helix MP3 移植、CCM 栈优化、GUI SRAM 优化 |
+| **Star Gamer ELF** | `Star Gamer ELF/` | 独立 Keil ARMCLANG 工程，构建 AXF 可重定位 demo 应用（`axf_demo.c` — 图形绘制/按键计数器，`dl_User_api.h` — 用户 API 编号），产物 `Star Gamer ELF.axf` 放到 SD 卡根目录后由 AXF Loader 页面加载运行 |
 | **Tools** | `Tools/` | PC 端开发工具：`hexdump`（文件十六进制查看，C + Python）、`map_analyzer`（ARMCLANG .map 内存分析，C + Python tkinter GUI + PyInstaller 打包 .exe） |
-| **Tests** | `Tests/AVI_Parser_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`）；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
+| **Tests** | `Tests/AVI_Parser_Host/`、`Tests/AXF_Loader_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`）；AXF 加载器主机端验证脚本 `validate_axf.py`；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
 
 ### 启动流程
 
@@ -71,7 +72,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | `GUI_PAGE_SETTINGS` | `GUI_Settings.c` | 系统设置 |
 | `GUI_PAGE_VIDEO` | `GUI_Video.c` | AVI 视频播放器（MJPEG + PCM，含 Seek） |
 | `GUI_PAGE_FONT` | `GUI_Font.c` | XBF 字库安装与卸载 |
-| `GUI_PAGE_AXF_LOADER` | `GUI_Axf.c` | AXF 加载器（占位，0 字节） |
+| `GUI_PAGE_AXF_LOADER` | `GUI_Axf.c` | AXF 动态加载器（EL 加载器宿主页面，含状态机、文件选择、运行监控、栈回收） |
 
 - **主题系统**: `GUI_Theme.c/h` — 深色/浅色主题切换，定义 20+ 颜色 token（`GUI_ThemeColor_t`），统一管理 GUI 配色
 
@@ -103,7 +104,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **外部 SRAM**: 1 MB FSMC SRAM（0x68000000–0x680FFFFF）。由 `Malloc` 以 `SRAMEX`（1）管理（963 KB 可用，32 字节块）。LVGL 堆、帧缓冲、GUI 页面上下文、视频缓冲、PCM FIFO 均走 SRAMEX
 - **分配器**: `mymalloc(memx, size)` / `myfree(memx, ptr)`，`memx` = `SRAMCCM`（0）或 `SRAMEX`（1）。已移除废弃的 `SRAMMAIN` 测试堆，`SRAMBANK` 固定为 2
 - **帧缓冲**: 150 KB LCD 屏幕缓冲，从外部 SRAM 分配；第一缓冲区默认为 LVGL 渲染目标
-- **视频内存**: 散列文件保留 80 KB 片上 SRAM 专用段（0x2000C000–0x2001FFFF，`RW_VIDEO_SRAM`）用于 Video Task 栈、FatFs/JPEG 对象、LCD DMA 条带；Video_Memory 从 SRAMEX 分配 77 KB + JPEG arena 38 KB；32 KB PCM FIFO + 4 KB PCM I/O 缓冲 + I2S DMA 双缓冲走 SRAMEX
+- **视频内存**: 散列文件保留 80 KB 片上 SRAM 专用段（0x2000C000–0x2001FFFF，`RW_VIDEO_SRAM`）用于 Video Task 栈、FatFs/JPEG 对象、LCD DMA 条带；Video_Memory 从 SRAMEX 分配 80 KB + JPEG arena 38 KB；32 KB PCM FIFO + 4 KB PCM I/O 缓冲 + I2S DMA 双缓冲走 SRAMEX
 - **线程栈回收**: 临时线程（图片解码、NES、Arduboy）支持栈回收，通过 `sys_thread_stack_free()` 在父上下文释放，可回收约 20 KB CCM
 - **BootLoader 预留**: Flash 低 64 KB（扇区 0–3，0x08000000–0x0800FFFF）预留给 BootLoader，App 起始地址 0x08010000
 
@@ -156,9 +157,10 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **ELF 解析**: `dl_elf.h` — 完整的 ELF 格式解析结构体
 - **架构适配**: `dl_arch.c` — 重定位指令处理
 - **移植层**: `dl_port.c/h` — 内存分配/文件 IO 抽象
-- **向量表**: `dl_vector.c` — 函数导出表，通过 SVC 8 调用让动态加载代码访问宿主 C 标准库（memcpy/memset/strlen 等 22 个函数）
+- **向量表**: `dl_vector.c` — 函数导出表，通过 SVC 8 调用让动态加载代码访问宿主 C 标准库（memcpy/memset/strlen 等 22 个函数）；`dl_vector_api.c` — 扩展向量表 API 导出，对接 `EXTERN API/` 模块
 - **标准库 shim**: `common/` — `dl_extern_lib.h`（SVC 调用宏）/ `dl_string_lib.h` / `dl_stdio_lib.h` / `dl_stdlib_lib.h` / `dl_time_lib.h`
-- **用户 API**: `dl_user_api.h` — 用户侧 API 声明
+- **用户 API**: `dl_user_api.h` — 用户侧 API 声明（含 LCD 控制、按键、延时等 13 个 AXF 用户函数），与 `Star Gamer ELF/dl_User_api.h` 保持同步
+- **演示工程**: `Star Gamer ELF/` — 独立 Keil 工程，构建 AXF demo 应用；`Tests/AXF_Loader_Host/validate_axf.py` — 主机端 AXF 兼容性验证脚本
 
 ### AVI 视频播放器架构
 
@@ -203,13 +205,13 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - `reasonix.toml` 为 Reasonix 权限配置文件
 - `.agents/skills/arm-cortex-expert/` 为 ARM Cortex-M 专家技能
 - `BootLoader/StarGamerBootLoader/` 为独立 CubeMX 工程，与主固件共享 Drivers/BSP 部分代码，已编译可用
-- `GUI_Axf.c/h`（AXF 加载器页面）为占位文件（0 字节）
-- `EXTERN API/` 为空目录，规划中的架构扩展点
-- `IAP/` 已完整实现，App 和 BootLoader 通过 `IAP_Protocol.h` 共享协议定义
+- `Star Gamer ELF/` 为独立 Keil 工程，用于构建 AXF demo 应用，编译后 `Star Gamer ELF.axf` 放 SD 卡根目录由 AXF Loader 页面加载
+- `IAP/` 已完整实现（含跳转前 Flash ART 缓存刷新、CONTROL 寄存器清零等加固措施），App 和 BootLoader 通过 `IAP_Protocol.h` 共享协议定义
 - `PCB/` 含立创 EDA 硬件设计工程文件
-- `Docs/` 目录含详细设计文档，修改前应查阅相关文档
-- `Tests/` 含 AVI 解析器 PC 端回归测试 + SDIO IRQ 优先级验证脚本 + 真实 AVI 样本文件
+- `Docs/` 目录含详细设计文档，修改前应查阅相关文档；`Docs/SRAMEX 优化方案.md` 为空白占位
+- `Tests/` 含 AVI 解析器 PC 端回归测试 + AXF 加载器主机端验证 + SDIO IRQ 优先级验证脚本 + 真实 AVI 样本文件
 - `Middlewares/libhelix/port/helix_support.c` 为 Helix MP3 移植适配层
 - `Middlewares/Third_Party/BMP/` 为 BMP 图像库占位，尚未实现
-- ELF Loader 源自 `dl_lib`（Cortex-M 系列通用），当前适配 STM32F407
+- ELF Loader 源自 `dl_lib`（Cortex-M 系列通用），当前适配 STM32F407；AXF 应用通过 `stargamer_axf_api.h`（`SG_*` 前缀）使用 SVC 调用宿主 LCD/按键/延时 API
 - Memory_Dump 使用 W25Q64 的 4 MB 内存转储分区（原预留区），通过编译期断言验证分区边界不重叠
+- `临时问题固件/` 为临时调试用固件副本（.bin/.axf/.map），不纳入版本管理

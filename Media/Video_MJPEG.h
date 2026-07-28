@@ -9,7 +9,7 @@ extern "C" {
 
 #define VIDEO_MJPEG_SOURCE_BUFFER_SIZE  (8UL * 1024UL)
 #define VIDEO_MJPEG_ARENA_SIZE          (38UL * 1024UL)
-#define VIDEO_MJPEG_STRIPE_LINES        16U
+#define VIDEO_MJPEG_STRIPE_LINES        20U
 #define VIDEO_MJPEG_MAX_WIDTH           320U
 
 typedef enum
