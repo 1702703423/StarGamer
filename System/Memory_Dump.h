@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 #define MEMORY_DUMP_FLASH_ADDRESS       0x00200000UL
-#define MEMORY_DUMP_FLASH_SIZE          0x00400000UL
+#define MEMORY_DUMP_FLASH_SIZE          0x00380000UL
 #define MEMORY_DUMP_EXPORT_PATH         "0:/hardfault_dump.bin"
 
 typedef struct Memory_Dump_FaultRecord

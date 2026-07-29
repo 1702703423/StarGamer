@@ -13,6 +13,16 @@
 #define IAP_STAGING_PARTITION_SIZE         0x00100000UL
 #define IAP_BACKUP_ADDRESS                 0x00700000UL
 #define IAP_BACKUP_PARTITION_SIZE          0x00100000UL
+/* Non-IAP settings storage mirrored to W25Q64. */
+#define W25Q64_SETTINGS_ADDRESS            0x00580000UL
+#define W25Q64_SETTINGS_SIZE               0x00080000UL
+#define W25Q64_SETTINGS_SLOT_SIZE          0x00001000UL
+#define W25Q64_SETTINGS_SLOT0_ADDRESS      W25Q64_SETTINGS_ADDRESS
+#define W25Q64_SETTINGS_SLOT1_ADDRESS      (W25Q64_SETTINGS_ADDRESS + W25Q64_SETTINGS_SLOT_SIZE)
+
+#if ((W25Q64_SETTINGS_ADDRESS + W25Q64_SETTINGS_SIZE) > IAP_STAGING_ADDRESS)
+#error "W25Q64 settings partition overlaps IAP staging partition"
+#endif
 
 /* Two independently checksummed EEPROM slots make state changes power-fail safe. */
 #define IAP_EEPROM_SLOT0_ADDRESS           128U

@@ -1495,14 +1495,15 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	if (status == W25Q64_OK)
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.1.1-preview\n"
-		               "Author: ZLK\n"
+		               "Star Gamer 1.1.3-preview-oc\n"
+		               "CPU Clock:%d\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
 		               "Flash/EEPROM: W25Q64 / AT24C02\n"
 		               "SRAM: IS62WV51216HBLL\n"
 		               "CPUID: 0x%08lX\n"
 		               "W25Q64 ID: 0x%02X%04X",
+									 (unsigned int)SystemCoreClock,
 		               (unsigned long)cpuid,
 		               (unsigned int)mid,
 		               (unsigned int)did);
@@ -1510,14 +1511,15 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	else
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer\n"
-		               "Author: ZLK\n"
+		               "Star Gamer 1.1.3-preview-oc\n"
+		               "CPU Clock:%d\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
 		               "Flash/EEPROM: W25Q64 / AT24C02\n"
 		               "SRAM: IS62WV51216HBLL\n"
 		               "CPUID: 0x%08lX\n"
 		               "W25Q64 ID: read failed",
+									 (unsigned int)SystemCoreClock,
 		               (unsigned long)cpuid);
 	}
 

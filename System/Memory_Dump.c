@@ -19,8 +19,8 @@
 #define MEMORY_DUMP_EXPORT_PENDING        0xFFFFFFFFUL
 #define MEMORY_DUMP_EXPORT_COMPLETE       0x00000000UL
 
-#if ((MEMORY_DUMP_FLASH_ADDRESS + MEMORY_DUMP_FLASH_SIZE) != IAP_STAGING_ADDRESS)
-#error "Memory dump partition must end at the IAP staging partition"
+#if ((MEMORY_DUMP_FLASH_ADDRESS + MEMORY_DUMP_FLASH_SIZE) != W25Q64_SETTINGS_ADDRESS)
+#error "Memory dump partition must end at the system settings partition"
 #endif
 
 #if (MEMORY_DUMP_FLASH_ADDRESS < (SYSTEM_FONT_FLASH_ADDR + SYSTEM_FONT_FLASH_SIZE))

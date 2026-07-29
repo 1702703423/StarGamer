@@ -1,655 +1,518 @@
 # Star Gamer AVI 高码率卡顿优化方案
 
-本文基于以下材料：
+最后更新：2026-07-29
 
-- 真机 `videostat` 六次采样：前三次为低码率素材，后三次为高码率素材。
-- 2026-07-21 ARMCLANG `-O3` 新 `videostat` 采样：低码率 `jpeg_max=56 ms`，高码率 `jpeg_max=66~75 ms`，但高码率 `collide/dma` 升至约 `18%~21%`，且持续出现 `queue video=0 audio=16`。
-- 当前工程 `Media/Video.c`、`Media/Video_MJPEG.c`、`Media/Video_PCM.c`、`BSP/i2s.c`、`FATFS/Target/sd_diskio.c`。
-- 参考工程：
+本文基于当前播放器实现和两组真机 `videostat` 日志，分析 320x240 MJPEG + PCM AVI 在不同码率下的播放能力，并给出后续优化顺序。
 
-```text
-C:\Users\ZLK\Downloads\PuZhong_STM32F407_T100_I2S (2)\
-  PuZhong_STM32F407_T100_I2S\
-  Program_STM32F407_T100\
-  pro2_mp3_avi_nes_pic
-```
+本次对照素材由用户标注为：
 
-- 参考说明 `video.md`。
+- 2 Mbps：播放流畅，320x240 @ 23.976 fps。
+- 10 Mbps：播放略微卡顿，320x240 @ 25 fps。
 
-目标是解决 320x240、12 fps、MJPEG + PCM AVI 在高码率/高 JPEG 质量下出现的视频卡顿和潜在音频重复问题。本文只提出优化方案，不直接修改播放器代码。
+`videostat` 当前没有输出 AVI 的名义视频码率，因此本文沿用用户标注的 2 Mbps/10 Mbps。运行时只能从已解码 JPEG 字节数估算实际送入 LibJPEG 的负载；被丢弃帧的 payload 会直接跳过，不计入 `read_bytes`，不能用该字段反推完整文件码率。
 
-## 1. 结论
+## 1. 当前结论
 
-当前卡顿不是单一的 SDIO 带宽问题。结合旧日志和 2026-07-21 ARMCLANG `-O3` 新日志后，优化方向应从“继续提高编译优化等级”调整为“先修复音频补缓冲与调度正确性，再继续降低 JPEG CPU 时间”。
+卡顿由两个层次的问题组成，但优先级不同。
 
-1. **P0：音频 DMA 补缓冲事件会丢失。**
-   - 旧日志中最坏 JPEG 帧占用 `144 ms`，期间约发生 6 次音频 DMA 事件。
-   - 新 `-O3` 日志中高码率 `jpeg_max=66~75 ms`，已经低于 12 fps 帧周期，但仍跨越约 3 次音频 DMA 事件。
-   - 高码率 `collide/dma` 从低码率的约 `1%~5%` 升至约 `18%~21%`，说明线程标志合并仍是当前最强证据。
-   - 当前使用两个线程标志位表示两个 DMA 半缓冲，重复事件会被合并，不能累计次数。
-   - `Video_PCM_Service()` 在两个标志同时存在时只补一个缓冲，另一个缓冲可能重复播放旧数据。
-   - `collide` 只是可见的合并次数，同一个标志位被重复设置的事件不会被完整统计，因此它是丢事件数量的下界。
+1. **P0：10 Mbps 素材的持续 JPEG 处理能力不足，是略微卡顿的主因。**
+   - 25 fps 只有 40 ms 帧预算。
+   - 在 SD/FatFs 尚未出现慢 I/O 的前两次 10 Mbps 采样中，迟到丢帧率已经稳定在约 17%，有效显示帧率只有约 20.7 fps。
+   - 按音频媒体时钟和成功显示帧数反推，每个成功帧占用约 48.4~48.7 ms 的有效服务时间，持续超过 40 ms 预算。
+   - 2 Mbps 素材的对应值约为 42.4~42.5 ms，接近其 41.708 ms 帧周期，只需要约 1%~2% 的迟到丢帧即可维持媒体时间，主观上可以保持流畅。
 
-2. **P1：`-O3` 已把高码率 JPEG 最坏耗时拉回帧预算附近，但仍需继续测量和降本。**
-   - 12 fps 的帧周期是 `83.333 ms`。
-   - 旧日志低码率 `jpeg_max=57 ms`，高码率 `jpeg_max=144 ms`，当时高码率明显超过帧周期。
-   - 新 `-O3` 日志低码率 `jpeg_max=56 ms`，高码率 `jpeg_max=66~75 ms`，说明编译优化已经显著降低 JPEG 热路径耗时。
-   - 因此不建议继续把“更激进的全工程编译优化”作为第一优化方案；应保留 `-O3`，再用 DWT 分段统计、RGB565 直接输出和素材约束做定点优化。
-   - 对偶发超过帧周期的帧仍必须主动丢帧，不能让视频解码拖慢媒体时钟。
+2. **P1：SD/FatFs 长尾延迟是偶发严重卡顿和音频补静音的放大器，不是持续卡顿的第一原因。**
+   - 10 Mbps 前两次采样中 `parser/pcm/jpeg slow=0/0/0`，但持续丢帧已经存在。
+   - 第三次采样出现 `jpeg_io_max=165 ms`、`pcm_io_max=49 ms` 后，区间丢帧率升至 33.9%，最大连续丢帧达到 8 帧，并新增约 223 ms 静音。
+   - 2 Mbps 素材虽然也记录到 `parser/pcm/jpeg io max=34/52/47 ms` 和多次慢 I/O，但第一次采样之后没有新增 underrun 或 silence，说明当前缓冲在低负载下可以吸收这些抖动。
 
-3. **P0：视频前瞻队列被音频队列/FIFO 策略阻塞，丢帧机制没有机会工作。**
-   - 新旧高码率日志都长期出现 `queue video=0 audio=16`。
-   - 当前只有在队列中已经存在多个到期视频帧时，才会丢弃旧帧。
-   - 队列中没有下一帧时，即使当前帧已经严重迟到，仍会完整解码，所以高码率日志仍是 `dropped=0`。
-   - 新 `-O3` 最后一条高码率采样中 `out_frames - pcm_in/4 ≈ 270591`，折合约 `12.27 s`，进一步说明播放时钟和实际媒体消耗已经明显背离。
+3. **P0：PCM 运行水位策略尚未真正生效，会放大存储长尾。**
+   - 已配置 16 KB 低水位和 28 KB 高水位，但当前播放调度没有使用这两个水位。
+   - 10 Mbps 第二次采样中 FIFO 只有 3296 B，按 88200 B/s 计算仅约 37 ms 音频余量。
+   - 此时一次 49~165 ms I/O 长尾必然耗尽 FIFO，即使 AudioFeedTask 和 I2S DMA 本身完全正常。
 
-SDIO `ClockDiv=1` 对应 48 MHz SDIO 源时钟下约 16 MHz：
+4. **LCD、I2S DMA 事件链路、AVI 容器解析和内存不是当前主瓶颈。**
+   - LCD 累计等待约 1.8~2.0 ms/显示帧，`lcd_wait_max=2`，`lcd_dma_timeout=0`。
+   - 两组日志均为 `audio collide=0`、`audio late=0`、`refill missed=0`、`qpeak=1`、硬件 `UDR=0`。
+   - `jpeg_err=0`、`read_err=0`、`retry=0`、`resync=0`。
+   - JPEG arena、视频内存池和任务栈均无分配失败。
+
+因此当前优化主线应调整为：
 
 ```text
-SDIO_CK = 48 MHz / (ClockDiv + 2)
-        = 48 MHz / 3
-        = 16 MHz
+补齐 JPEG/IO 分段统计
+  -> 用 PCM 低/高水位主动保护音频
+  -> 降低高码率 JPEG 的持续处理时间
+  -> 再处理 SD/FatFs 长尾
+  -> LCD 和内存只做低优先级微调
 ```
 
-参考工程使用 `ClockDiv=0`，即约 24 MHz，并启用 4-bit 总线。但高码率素材的持续读取需求只有约 226 KB/s，远低于 4-bit SDIO 的正常能力。因此把分频从较低速度改到 `1` 效果不显著是符合日志的。当前 `-O3` 复测后，主瓶颈更明确地转向音频调度、demux 队列饥饿和迟到丢帧策略，JPEG CPU 时间保留为后续定点优化项。
+## 2. 2026-07-29 真机对照
 
-## 2. 日志量化分析
+### 2.1 累计采样对比
 
-### 2.1 ARMCLANG `-O3` 新日志更新（2026-07-21）
+下表使用每组第三次累计采样，并额外保留 10 Mbps 第二次采样作为“尚未发生慢 I/O”的基线。
 
-新日志在 ARMCLANG `-O3` 下采样。用户标注前两次为低码率、后三次为高码率；附件中连续追加采样也呈现同一趋势：JPEG 最坏耗时已经明显下降，但高码率播放仍被音频事件合并和队列饥饿拖住。
+| 指标 | 2 Mbps 第三次 | 10 Mbps 第二次 | 10 Mbps 第三次 | 判断 |
+|---|---:|---:|---:|---|
+| 名义帧率 | 23.976 fps | 25 fps | 25 fps | 2 Mbps 多 1.708 ms 帧预算，但不足以解释约 10 倍的丢帧率差异 |
+| 帧周期 | 41.708 ms | 40 ms | 40 ms | 10 Mbps 预算更紧 |
+| `decoded/displayed` | 2407 | 1109 | 1226 | 均无 JPEG 错误 |
+| `dropped` | 46 | 233 | 293 | 每组都含启动预缓冲丢帧 6 帧 |
+| `late` | 40 | 227 | 287 | 运行期迟到差异明显 |
+| 迟到丢帧率 | 1.63% | 16.99% | 18.97% | 10 Mbps 持续能力不足 |
+| 有效显示帧率 | 23.58 fps | 20.75 fps | 20.26 fps | 高码率实际能力约 20~21 fps |
+| 有效服务时间/显示帧 | 42.51 ms | 48.40 ms | 49.56 ms | 高码率持续超过 40 ms 预算 |
+| `jpeg_max` | 102 ms | 69 ms | 273 ms | 单个 max 不能代表持续性能 |
+| `parser_io max/slow` | 34 ms / 1 | 1 ms / 0 | 1 ms / 0 | parser 不是高码率主因 |
+| `pcm_io max/slow` | 52 ms / 27 | 2 ms / 0 | 49 ms / 5 | 第三次高码率采样出现存储抖动 |
+| `jpeg_io max/slow` | 47 ms / 23 | 5 ms / 0 | 165 ms / 14 | 165 ms 长尾显著放大卡顿 |
+| `lcd_wait`/显示帧 | 1.76 ms | 1.91 ms | 1.89 ms | LCD 等待稳定且很小 |
+| `lcd_wait_max` | 2 ms | 2 ms | 2 ms | LCD DMA 正常 |
+| `refill missed/qpeak` | 0 / 1 | 0 / 1 | 0 / 1 | AudioFeedTask 正常 |
+| `underrun` | 9 | 17 | 27 | 高码率存储抖动期间新增 10 次 FIFO 欠载 |
+| `silence_frames` | 4539 | 3390 | 8306 | 高码率最后区间新增 4916 帧静音 |
+| 最大连续迟到丢帧 | 2 | 1 | 8 | 第三次高码率采样出现约 320 ms 画面空档 |
+| 统计读取速率 | 327 KiB/s | 497 KiB/s | 498 KiB/s | 平均带宽不高，问题在处理预算和长尾 |
 
-| 指标 | 低码率代表值 | 高码率代表值 | 判断 |
-|---|---:|---:|---|
-| `jpeg_max` | 56 ms | 66~75 ms | 高码率已低于 83.333 ms 帧周期，`-O3` 有明显收益 |
-| `queue video/audio` | 3~4 / 11~15 | 0 / 16 | 高码率仍长期没有视频前瞻，音频队列满 |
-| `collide / dma` | 12/259 到 13/479 | 125/683 到 512/2457 | 高码率合并率约 18%~21%，明显异常 |
-| `out_frames - pcm_in/4` | -786 到 272 | 57404 到 270591 | I2S 时钟相对真实 PCM 输入越跑越远 |
-| `dropped` | 0 | 0 | 即使高码率已失同步，视频丢帧仍未生效 |
-| `late` | 0 | 0~3 | 已开始出现写入活动 DMA 半缓冲风险 |
-| `jpeg_err` | 0 | 0~1 | 长时间高码率压力下开始出现 JPEG 错误 |
+### 2.2 指标计算口径
 
-关键修正：
-
-- 旧方案中“高码率 `jpeg_max=144 ms > 83.333 ms`”的判断仍是旧日志事实，但不再代表 `-O3` 当前状态。
-- 新日志里高码率 `jpeg_max=66~75 ms`，说明继续单纯提高优化等级的收益空间已经变小。
-- 高码率卡顿仍存在时，第一优先级应转为：音频 feeder 不丢事件、demux 不让 `queue video` 长期为 0、视频迟到时主动丢帧追媒体时间。
-- JPEG RGB565 直接输出、DWT 分段计时、素材参数约束仍应保留，但属于“进一步提高可显示帧率”，不是先修正确性的第一步。
-
-### 2.2 旧日志低码率与高码率对比
-
-| 指标 | 低码率第三次 | 高码率第三次 | 判断 |
-|---|---:|---:|---|
-| 视频帧率 | 12 fps | 12 fps | 帧周期均为 83.333 ms |
-| `jpeg_max` | 57 ms | 144 ms | 高码率超过帧周期 60.7 ms |
-| `lcd_wait_max` | 1 ms | 1 ms | LCD 阻塞不是主因 |
-| `displayed` | 178 | 183 | 高码率耗费了更长播放时间才显示相近帧数 |
-| `dropped` | 0 | 0 | 高码率下自适应丢帧未生效 |
-| `queue video` | 5 | 0 | 高码率没有视频前瞻 |
-| `queue audio` | 16 | 16 | 音频元数据队列达到上限 |
-| `fifo` | 28536 B | 32768 B | PCM FIFO 已足够大，高码率时长期满 |
-| `collide / dma` | 13 / 618 | 140 / 768 | 合并率从约 2.1% 升至约 18.2% |
-| `late` | 0 | 1 | 已出现写入活动 DMA 半缓冲的风险 |
-| `underrun` | 0 | 0 | 当前统计没有识别“旧数据重播”为 underrun |
-
-旧日志中高码率卡顿的直接触发条件是：
+迟到丢帧率排除启动预缓冲帧：
 
 ```text
-jpeg_max 144 ms > frame period 83.333 ms
+late_drop_rate = late / (decoded + late)
 ```
 
-这意味着最坏帧期间至少跨过一个完整的视频 deadline，也跨过多个音频 DMA deadline。新 `-O3` 日志中该条件已缓解为 `jpeg_max=66~75 ms < 83.333 ms`，但高码率仍跨过约 3 个音频 DMA 事件周期，所以音频补缓冲事件仍不能使用不可计数的 thread bit 表示。
-
-### 2.3 音频事件丢失证据
-
-当前音频参数：
+有效显示帧率：
 
 ```text
-sample rate = 22050 Hz
-channels = 2
-bits = 16
-block align = 4 B
-average bytes/s = 88200 B/s
-VIDEO_PCM_PACKAGE_MS = 24 ms
+effective_fps = nominal_fps * decoded / (decoded + late)
 ```
 
-由 `Video_PCM.c` 的计算得到：
+有效服务时间表示播放器为了处理一个成功显示帧所消耗的平均媒体时间，其中包含 JPEG 解码、对应文件读取、demux/PCM 工作和 LCD 最终等待：
 
 ```text
-package_size   = floor(88200 * 24 / 1000), 4 字节对齐
-               = 2116 B
-package_frames = 2116 / 4
-               = 529 sample frames
-DMA event period ≈ 529 / 22050
-                 ≈ 23.99 ms
+effective_service_ms =
+    (audio_deadline_frames / audio_sample_rate) * 1000 / decoded
 ```
 
-六次日志换算结果：
+它不是纯 LibJPEG CPU 平均耗时，但可以准确判断整条视频处理链是否具备持续帧率能力。
 
-| 样本 | 类型 | `jpeg_max` | `out_frames - pcm_in/4` | `collide` | `collide x 529` |
-|---:|---|---:|---:|---:|---:|
-| 1 | 低码率 | 57 ms | -257 | 13 | 6877 |
-| 2 | 低码率 | 57 ms | 272 | 13 | 6877 |
-| 3 | 低码率 | 57 ms | -1315 | 13 | 6877 |
-| 4 | 高码率 | 144 ms | 48411 | 85 | 44965 |
-| 5 | 高码率 | 144 ms | 63223 | 114 | 60306 |
-| 6 | 高码率 | 144 ms | 77506 | 140 | 74060 |
+从 `read_bytes - pcm_in` 估算每个成功解码帧实际读入 LibJPEG 的数据量：
 
-`pcm_in/4` 是从文件读入 FIFO 的 PCM sample frame 数。正常情况下：
+| 样本 | JPEG 字节/成功帧 | 按名义帧率折算 |
+|---|---:|---:|
+| 2 Mbps 第三次 | 约 10.5 KB | 约 2.01 Mbps |
+| 10 Mbps 第一次 | 约 19.6 KB | 约 3.93 Mbps |
+| 10 Mbps 第二次 | 约 20.4 KB | 约 4.07 Mbps |
+| 10 Mbps 第三次 | 约 20.9 KB | 约 4.18 Mbps |
+
+这个统计只覆盖真正送入 LibJPEG 的帧。迟到丢弃帧直接跳过 payload，因此不能据此否定素材的 10 Mbps 名义码率；它能证明的是，当前成功解码的高码率 JPEG 帧平均已经约为低码率的 2 倍。
+
+### 2.3 为什么 `jpeg_max=102 ms` 的 2 Mbps 视频仍然流畅
+
+2 Mbps 日志说明单看 `jpeg_max` 会产生错误结论：
+
+- `jpeg_max=102 ms` 确实超过 41.708 ms 帧周期。
+- 但该值在第一次采样后没有继续增长，是一个历史峰值。
+- 后续仍出现多次大于等于 20 ms 的 I/O，`underrun=9` 和 `silence=4539` 却完全不再增长。
+- 最终运行期迟到丢帧率只有 1.63%，最大连续丢帧只有 2。
+
+因此支持能力必须看平均值和分布，至少需要：
 
 ```text
-输入帧数
-  = 已实际播放的媒体帧
-  + FIFO 中尚未播放的帧
-  + 两个 DMA 半缓冲中尚未播放的帧
+jpeg average / p50 / p95 / p99 / max
+end-to-end service average / p95 / p99
+over-budget frame count
+consecutive over-budget max
 ```
 
-因此播放过程中输入帧数应大于已播放媒体帧数。高码率日志却出现 `out_frames` 大幅超过输入帧数，并且差值与 `collide x 529` 高度相关，说明：
+`max` 只适合定位最坏事件，不能单独决定素材是否可持续播放。
 
-- DMA 硬件时间继续前进；
-- 回调继续执行 `played_frames += package_frames`；
-- 但空闲 DMA 半缓冲没有被逐次补入新的 PCM；
-- DMA 在循环播放旧缓冲数据；
-- 当前统计把旧数据重播误认为正常播放，不会增加 `underrun`。
+### 2.4 高码率持续瓶颈与 SD 长尾的证据分离
 
-低码率日志也存在 13 次合并，只是 57 ms 最坏帧通常只覆盖 2 到 3 个 DMA 事件，影响较小。旧高码率 144 ms 会覆盖约 6 个事件，新 `-O3` 高码率 66~75 ms 仍会覆盖约 3 个事件；只要补缓冲仍依赖不可计数的两个 thread bit，同一个标志位重复设置的问题就仍然存在，实际丢失事件会明显多于 `collide`。
-
-### 2.4 高码率增加的是 JPEG 工作量，不只是文件读取量
-
-从第三次采样中扣除 PCM 数据：
+10 Mbps 前两次采样具有决定性意义：
 
 ```text
-低码率视频数据估算：
-(2029012 - 1312948) / 183
-≈ 3913 B/视频 chunk
-
-高码率视频数据估算：
-(3429249 - 1315064) / 184
-≈ 11490 B/视频 chunk
+parser slow = 0
+pcm slow    = 0
+jpeg slow   = 0
+jpeg_io_max = 5 ms
+late drop   = 16.99%~17.22%
 ```
 
-旧日志中高码率平均压缩帧约为低码率的 2.9 倍，`jpeg_max` 则从 57 ms 增加到 144 ms，约为 2.5 倍。两者高度相关，符合 MJPEG 高质量帧具有更多非零 DCT 系数、熵解码和颜色转换工作量的特征。
+这证明即使没有任何达到 20 ms 阈值的文件操作，高码率视频仍只能显示约 20.7 fps。持续卡顿应首先归因于 JPEG 主路径和伴随的常规读取总成本，而不是 SD 卡平均带宽。
 
-新 `-O3` 日志把高码率 `jpeg_max` 降到 66~75 ms，说明 ARMCLANG 优化等级对 JPEG 热路径确实有效。但高码率素材的数据量和复杂度仍然更高，后续应通过 DWT 分段统计判断剩余时间花在 Huffman/IDCT、颜色转换、FatFs 读取还是 LCD 提交等待上。
-
-按名义 12 fps 估算高码率持续读取需求：
+第二到第三次高码率采样之间：
 
 ```text
-视频：11490 B/frame x 12 fps ≈ 137880 B/s
-音频：88200 B/s
-合计：约 226080 B/s，约 221 KiB/s
+video chunks       +177
+displayed          +117
+dropped            +60
+区间丢帧率         33.9%
+jpeg slow          +14
+pcm slow           +5
+underrun           +10
+silence_frames     +4916，约 223 ms
+max consecutive    1 -> 8
 ```
 
-这个吞吐量本身不足以压满 4-bit、16 MHz SDIO。SD 卡碎片和单次延迟仍需测量，但不能仅凭“高码率”把问题归因于 SDIO 总带宽。
+这说明 SD/FatFs 长尾会把“稳定约 20 fps”进一步恶化成肉眼明显的停顿和音频补静音，但它是第二层问题。
 
-## 3. 当前实现中的根因
+## 3. 当前实现状态
 
-### 3.1 JPEG 解码是不可抢占的长任务
+2026-07-21 文档中的多个 P0/P1 项已经实现，不能继续按旧架构分析。
 
-`Media/Video.c` 中 `video_decode_frame()` 同步调用：
+| 项目 | 当前状态 | 真机证据/说明 |
+|---|---|---|
+| 独立 AudioFeedTask | 已完成 | `osPriorityHigh`，静态消息队列，深度 8 |
+| DMA idle index + sequence | 已完成 | `collide=0`、`missed=0`、`qpeak=1` |
+| clock/media/replay/silence 统计 | 已完成 | 两组日志均能区分实际媒体和静音帧 |
+| 32 KB PCM FIFO | 已完成 | DMA 可达 SRAMEX |
+| 24 KB 启动预缓冲 | 已完成 | `fifo ... /24576` |
+| 16/28 KB 运行低/高水位 | 仅定义，未接入调度 | 当前最重要的调度缺口之一 |
+| 单帧 hard-late 丢帧 | 已完成 | 高码率 `late` 正常增加，播放时间不再被逐帧硬解码拖慢 |
+| 近似顺序 demux | 已完成 | 旧式 video/audio metadata 队列已移除 |
+| `queue video/audio` | 遗留统计字段 | 当前固定为 0/0，不能再解释为队列饥饿 |
+| 视频专用 RGB565 merged output | 已完成 | 4:2:0/4:2:2 快速路径；其他格式回退 RGB888 |
+| `JDCT_IFAST`、关闭 fancy upsampling | 已完成 | 当前 LibJPEG 快速配置 |
+| 双条带 LCD DMA | 已完成 | 当前 20 行条带，`lcd_wait_max=2` |
+| 视频热数据内部 SRAM 池 | 已完成 | 80 KB 专用段，当前使用 79872 B |
+| parser/PCM/JPEG I/O trace | 已完成 | 已有 last/max/slow，但缺少累计和分位统计 |
+| READ/SEEK 分离历史峰值 | 未完成 | 当前 max 无法知道来自 READ 还是 SEEK |
+| JPEG CPU 分段 DWT 统计 | 未完成 | 无法继续细分 Huffman/IDCT/merged output |
+| 实际码率和完整 chunk 统计 | 未完成 | 被丢帧 payload 未计入 `read_bytes` |
 
-```c
-Video_MJPEG_DecodeFrame(&context->mjpeg, &context->file,
-                        chunk, context->info.width, context->info.height);
-```
-
-`Media/Video_MJPEG.c` 随后一次性完成：
-
-1. `f_lseek()` 到 JPEG chunk。
-2. LibJPEG 流式读取。
-3. Huffman、IDCT、上采样和 RGB888 输出。
-4. 逐行 RGB888 转 RGB565。
-5. 每 8 行提交一次 LCD SPI DMA。
-6. 等待最后一次 LCD DMA。
-
-在函数返回前，`VideoTask` 不会调用 `video_pcm_service_flags()`。旧日志中低码率最坏阻塞 57 ms，高码率最坏阻塞 144 ms；新 `-O3` 日志中高码率最坏阻塞降到 66~75 ms，但仍可能跨过约 3 个 24 ms 音频 DMA 事件周期。
-
-### 3.2 DMA 线程标志不是事件计数器
-
-当前两个标志：
-
-```c
-#define VIDEO_PCM_FLAG_DMA0 (1UL << 3)
-#define VIDEO_PCM_FLAG_DMA1 (1UL << 4)
-```
-
-I2S DMA ISR 根据空闲半缓冲设置对应线程标志。线程标志是电平状态，不是计数队列：
+当前代码路径是：
 
 ```text
-DMA0 -> 设置 bit0
-DMA1 -> 设置 bit1
-DMA0 -> bit0 已经为 1，事件次数不增加
-DMA1 -> bit1 已经为 1，事件次数不增加
+单个 VideoTask 顺序解析 AVI
+  -> audio chunk 分段写 PCM FIFO
+  -> video chunk 等待音频时钟
+       -> 已迟到一帧：跳过 payload
+       -> 否则：同步进入 LibJPEG
+  -> LibJPEG RGB565 条带输出到 LCD DMA
+
+I2S DMA ISR
+  -> 投递 {idle_index, sequence}
+  -> 高优先级 AudioFeedTask
+  -> PCM FIFO 搬运到空闲 DMA 半缓冲
 ```
 
-当任务最终运行时，只能看见 `DMA0 | DMA1`，无法知道期间实际发生了 2 次、4 次还是 6 次回调。
+这个架构已经解决旧版本的 DMA thread flag 合并、旧 PCM 重播、队列饥饿和媒体时间漂移问题。剩余问题是单位时间内能解码多少 JPEG，以及遇到存储长尾时是否提前保护音频 FIFO。
 
-更严重的是 `Video_PCM_Service()` 在两个 bit 同时存在时只执行一次：
+## 4. 当前根因
 
-```c
-if(flags == VIDEO_PCM_FLAG_DMA_MASK)
-{
-    pcm->dma_flag_collisions++;
-    target_index = audio_card_get_idle_buffer_index();
-}
-...
-return video_pcm_fill_dma(pcm, target_index);
-```
+### 4.1 JPEG 主路径持续超过 25 fps 预算
 
-因此它不能补回所有已经错过的半缓冲。
+当前 `max_jpeg_decode_ticks` 包围整个 `Video_MJPEG_DecodeFrame()`，其中混合了：
 
-### 3.3 当前音频主时钟无法区分正常播放和旧数据重播
+- 必要的 `f_lseek()`。
+- 8 KB source buffer 的多次 `f_read()`。
+- JPEG header 解析。
+- Huffman 熵解码。
+- IDCT。
+- merged upsampling + RGB565 输出，或不支持采样格式时的 RGB888 回退。
+- LCD 条带提交和最后一次 DMA 等待。
 
-DMA 回调无条件执行：
-
-```c
-pcm->played_frames += pcm->package_frames;
-```
-
-这个计数代表 I2S 硬件经过的时间，但不保证对应新的媒体数据。建议拆分为：
-
-- `audio_clock_frames`：每个 DMA half/full 事件增加固定包帧数，表示硬件时钟。
-- `audio_media_frames`：按刚播放完成缓冲区的 `dma_valid_bytes[index] / block_align` 增加。
-- `audio_replayed_frames`：检测同一缓冲 generation 未更新却再次播放时增加。
-- `audio_silence_frames`：EOF 或 underrun 补零产生的帧数。
-- `audio_refill_missed`：音频喂数任务未能在 deadline 前更新空闲缓冲的次数。
-
-正常稳态应满足：
+10 Mbps 无慢 I/O基线仍需约 48.4 ms/成功帧，而预算只有 40 ms。要做到刚好 25 fps，整条成功帧路径至少需要降低约 17% 的时间：
 
 ```text
-audio_clock_frames
-≈ audio_media_frames
+(48.4 - 40.0) / 48.4 ~= 17.4%
 ```
 
-如果出现 refill miss，应显式记录并进入补静音或重新预缓冲流程，不能继续以“正常无 underrun”状态运行。
+为了给 SD 抖动、音频任务抢占和其他中断留余量，工程目标不应是刚好 40 ms，而应把常态成功帧处理时间压到约 32~35 ms。
 
-### 3.4 视频队列饥饿使丢帧逻辑失效
+高码率成功帧平均 JPEG 输入约为低码率的 1.9~2.0 倍。MJPEG 质量提高不仅增加读取字节，还通常增加非零 DCT 系数和 Huffman/IDCT 工作量，因此码率与 CPU 时间相关，但不呈简单线性关系。
 
-当前 `video_pcm_render_due()` 的策略是：
+### 4.2 SD/FatFs 存在明显长尾
 
-1. 取出第一个到期帧。
-2. 如果队列里还有更多到期帧，丢弃旧帧。
-3. 解码队列中最后一个到期帧。
-
-这个策略要求队列中已经有后续视频帧。高码率日志却是：
+当前平均读取速率约为：
 
 ```text
-queue video=0 audio=16
+2 Mbps 样本：约 327 KiB/s
+10 Mbps 样本：约 498 KiB/s
 ```
 
-音频元数据队列达到 16 项，PCM FIFO 又是满的，`video_pcm_pump()` 可能被 pending audio 阻塞，无法继续向前解析到下一视频 chunk。结果是：
+该吞吐远低于 4-bit SDIO 的持续能力。问题是个别文件操作达到 34~165 ms，而不是平均带宽耗尽。
 
-- 没有后续视频帧可用于判断“当前帧已经过时”；
-- 当前帧即使迟到 100 ms 以上仍会被完整解码；
-- `dropped` 保持 0；
-- 播放速度自然下降，表现为卡顿。
+现有日志仍无法回答：
 
-### 3.5 当前文件访问不是严格顺序流
+- 165 ms 来自 `f_read` 还是 `f_lseek`。
+- 时间花在 FAT cluster 遍历、SD DMA 完成等待还是 card ready 等待。
+- 慢操作是否集中在碎片边界。
+- 目标缓冲是否走了对齐 DMA 快路径。
 
-参考工程按 AVI chunk 顺序读取，使用 48 KB 缓冲一次读入当前压缩帧，然后立即解码。当前工程为了建立音频/视频前瞻，parser、PCM 和 MJPEG 会围绕同一个 `FIL` 多次 `f_lseek()`：
+因此不能只调 `ClockDiv`，也不能只创建 CLMT；必须先把长尾分层记录。
 
-- parser 跳到 chunk header；
-- PCM 跳到 pending audio payload；
-- MJPEG 跳到 pending video payload；
-- 下一次 parser 再跳回其逻辑扫描位置。
+### 4.3 低/高水位没有参与运行调度
 
-`_USE_FASTSEEK=1` 已经编译启用，但当前视频代码没有为 `FIL.cltbl` 创建 cluster link map，因此 fast seek 实际没有生效。连续文件影响可能较小，碎片文件会放大 `f_lseek()` 延迟和 FAT 链遍历开销。
-
-这不是现有日志能确认的第一瓶颈，但属于需要处理的次要放大因素。
-
-## 4. 与参考工程的关键差异
-
-### 4.1 参考工程在 DMA 回调中立即补音频
-
-参考工程 `video_player.c` 的 `video_feeding_sound_card()` 在 I2S DMA 回调链中直接执行：
-
-```c
-kfifo_out(&audio_fifo, temp_buff, pcm_size);
-audio_card_write(temp_buff, pcm_size);
-```
-
-然后才唤醒视频解码任务补充 FIFO。其优点是：
-
-- 音频补缓冲不等待 JPEG 解码结束；
-- 每次 DMA 回调都立即处理当前空闲缓冲；
-- JPEG 慢主要影响视频，不会先破坏音频双缓冲状态。
-
-不建议在 Star Gamer 中原样复制所有逻辑到 ISR，因为当前声卡还支持 8-bit、单声道和音量变换，最坏路径可能在 ISR 中执行较长循环。更合适的移植方式是建立独立高优先级 AudioFeedTask。
-
-### 4.2 参考工程直接在 LibJPEG 合并上采样中输出 RGB565
-
-参考工程修改了 `libmjpeg/jdmerge.c`，将 YCbCr 转换结果直接写成 16-bit RGB565。`dec_mjpeg.c` 得到的扫描行已经是 RGB565，只需复制到 LCD DMA 行缓冲。
-
-当前工程使用标准 LibJPEG RGB888 输出，再由：
-
-```c
-video_mjpeg_convert_row()
-```
-
-对 320x240 的每个像素做一次 RGB565 转换和字节交换，每帧额外处理 76800 个像素。该转换不是旧日志 144 ms 的唯一原因，也不是当前 `-O3` 后卡顿的第一证据，但属于可以明确消除的一次完整像素遍历。
-
-参考代码存在颜色通道顺序和 LCD 字节序的定制，不能直接覆盖当前全局 LibJPEG。应增加视频专用、可编译开关控制的 RGB565 输出路径，并用红/绿/蓝色条验证颜色和端序。
-
-### 4.3 当前 LCD 条带路径已经优于参考工程的逐行提交
-
-参考工程每行提交一次 LCD DMA。当前工程每 8 行提交一次，320x240 一帧约 30 次 DMA 提交，并使用双条带缓冲。
-
-日志中：
+当前 `Video_PCM_Open()` 计算：
 
 ```text
-lcd_wait_max=1
-lcd_dma_timeout=0
+prebuffer = 24 KB
+low water = 16 KB
+high water = 28 KB
 ```
 
-说明 LCD DMA 已能与 JPEG 解码有效重叠，当前不应优先改成逐行方式。
+但 `Video.c` 只使用了 `prebuffer_bytes`。运行阶段在遇到视频 chunk 时只按音频 deadline 判断是否迟到，没有在 FIFO 低于 16 KB 时主动跳过视频以向前解析更多音频。
 
-### 4.4 STM32F407 没有 DMA2D 或硬件 JPEG 解码器
+这会形成以下放大链：
 
-`video.md` 中“STM32F407 支持 DMA2D”的建议不适用于本项目。DMA2D 出现在部分 STM32F429/F7/H7 等器件中，STM32F407ZGT6 没有 DMA2D，也没有硬件 JPEG codec。
+```text
+JPEG 平均耗时超过帧预算
+  -> FIFO 在某些时刻降到很低
+  -> 下一次 SD/FatFs 长尾耗尽剩余 PCM
+  -> AudioFeedTask 正常补零
+  -> silence 和 underrun 增加
+  -> 视频同时连续丢帧追赶媒体时间
+```
 
-本项目可利用的是：
+AudioFeedTask 保证了 DMA 事件不会丢，但不能凭空产生尚未从文件读取的 PCM 数据。
 
-- Cortex-M4 整数/DSP 指令和编译器优化；
-- SDIO DMA；
-- SPI LCD DMA；
-- I2S DMA；
-- 内部 SRAM 的低延迟工作区；
-- 更高效的软件 JPEG 颜色输出和调度。
+### 4.4 统计仍不足以定位 JPEG 内部热点
+
+当前可以确认“整条 JPEG 路径过慢”，但不能严谨断定主要 CPU 时间位于 Huffman、IDCT、RGB565 merged output 还是多次普通 I/O。
+
+在没有 DWT 分段统计前，不应：
+
+- 再次重写 RGB565 路径。
+- 盲目扩大 source buffer。
+- 缩小 JPEG arena。
+- 调整 LCD 条带。
+- 对整个工程启用更激进优化或 LTO。
 
 ## 5. 优化方案
 
-### 5.1 P0：建立不会丢事件的音频喂数链路
+### 5.1 P0：补齐可用于决策的统计
 
-#### 推荐方案：独立 AudioFeedTask
+#### JPEG 分段 DWT 统计
 
-新增一个只负责 I2S 空闲半缓冲的高优先级任务：
-
-```text
-I2S DMA ISR
-  -> 投递 {idle_index, sequence} 到静态消息队列
-  -> AudioFeedTask 立即被唤醒
-  -> 从 PCM FIFO 取一包
-  -> 写入指定 idle_index
-  -> 更新该缓冲 generation 和 valid_bytes
-```
-
-约束：
-
-- 使用 CMSIS-RTOS V2。
-- 使用静态 TCB、静态消息队列内存和静态栈。
-- 任务栈从 CCM 分配，但 DMA 缓冲、FIFO 和 PCM 临时缓冲继续位于 `SRAMEX`。
-- 建议优先级高于 VideoTask，例如 `osPriorityHigh`；最终以系统中其他实时任务为准。
-- ISR 只投递事件，不做 FatFs、JPEG、LVGL 或动态分配。
-- AudioFeedTask 只做 FIFO 到 DMA 缓冲的有限搬运，不做文件读取。
-
-建议修改声卡回调接口，使 ISR 直接传递确定的空闲缓冲 index，而不是任务醒来后再次读取可能已经变化的 `curr_buf_index`：
-
-```c
-typedef void (*audio_card_tx_callback_t)(u8 idle_index, u32 sequence);
-```
-
-消息队列深度建议 4 到 8 项。AudioFeedTask 正常情况下应在下一个约 24 ms deadline 前完成，队列深度只是诊断和短暂抖动保护，不能替代实时服务。
-
-#### 临时低改动方案：在 JPEG 条带边界服务音频
-
-如果暂时不增加任务，可以给 `Video_MJPEG_DecodeFrame()` 增加 service hook，在每个 8 行条带完成后调用一次：
+使用 Cortex-M4 DWT `CYCCNT`，按帧累计并输出：
 
 ```text
-jpeg_read_scanlines
-  -> RGB565 转换
-  -> LCD_StreamWriteAsync
-  -> video_pcm_service_hook
+jpeg_total_us       average/p50/p95/p99/max
+jpeg_seek_us        total/p95/max
+jpeg_read_us        total/p95/max
+jpeg_header_us      average/p95/max
+jpeg_scanline_us    average/p95/max
+jpeg_finish_us      average/p95/max
+lcd_wait_us         average/p95/max
+over_budget_frames
 ```
 
-8 行条带一帧共 30 个服务点，通常能把最长不可服务区间降到数毫秒。
+`jpeg_scanline_us` 可以进一步按 LibJPEG 内部热点实验拆分，但第一版不应在每个 MCU 扫描行打印日志，只累计计数器和直方图。
 
-该方案仍依赖同一任务，鲁棒性低于独立 AudioFeedTask，但可作为快速验证：如果加入 hook 后 `collide` 和音频重复显著下降，即可确认诊断。
-
-#### 合并事件必须按故障处理
-
-无论采用哪种方案，都不能保留当前“两个 bit 合并后补一次”的静默行为。
-
-检测到以下条件时应增加 `audio_refill_missed`：
-
-- 消息队列满。
-- 某半缓冲还未完成新 generation 就再次成为活动缓冲。
-- `audio_card_write_to_buffer()` 检测到目标 index 已经是活动缓冲。
-- sequence 跳变大于 1。
-
-初版恢复策略可以是：
-
-1. 立即给真正空闲的缓冲写静音。
-2. 记录 replay/silence/missed 帧数。
-3. 连续 miss 超过阈值时暂停 I2S。
-4. PCM FIFO 重新达到高水位后重启双缓冲。
-
-不要继续重复旧 PCM 并把统计保持为 `underrun=0`。
-
-### 5.2 P0：提高初始 PCM 水位，但不扩大 FIFO
-
-32 KB PCM FIFO 在 88200 B/s 下可覆盖：
+建议使用固定桶，避免保存所有样本：
 
 ```text
-32768 / 88200 ≈ 371 ms
+<20 ms, 20~30, 30~35, 35~40, 40~50, 50~80, 80~120, >=120 ms
 ```
 
-它已经能覆盖旧日志 144 ms JPEG 帧，也能覆盖新 `-O3` 日志 66~75 ms JPEG 帧；问题是当前只按 6 个包预缓冲：
+#### I/O 分层统计
+
+parser、PCM、JPEG 和通用 skip 分别记录：
 
 ```text
-12696 / 88200 ≈ 144 ms
+read calls/bytes/total_us/p95/max
+seek calls/total_us/p95/max
+max operation/offset/request_bytes
 ```
 
-这与高码率最坏 JPEG 时间几乎相等，没有 SD 读取、任务切换或其他中断余量。
-
-建议：
-
-- FIFO 保持 32 KB，不继续扩大。
-- 初始启动水位改为 20 到 24 KB，优先试 24 KB。
-- 运行低水位建议 12 到 16 KB。
-- 运行高水位建议 24 到 28 KB。
-- 高于高水位时停止读取 PCM payload，优先建立视频前瞻或处理到期帧。
-
-前提是先修复音频喂数事件丢失。当前 FIFO 长期满是因为消费事件被合并，并不代表调大预缓冲参数本身可以修复问题。
-
-### 5.3 P0：加入单帧硬迟到丢帧
-
-当前只有“队列里存在更多到期帧”才丢帧。应增加不依赖后续队列的硬迟到判断。
-
-在 22050 Hz、12 fps 下，每帧音频时钟跨度约为：
+在 `sd_diskio.c` 增加：
 
 ```text
-22050 / 12 = 1837.5 sample frames
+aligned_fast_path_count
+scratch_slow_path_count
+dma_wait_max_us
+card_ready_wait_max_us
+retry/error_count
+blocks_per_request average/max
 ```
 
-建议维护 JPEG 解码 EWMA 和最近最大值：
+#### 素材和运行环境统计
+
+`videostat` 还应输出：
+
+```text
+CPU clock profile / SystemCoreClock
+SDIO ClockDiv / 1-bit or 4-bit runtime state
+video chunk count/bytes average/p95/max，包括被丢弃帧
+JPEG sampling 420/422/444
+RGB565 direct frames / RGB888 fallback frames
+baseline/progressive/restart interval
+FIFO minimum and time below low water
+startup underrun/silence 与 runtime underrun/silence 分离
+```
+
+完成这些统计后，才能把 48 ms 拆成可优化的 CPU 和 I/O 部分。
+
+### 5.2 P0：让 PCM 低/高水位真正控制调度
+
+进入 JPEG 前增加音频保护策略：
+
+```text
+if fifo_bytes < low_water:
+    进入 audio recovery 模式
+    当前 video chunk 直接跳过，不进入 LibJPEG
+    继续顺序 demux
+
+while recovery:
+    audio chunk -> 写 FIFO
+    video chunk -> 跳过并记录 low_water_drop
+    fifo_bytes >= recovery_target -> 退出 recovery
+```
+
+初始建议：
+
+```text
+low_water      = 16 KB，约 186 ms PCM
+recovery_target = 24 KB，约 279 ms PCM
+high_water     = 28 KB，约 325 ms PCM
+```
+
+使用低/高水位滞回，避免在阈值附近反复切换。还必须处理：
+
+- EOF 时不能永久等待高水位。
+- seek/pause 后重新预缓冲。
+- 音频 chunk 稀疏或异常 AVI 的最大恢复扫描预算。
+- recovery 期间仍响应 stop/seek/pause。
+
+新增统计：
+
+```text
+low_water_enter_count
+low_water_drop_count
+fifo_min_bytes
+fifo_below_low_ticks
+recovery_max_ticks
+```
+
+该策略不会提高 JPEG 原始帧率，但能把“视频和音频一起顿”转换为“主动少显示几帧、音频连续”。
+
+### 5.3 P0：加入预测性丢帧，避免解码注定迟到的帧
+
+当前 hard-late 只有在音频时钟已经领先整整一个视频帧周期时才丢帧。高码率下，一帧开始时可能只迟到数毫秒，但已知平均解码还需要约 48 ms，继续解码必然让下一帧迟到。
+
+维护 JPEG 成功帧 EWMA：
 
 ```text
 decode_estimate_frames =
-    decode_estimate_ticks * sample_rate / tick_frequency
+    jpeg_ewma_ticks * audio_rate / tick_frequency
 
-late_frames =
-    played_frames - frame_deadline_frames
+late_frames = played_frames - deadline_frames
 ```
 
-满足以下任一条件时直接跳过 JPEG payload，不进入 LibJPEG：
-
-```text
-late_frames >= 0.5 到 1.0 个视频帧周期
-
-或
-
-late_frames + decode_estimate_frames
-    > 1.0 到 1.5 个视频帧周期
-```
-
-初始可采用保守规则：
+保守预测规则：
 
 ```text
 hard_drop = late_frames >= frame_interval_frames
+
 predict_drop = late_frames > 0 &&
-               late_frames + decode_ewma_frames > frame_interval_frames
+               late_frames + decode_estimate_frames > frame_interval_frames
 ```
 
-高码率素材无法逐帧达到 12 fps 时，正确行为应是：
-
-- 音频连续；
-- 视频主动丢帧并保持媒体时间；
-- `dropped` 明确增加；
-- 播放总时长不被视频解码拖慢。
-
-“`dropped=0` 但整段播放变慢”不是优化目标。
-
-### 5.4 P0：修复 `queue video=0 audio=16` 队列饥饿
-
-#### 短期修改
-
-在保持现有双队列结构时：
-
-- `VIDEO_PCM_AUDIO_QUEUE_SIZE` 从 16 增加到 32 或 64。每项只有 offset 和 remaining，额外内存较小。
-- 增加 `audio_queue_full_count` 和 `video_queue_empty_count`。
-- 当 FIFO 高于高水位且视频队列低于 2 到 4 帧时，优先 demux chunk header，不继续填满 PCM FIFO。
-- 每轮 pump 增加“字节预算/时间预算”，不能只使用 16 个 chunk 的固定预算。
-- 每次进入 JPEG 前确保：
-  - 音频 FIFO 不低于安全水位；
-  - 至少有 1 到 2 个后续视频 metadata，或者当前帧已通过硬迟到检查。
-
-仅增大 audio metadata 队列是缓解措施，仍可能保留随机 seek 和队列间相互阻塞。
-
-#### 推荐结构：顺序 demux + 独立音频 feeder
-
-更接近参考工程、也更适合 AVI 的结构是：
+统计必须区分：
 
 ```text
-单个 FIL 顺序游标
-  -> 读取下一个 chunk header
-  -> audio chunk：分段写 PCM FIFO
-  -> video chunk：
-       - 迟到则顺序跳过 payload
-       - 到期则从当前游标流式 JPEG 解码
-  -> 继续下一个 chunk
-
-AudioFeedTask
-  -> 独立从 FIFO 补 I2S DMA
+prebuffer_drop
+hard_late_drop
+predicted_late_drop
+low_water_drop
+oversized_drop
 ```
 
-优点：
+预测性丢帧的目标是减少抖动和连续丢帧，不是掩盖 JPEG 性能不足。验收时仍需报告有效显示帧率。
 
-- 文件访问恢复为近似顺序读取。
-- 不需要 parser、PCM、MJPEG 在一个 `FIL` 上来回 seek。
-- 不需要保存大量 pending audio metadata。
-- 视频迟到时可以在遇到当前 chunk 时直接跳过。
-- 32 KB FIFO 能在 JPEG 解码期间独立维持音频。
+### 5.4 P1：根据 DWT 结果降低 JPEG 持续成本
 
-该结构要求在进入较重 JPEG 前保持足够 PCM 水位，推荐 20 到 24 KB。
+当前已经启用 `JDCT_IFAST`、关闭 fancy upsampling，并实现了视频专用 RGB565 merged output。下一步应根据分段结果选择改动。
 
-### 5.5 P1：移植视频专用 RGB565 合并输出
+#### 如果 Huffman/IDCT 占主导
 
-当前每帧执行：
+- 确认 `jdhuff.c`、`jidctfst.c`、`jdcoefct.c`、`jdmerge.c` 实际使用 ARMCLANG `-O3`/speed 优化。
+- 检查 map/listing，避免热点文件被单文件配置降级。
+- 评估 Cortex-M4 DSP 指令友好的定点实现，但必须保持 LibJPEG 异常输入和 arena 边界行为。
+- 不先开启全工程 LTO；本项目包含 HAL、FreeRTOS、汇编 NES 核心和多个第三方库，扩大范围不利于定位收益。
+
+#### 如果普通 JPEG 读取累计耗时较高
+
+- 统计每帧 8 KB source refill 次数和累计时间。
+- 评估 12/16 KB source buffer，而不是直接复制参考工程的 48 KB 整帧缓冲。
+- 当前 80 KB 视频池只剩约 2016 B，扩大 source buffer 前必须重新规划内存。
+- 不建议直接把 LibJPEG 热工作区整体迁移到 FSMC SRAM；CPU 随机访问外部 SRAM 可能抵消减少 I/O 调用的收益。
+
+#### 如果 RGB888 fallback 被命中
+
+- 记录不满足快速路径的具体采样因子。
+- 素材统一转为 baseline YUV 4:2:0 或已经验证的 4:2:2。
+- 不全局修改 GUI 图片查看器使用的 LibJPEG 行为。
+
+#### 性能目标
+
+25 fps 的工程目标：
 
 ```text
-LibJPEG YCbCr -> RGB888
-RGB888 -> RGB565 + byte swap
-RGB565 -> LCD DMA
+end-to-end successful-frame average <= 35 ms
+jpeg p95 <= 35 ms
+jpeg p99 <= 40 ms，或由预测丢帧吸收
+late drop rate <= 5%
+effective displayed fps >= 23.75 fps
 ```
 
-推荐改为：
+2 Mbps 兼容档应保持：
 
 ```text
-LibJPEG merged upsample/color convert
-  -> 直接生成 LCD 所需端序的 RGB565
-  -> 条带 DMA
+late drop rate <= 2%
+max consecutive late drops <= 2
+runtime underrun/silence 不增长
 ```
 
-实现注意：
+### 5.5 P1：建立设备端素材约束
 
-- 不要直接全局替换标准 LibJPEG 的 `jdmerge.c`，GUI 图片查看器也在使用该库。
-- 增加视频专用编译开关或新的输出颜色空间，例如 `JCS_RGB565_VIDEO`。
-- 只在 4:2:0、4:2:2 等已验证采样格式启用快速路径；其他格式回退到标准 RGB888。
-- 输出端序应直接匹配 ST7789 SPI 字节顺序，取消 `color << 8 | color >> 8`。
-- 用纯红、纯绿、纯蓝、灰阶、肤色图测试颜色通道和饱和度。
+本次 2 Mbps 流畅样本中，成功解码 JPEG 平均约 10.5 KB；10 Mbps 卡顿样本中约为 19.6~20.9 KB。可先把平均 JPEG chunk 10~12 KB 作为 24/25 fps 兼容档经验基线，再通过更多素材确定 p95 上限。
 
-预期收益：
+推荐准备以下统一测试档：
 
-- 去掉每帧 76800 次独立 RGB888 到 RGB565 转换。
-- 减少一份 960 B RGB888 行缓冲。
-- 减少一次完整图像内存读取。
+```text
+320x240 @ 24000/1001 fps, yuvj420p, q:v 11/9/7
+320x240 @ 25 fps,         yuvj420p, q:v 11/9/7
+PCM s16le, 22050 Hz, stereo
+```
 
-需要真机测量实际收益。旧日志中它未必足以单独把 144 ms 降到 83 ms 以下；新 `-O3` 日志中它更适合作为继续压低 p99/max、释放调度余量的优化。
-
-### 5.6 P1：约束 JPEG 采样格式和素材参数
-
-打开 JPEG header 后增加以下统计：
-
-- JPEG chunk size。
-- `num_components`。
-- Y/Cb/Cr 的 `h_samp_factor` 和 `v_samp_factor`。
-- progressive/baseline。
-- restart interval。
-
-设备转码预设应固定为 baseline MJPEG + YUV 4:2:0。4:4:4 会显著增加色度块数量和颜色转换负担。
-
-建议基线命令：
+FFmpeg 示例：
 
 ```bash
 ffmpeg -i input.mp4 \
-  -vf "scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:black,fps=12" \
-  -c:v mjpeg -q:v 9 -pix_fmt yuvj420p \
+  -vf "scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:black,fps=25" \
+  -c:v mjpeg -q:v 11 -pix_fmt yuvj420p \
   -c:a pcm_s16le -ar 22050 -ac 2 \
-  -f avi output_q9.avi
+  -f avi output_q11.avi
 ```
 
-继续准备 `q:v 7`、`9`、`11` 三档。FFmpeg 的 `q:v` 数值越小，JPEG 质量越高、压缩帧通常越大。
-
-根据现有日志，建议初步把素材目标设为：
-
-- 平均视频 chunk 尽量不超过 6 到 8 KB。
-- `jpeg p99` 小于 70 ms。
-- `jpeg max` 小于 83 ms；若不能满足，允许可控丢帧。
-
-对复杂运动画面仍超预算时，优先选择：
-
-1. `q:v` 从 9 增加到 11。
-2. 帧率从 12 fps 降到 10 fps。
-3. 降低分辨率。
-
-不建议用高 JPEG 质量换取设备端持续超时。
-
-### 5.7 P1：拆分 `jpeg_max`，用 DWT 周期计数定位 CPU 与 I/O
-
-当前 `jpeg_max` 混合了：
-
-- `f_lseek`。
-- FatFs/SDIO 读取。
-- JPEG header。
-- Huffman/IDCT/上采样。
-- RGB565 转换。
-- LCD DMA 等待。
-
-1 ms RTOS tick 对热点优化过于粗糙。建议启用 Cortex-M4 DWT `CYCCNT`，新增：
+FFmpeg 的 `q:v` 越小，JPEG 质量越高、帧通常越大。素材验收不应只看容器显示的 Mbps，还要看：
 
 ```text
-max_jpeg_seek_us
-max_jpeg_read_us
-max_jpeg_header_us
-max_jpeg_core_us
-max_rgb565_convert_us
-max_lcd_submit_wait_us
+video chunk average/p95/max
+jpeg total average/p95/p99
+over-budget frame ratio
+RGB565 direct-path hit rate
 ```
 
-同时拆分：
+如果必须立即获得稳定播放而暂不修改解码器，优先使用接近本次 2 Mbps 样本的兼容档，或把 25 fps 降到当前实测可持续的 20 fps 左右。后者是素材侧降级，不是固件性能优化的最终目标。
 
-```text
-mjpeg_read_calls / bytes / max_us
-pcm_read_calls / bytes / max_us
-parser_read_calls / bytes / max_us
-f_lseek_calls / max_us
-```
+### 5.6 P1：定位并削弱 SD/FatFs 长尾
 
-只有测出 `f_lseek` 或 `f_read` 的 p99/max 明显占用帧预算，才继续优化 SDIO。
+建议按以下顺序验证：
 
-### 5.8 P2：如果保留随机 seek，真正启用 FatFs CLMT
+1. 同一 AVI、同一固件，复制到新格式化 SD 卡后测试。
+2. 同一文件测试至少两种 SD 卡。
+3. 对连续文件和人工碎片文件分别记录 READ/SEEK p95/max。
+4. 确认慢操作来自 `f_read` 还是 `f_lseek`。
+5. 如果碎片和 seek 明显相关，再创建 FatFs CLMT。
+6. 如果 DMA/card ready 等待占主导，再检查 SDIO 驱动状态机、IRQ 和卡兼容性。
 
-当前 `_USE_FASTSEEK=1` 只是编译支持，必须给 `FIL.cltbl` 设置表并调用：
+当前 `_USE_FASTSEEK=1` 只表示 FatFs 编译支持。若需要 CLMT，必须设置 `FIL.cltbl` 并调用：
 
 ```c
 file->cltbl = clmt;
@@ -657,292 +520,171 @@ clmt[0] = CLMT_ITEM_COUNT;
 f_lseek(file, CREATE_LINKMAP);
 ```
 
-建议：
-
-- 从视频内存池或 SRAMEX 分配 1 到 2 KB 的 CLMT 初值。
-- CLMT 只在视频打开阶段创建。
-- 记录创建失败和表容量不足。
-- 对连续文件、碎片文件分别测试 `max_f_lseek_us`。
-
-如果改为严格顺序 demux，CLMT 的收益会明显降低，可不作为首要改动。
-
-### 5.9 P2：SDIO 可测试 `ClockDiv=0`，但不要继续盲调
-
-当前：
+当前源码为 48 MHz SDIO 源、`ClockDiv=2`，实际约 12 MHz，并在 BSP 初始化后切换为 4-bit。可以在确认 PCB 信号完整性和多卡稳定性后对照测试：
 
 ```text
-ClockDiv = 1 -> 16 MHz
-4-bit bus 在 BSP_SD_Init() 后启用
+ClockDiv=2 -> 12 MHz
+ClockDiv=1 -> 16 MHz
+ClockDiv=0 -> 24 MHz
 ```
 
-参考工程：
+提高 SDIO 时钟可能降低普通读取时间，但不能解释或修复“无慢 I/O 时仍有约 17% 丢帧”的持续 JPEG 瓶颈，也未必能消除 SD 卡内部 100 ms 级长尾。
+
+### 5.7 P3：LCD 和内存暂不优先调整
+
+当前 LCD 数据表明双条带 DMA 已与 JPEG CPU 工作有效重叠：
 
 ```text
-ClockDiv = 0 -> 24 MHz
-4-bit bus
+lcd_wait average ~= 1.8~2.0 ms/displayed frame
+lcd_wait_max = 2 ms
+lcd_dma_timeout = 0
 ```
 
-可在确认 PCB 走线、上拉和 SD 卡稳定的情况下测试 `ClockDiv=0`。验收必须同时观察：
-
-- 长时间顺序读错误。
-- CRC/timeout。
-- `read_err`。
-- 卡状态等待超时。
-- 不同品牌 SD 卡。
-
-不要直接启用 48 MHz clock bypass。标准模式、HAL 初始化和卡能力没有充分验证前，24 MHz 是更合理的上限测试点。
-
-即使从 16 MHz 提升到 24 MHz，也只会改善 SD 读取部分，无法消除旧日志中的 JPEG CPU 工作量，也无法修复新日志中仍然明显存在的线程标志事件丢失。
-
-### 5.10 P2：编译器和 LibJPEG 热点配置
-
-参考工程的 LibJPEG 使用 `-O2`。新日志已经验证 ARMCLANG `-O3` 对当前 JPEG 热路径有明显收益：高码率 `jpeg_max` 从旧日志 144 ms 降到 66~75 ms。后续建议保留 `-O3`，并查看实际 build command，确认 `Media/Video_MJPEG.c` 和 LibJPEG 热点文件没有被单文件选项降级。
-
-可对以下模块单独测试 speed 优化：
-
-- `jdhuff.c`
-- `jidctfst.c`
-- `jddctmgr.c`
-- `jdmerge.c`
-- `jdcolor.c`
-- `Video_MJPEG.c`
-
-若后续继续做定点性能实验，建议比较：
-
-- 当前已验证的 ARMCLANG `-O3` 基线。
-- speed 优先选项。
-
-每种配置必须验证：
-
-- JPEG 输出一致。
-- 无 arena 越界。
-- 无异常文件回归。
-- Flash 占用可接受。
-
-不要先开启全工程 LTO；本项目包含 HAL、FreeRTOS、汇编 NES 核心和多个第三方库，扩大改动范围不利于定位收益。
-
-### 5.11 P3：LCD 和内存只做次要微调
-
-当前 SPI1 prescaler 为 2，APB2 为 84 MHz 时 SPI 约为 42 MHz。320x240 RGB565 单帧 153600 B，理论纯传输时间约 29.3 ms，但已通过双条带 DMA 与 JPEG CPU 工作重叠。
-
-日志证明 LCD 不是第一瓶颈：
+继续扩大 20 行条带的收益很小。当前视频池：
 
 ```text
-lcd_wait_max=1
-lcd_dma_timeout=0
+pool    = 81920 B
+current = 79872 B
+largest = 2016 B
+fail    = 0
 ```
 
-暂时保持 8 行条带。
-
-当前视频池：
-
-```text
-pool=81920
-current=73152
-largest=8736
-```
-
-如果从 8 行改成：
-
-- 12 行双缓冲：额外约 5120 B，余量会明显变小。
-- 16 行双缓冲：额外约 10240 B，超过当前总空闲量，不可直接采用。
-
-可以在以下回收完成后再试 12 行：
-
-- VideoTask 栈从 8 KB 按高水位结果缩减。
-- JPEG arena 从 38 KB 在多素材验证后缩减到 32 KB。
-- RGB565 直接输出后回收 RGB888 行缓冲。
-
-但由于 LCD wait 已很低，条带扩展优先级低于音频 feeder、丢帧和 JPEG RGB565 快速路径。
+在没有先回收其他对象前扩大条带或 source buffer会直接造成分配失败。JPEG arena 峰值约 27840 B，但缩小 38 KB arena 之前必须对多种 JPEG 采样格式和异常文件做回归。
 
 ## 6. 推荐实施顺序
 
-### 阶段 1：先修正确性
+### 阶段 1：测准持续时间和长尾来源
 
-1. 增加 AudioFeedTask 或 JPEG 条带 service hook。
-2. 将 DMA 事件从两个 thread bit 改为带 index/sequence 的消息。
-3. 检测 stale buffer generation。
-4. 增加 `audio_refill_missed`、`audio_replayed_frames`、`audio_media_frames`。
-5. 确保 `collide` 不再被当作正常可忽略事件。
+1. 增加 JPEG DWT 分段统计和耗时直方图。
+2. 拆分 READ/SEEK 的 total/p95/max。
+3. 增加完整 video chunk 字节统计、JPEG sampling 和 RGB565 命中率。
+4. 输出 CPU/SDIO 实际时钟。
+5. 分离 startup 与 runtime underrun/silence。
 
-完成条件：
+完成条件：能够解释一帧约 48 ms 中 CPU、普通 I/O 和 LCD 分别占多少时间，并能定位 165 ms 长尾所在层级。
 
-```text
-audio_refill_missed = 0
-audio_replayed_frames = 0
-late = 0
-audio udr = 0
-```
+### 阶段 2：优先保护音频连续性
 
-### 阶段 2：恢复媒体时间
+1. 将 16/28 KB 低/高水位接入顺序 demux 调度。
+2. 低水位时主动跳过视频，恢复到至少 24 KB。
+3. 增加预测性丢帧，避免解码注定迟到的帧。
+4. 保持现有 AudioFeedTask 和 32 KB FIFO，不重写已经正常的 DMA 事件链。
 
-1. 修复 `queue video=0 audio=16`，避免音频队列/FIFO 策略长期饿死视频前瞻。
-2. 增加单帧 hard-late/predicted-late 丢帧。
-3. PCM 启动水位提高到 20 到 24 KB。
-4. 保持 32 KB FIFO，不继续扩容。
+完成条件：10 Mbps 压力测试和 SD 长尾期间 `runtime silence=0`、`refill_missed=0`、`audio udr=0`。
 
-完成条件：
+### 阶段 3：提高高码率实际显示帧率
 
-- 高码率不可持续时 `dropped` 合理增加。
-- 播放总时长接近文件时长。
-- 音频不中断、不重复。
-- 视频不会因逐帧硬解码而持续减速。
+1. 根据 DWT 结果优化 Huffman/IDCT、source refill 或格式 fallback。
+2. 确认 LibJPEG 热点实际使用 speed 优化。
+3. 固定 baseline YUV 4:2:0 兼容素材格式。
+4. 将成功帧常态处理时间从约 48 ms 降到 32~35 ms。
 
-### 阶段 3：继续降低 JPEG CPU 时间
+完成条件：25 fps 目标素材有效显示帧率至少 23.75 fps，迟到丢帧率不高于 5%。
 
-1. 增加 DWT 分段统计。
-2. 实现视频专用 RGB565 merged output。
-3. 保留 ARMCLANG `-O3`，确认 LibJPEG 热点文件实际使用 speed 优化。
-4. 固定 baseline、YUV 4:2:0 转码格式。
+### 阶段 4：处理文件系统长尾
 
-完成条件：
+1. 用连续文件、碎片文件和多张 SD 卡复测。
+2. 根据分层数据决定是否启用 CLMT。
+3. 对照测试 `ClockDiv=2/1/0`。
+4. 只在证据支持时修改 source buffer 或 SDIO 驱动。
 
-- 低码率 `jpeg p99 < 60 ms`。
-- 目标高码率档 `jpeg p99 < 75 ms`。
-- 最坏超过 83 ms 时由丢帧机制吸收，不破坏音频。
+完成条件：普通 READ/SEEK p99 显著下降，100 ms 级长尾不再导致音频 FIFO 耗尽。
 
-### 阶段 4：再处理文件系统
+## 7. 验收测试
 
-1. 测量 `f_read`、`f_lseek` max/p99。
-2. 保留现有结构时创建 CLMT。
-3. 优先评估顺序 demux。
-4. 测试 `ClockDiv=0`。
-5. 对连续和碎片 AVI 分别压测。
-
-只有当 I/O 明确占用较大帧预算时，才继续增加 source buffer 或修改 SDIO 驱动。
-
-## 7. 建议修改点
-
-| 文件 | 建议 |
-|---|---|
-| `Media/Video_PCM.c/.h` | 将 DMA 标志改为可计数事件；拆分 clock/media/replay/silence 统计；增加 feeder API |
-| `BSP/i2s.c/.h` | 回调传递确定的 idle index 和 sequence；记录每个半缓冲 generation |
-| `Media/Video.c/.h` | 建立 AudioFeedTask；增加 hard-late 丢帧；调整 pump 顺序和水位；扩展统计 |
-| `Media/Video_MJPEG.c/.h` | 增加条带 service hook；DWT 分段计时；接入 RGB565 快速输出 |
-| `Middlewares/Third_Party/LibJPEG` | 增加视频专用 RGB565 merged upsampling 编译路径，不影响 GUI 图片解码 |
-| `Media/AVI_Parser.c/.h` | 为顺序 demux 提供不强制 seek 的 iterator/read API |
-| `FATFS/Target` | 仅在测量证明有必要时优化；保留 DMA 对齐；评估 CLMT |
-| `Debug/shell_ext.c` 或视频 shell 命令 | 扩展 `videostat` 输出和 reset |
-
-所有新增任务必须遵守：
-
-- CMSIS-RTOS V2。
-- 静态内存分配。
-- CCM 只放 CPU 栈/普通数据，不能作为 DMA 缓冲。
-- DMA 缓冲和 FatFs DMA 可达对象放在内部普通 SRAM 或 `SRAMEX`。
-
-## 8. 新增诊断字段
-
-建议把 `videostat` 扩展为：
-
-```text
-timing:
-  jpeg_last/jpeg_avg/jpeg_p99/jpeg_max
-  jpeg_seek_max_us
-  jpeg_read_max_us
-  jpeg_core_max_us
-  rgb565_max_us
-  lcd_wait_max_us
-
-audio:
-  clock_frames
-  media_frames
-  replayed_frames
-  silence_frames
-  refill_events
-  refill_missed
-  refill_queue_peak
-  max_refill_latency_us
-
-queue:
-  video current/min
-  audio current/max
-  video_empty_count
-  audio_full_count
-
-io:
-  parser/read/seek 分项 calls/bytes/max_us
-
-jpeg format:
-  frame_bytes avg/max
-  sampling=420/422/444
-  progressive
-```
-
-`videostat r` 必须同时清除所有播放器、PCM 和 audio card 统计，避免不同播放会话的数据混合。
-
-## 9. 验收测试
-
-每个素材播放前执行：
+每次播放新素材前执行：
 
 ```text
 videostat r
 ```
 
-测试矩阵：
+至少在相同源视频、相同音频、相同 SD 卡和相同 CPU profile 下测试：
 
 ```text
-320x240 @ 12 fps, q:v 11, yuvj420p, PCM 22050 stereo
-320x240 @ 12 fps, q:v 9,  yuvj420p, PCM 22050 stereo
-320x240 @ 12 fps, q:v 7,  yuvj420p, PCM 22050 stereo
-320x240 @ 10 fps, q:v 7,  yuvj420p, PCM 22050 stereo
-320x240 @ 12 fps, yuvj422p
-320x240 @ 12 fps, yuvj444p
-连续文件和人工碎片化文件
+2 / 4 / 6 / 8 / 10 Mbps 标称档
+320x240 @ 24000/1001 fps
+320x240 @ 25 fps
+q:v 11 / 9 / 7
+yuvj420p / yuvj422p / yuvj444p
+连续文件 / 人工碎片文件
 至少三种 SD 卡
 ```
 
-基础验收：
+本次 2 Mbps 和 10 Mbps 样本帧率分别为 23.976 和 25 fps，不是严格单变量实验。后续必须增加相同帧率、相同画面内容、只改变 JPEG 质量/码率的配对素材，才能精确绘制码率与解码时间曲线。
+
+### 基础正确性
 
 - 连续播放 30 分钟无 HardFault、死锁、内存增长。
 - `audio_refill_missed=0`。
 - `audio_replayed_frames=0`。
-- `late=0`。
-- `underrun=0`，或只在拔卡/故障注入场景出现。
-- 高码率超预算时 `dropped>0`，但播放时长不被拉长。
-- A/V 不出现持续漂移。
-- `queue video` 不长期为 0。
-- `queue audio` 不长期卡在上限。
-- `jpeg_err=0`。
+- `audio udr=0`、`dma_err=0`、`i2s_err=0`。
+- 启动完成后 `runtime underrun/silence` 不增长。
+- `jpeg_err=0`、`read_err=0`、`retry=0`、`resync=0`。
 - `lcd_dma_timeout=0`。
-- `read_err=0`。
+- 播放总时长接近文件时长，音频无重复和持续漂移。
 
-性能验收建议：
+### 2 Mbps 兼容档
 
-- 可持续素材：`jpeg p99` 小于帧周期的 80%。
-- 最坏 JPEG 偶发超帧周期时，丢帧后两帧内恢复到同步窗口。
-- 音频 refill 最大延迟小于一个 DMA package 周期。
-- SDIO 优化必须以 `max_read_us/max_seek_us` 下降为证据，不能只看 ClockDiv。
+- 迟到丢帧率不高于 2%。
+- 有效显示帧率不低于名义帧率的 98%。
+- 最大连续迟到丢帧不高于 2。
+- I/O 慢事件不造成 runtime silence。
 
-## 10. 不建议的优化方向
+### 10 Mbps 压力档
 
-- **不建议继续扩大 32 KB PCM FIFO。** 当前已经足够覆盖约 371 ms，事件丢失才是根因。
-- **不建议只提高 VideoTask 优先级。** 同一个任务正在执行 JPEG，优先级无法让它同时补音频。
-- **不建议只把 `VIDEO_PCM_PACKAGE_MS` 调大。** 4 KB I/O 上限下包周期最多约 46 ms，仍小于旧日志 144 ms 最坏帧，也小于新 `-O3` 高码率 66~75 ms 最坏帧，只能降低事件频率，不能根治。
-- **不建议优先扩大 LCD 条带。** `lcd_wait_max=1`，收益有限且视频池余量不足。
-- **不建议直接复制参考工程的 48 KB 整帧缓冲。** 当前 bounded JPEG source 更节省内存，问题在调度和颜色输出。
-- **不建议直接全局替换参考工程的 `jdmerge.c`。** 它包含特定 RGB/BGR 和端序假设，会影响其他 LibJPEG 使用者。
-- **不建议追求 DMA2D。** STM32F407 没有 DMA2D。
-- **不建议盲目启用 48 MHz SDIO bypass。** 当前没有证据表明持续带宽不足，信号完整性和卡兼容风险更高。
+正确性阶段允许主动丢视频，但必须满足：
 
-## 11. 最终建议
+- 音频连续，`runtime silence=0`。
+- `refill_missed=0`。
+- 播放时间不被视频解码拖慢。
+- SD 长尾结束后两帧内恢复到正常调度窗口。
+- 丢帧原因统计可解释，不使用 `dropped` 总数掩盖来源。
 
-本次优化应按以下主线执行：
+性能优化阶段目标：
+
+- 迟到丢帧率不高于 5%。
+- 有效显示帧率不低于 23.75 fps。
+- JPEG/整帧 p95 和 p99 满足第 5.4 节目标。
+
+## 8. 不建议的方向
+
+- **不建议重新实现 AudioFeedTask。** 当前 `audio collide=0`、`refill missed=0`、`audio late=0`，事件链路已经正常。
+- **不建议再按 `queue video=0 audio=0` 判断饥饿。** 这是旧队列架构遗留统计字段。
+- **不建议只看 `jpeg_max`。** 2 Mbps 流畅样本已经证明历史峰值不能代表持续性能。
+- **不建议只提高 VideoTask 优先级。** 同步 JPEG 的总 CPU 工作量不会因此减少，还可能挤压其他任务。
+- **不建议继续扩大 32 KB PCM FIFO。** 应先使用现有低/高水位并改进调度。
+- **不建议优先扩大 LCD 条带。** LCD 等待很低且视频池只剩约 2 KB。
+- **不建议重复实现 RGB565 merged output。** 当前快速路径已经存在，应先统计命中率和 CPU 分段时间。
+- **不建议直接复制 48 KB 整帧 JPEG 缓冲。** 当前内部 SRAM 无此余量。
+- **不建议把卡顿简单归因于 SDIO 频率。** 无慢 I/O 时高码率已经持续超预算。
+- **不建议盲目启用 48 MHz SDIO bypass。** 信号完整性和卡兼容风险高，当前最高只建议验证 24 MHz。
+- **不建议追求 DMA2D。** STM32F407 没有 DMA2D 或硬件 JPEG 解码器。
+
+## 9. 历史结论的状态
+
+2026-07-21 版本文档针对的是旧播放器架构，其核心问题包括：
+
+- 用不可计数 thread flags 表示 I2S DMA 事件。
+- `queue video=0 audio=16` 的双队列饥饿。
+- 没有单帧 hard-late 丢帧。
+- 旧 PCM 数据重复播放无法识别。
+- RGB888 再逐像素转换 RGB565。
+- 8 行 LCD 条带。
+- 启动 PCM 水位不足。
+
+这些问题在当前代码中已经完成重构或替换。旧日志仍可用于解释架构演进，但不能再用于确定当前优化优先级。
+
+当前最关键的判断更新为：
 
 ```text
-先保证每个 I2S DMA 半缓冲都被及时、准确补充
-  -> 再修复视频前瞻队列饥饿
-  -> 再让视频在迟到或超预算时主动丢帧
-  -> 再减少 JPEG RGB565 转换开销
-  -> 最后根据分段计时决定是否优化 SDIO/CLMT
+2 Mbps 流畅样本即使存在偶发 34~102 ms 峰值，
+仍能以约 1%~2% 迟到丢帧维持 23.976 fps 媒体时间；
+
+10 Mbps 卡顿样本在没有任何慢 I/O 时，
+成功帧有效服务时间已经约 48.4 ms > 40 ms，
+因此持续 JPEG 处理能力是第一瓶颈；
+
+后续 165 ms JPEG I/O 长尾又把区间丢帧率提高到 33.9%，
+并在 FIFO 低水位条件下产生约 223 ms 新静音，
+因此 SD 长尾和未启用的 PCM 水位调度是第二层放大因素。
 ```
-
-最关键的判断是：
-
-```text
-旧日志中高码率素材的 144 ms JPEG 最坏耗时已经超过 83.333 ms 帧周期；
-新 `-O3` 日志中 JPEG 最坏耗时降到 66~75 ms，但音频事件机制仍无法承受这种长时间不可服务区间，
-并且 `queue video=0 audio=16` 使视频丢帧策略没有机会工作。
-```
-
-因此，优先修复音频 feeder、视频前瞻队列和丢帧调度，能够先把“卡顿、音频重复、播放变慢”变成“音频连续、视频按能力丢帧、播放时间正确”。随后通过 RGB565 直接输出和素材约束，才有机会提高实际显示帧率。

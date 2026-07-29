@@ -1,0 +1,31 @@
+#ifndef __USER__API
+#define __USER__API
+
+/* Keep this table in lockstep with ELF Loader/dl_user_api.h. */
+#define DL_USER_LIB_BASE 22
+
+enum {
+	DL_USER_ADD = 0,
+	DL_USER_DEBUG,
+	DL_USER_LCD_ACQUIRE,
+	DL_USER_LCD_RELEASE,
+	DL_USER_LCD_CLEAR,
+	DL_USER_LCD_DRAW_PIXEL,
+	DL_USER_LCD_FILL_RECT,
+	DL_USER_LCD_BLIT_RGB565,
+	DL_USER_LCD_GET_WIDTH,
+	DL_USER_LCD_GET_HEIGHT,
+	DL_USER_KEY_GET_STATE,
+	DL_USER_KEY_GET_RAW_STATE,
+	DL_USER_SHOULD_EXIT,
+	DL_USER_AXF_DELAY,
+	DL_USER_LIB_NUM
+};
+
+/* Legacy names used by the original template. */
+#define DL_USER_API_START_BASE DL_USER_LIB_BASE
+#define TestFunc DL_USER_ADD
+#define APPDEBUG DL_USER_DEBUG
+#define USER_FUNC_NUM 2
+
+#endif
