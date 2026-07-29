@@ -8,14 +8,17 @@ extern "C" {
 #endif
 
 #define VIDEO_MEMORY_ALIGNMENT  32U
-#define VIDEO_MEMORY_POOL_SIZE  (80UL * 1024UL)
+#define VIDEO_MEMORY_POOL_SIZE  (40UL * 1024UL)
 
 typedef struct Video_MemoryStats
 {
 	u32 pool_size;
 	u32 current_bytes;
 	u32 peak_bytes;
+	u32 free_bytes;
 	u32 largest_free_block;
+	u32 used_block_count;
+	u32 free_block_count;
 	u32 allocation_failures;
 } Video_MemoryStats_t;
 

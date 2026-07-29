@@ -27,7 +27,7 @@ static u32 video_memory_lock(void);
 static void video_memory_unlock(u32 interrupt_mask);
 static Video_MemoryBlock_t *video_memory_block(u32 offset);
 static void video_memory_initialize_locked(void);
-static u32 video_memory_largest_free_locked(void);
+static void video_memory_collect_stats_locked(Video_MemoryStats_t *stats);
 
 __attribute__((section(".bss.video_sram"), aligned(VIDEO_MEMORY_ALIGNMENT), used))
 static u8 s_video_memory_pool[VIDEO_MEMORY_POOL_SIZE];
@@ -219,8 +219,12 @@ void Video_Memory_GetStats(Video_MemoryStats_t *stats)
 	stats->pool_size = VIDEO_MEMORY_POOL_SIZE;
 	stats->current_bytes = s_video_memory_current;
 	stats->peak_bytes = s_video_memory_peak;
-	stats->largest_free_block = video_memory_largest_free_locked();
 	stats->allocation_failures = s_video_memory_failures;
+	stats->free_bytes = 0U;
+	stats->largest_free_block = 0U;
+	stats->used_block_count = 0U;
+	stats->free_block_count = 0U;
+	video_memory_collect_stats_locked(stats);
 	video_memory_unlock(interrupt_mask);
 }
 
@@ -272,11 +276,10 @@ static void video_memory_initialize_locked(void)
 	s_video_memory_initialized = 1U;
 }
 
-static u32 video_memory_largest_free_locked(void)
+static void video_memory_collect_stats_locked(Video_MemoryStats_t *stats)
 {
 	Video_MemoryBlock_t *block;
 	u32 block_offset = 0U;
-	u32 largest = 0U;
 
 	while(block_offset != VIDEO_MEMORY_OFFSET_NONE)
 	{
@@ -285,11 +288,19 @@ static u32 video_memory_largest_free_locked(void)
 		{
 			break;
 		}
-		if(block->state == VIDEO_MEMORY_BLOCK_FREE && block->size > largest)
+		if(block->state == VIDEO_MEMORY_BLOCK_FREE)
 		{
-			largest = block->size;
+			stats->free_bytes += block->size;
+			stats->free_block_count++;
+			if(block->size > stats->largest_free_block)
+			{
+				stats->largest_free_block = block->size;
+			}
+		}
+		else if(block->state == VIDEO_MEMORY_BLOCK_ALLOCATED)
+		{
+			stats->used_block_count++;
 		}
 		block_offset = block->next_offset;
 	}
-	return largest;
 }

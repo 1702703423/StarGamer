@@ -1,6 +1,7 @@
 #include "Video_MJPEG.h"
 
 #include "LCD.h"
+#include "Malloc.h"
 #include "System_Status.h"
 #include "Video_Memory.h"
 #include "jerror.h"
@@ -68,10 +69,11 @@ int Video_MJPEG_Init(Video_MJPEG_t *decoder)
 		VIDEO_MJPEG_SOURCE_BUFFER_SIZE);
 	decoder->stripe[0] = (u16 *)Video_Memory_Alloc(stripe_size);
 	decoder->stripe[1] = (u16 *)Video_Memory_Alloc(stripe_size);
-	decoder->jpeg_context = Video_Memory_Alloc(sizeof(struct jpeg_decompress_struct));
-	decoder->jpeg_error = Video_Memory_Alloc(sizeof(Video_JpegError_t));
-	decoder->jpeg_provider = Video_Memory_Alloc(sizeof(JPEG_MemoryProvider_t));
-	decoder->jpeg_arena = (u8 *)Video_Memory_Alloc(VIDEO_MJPEG_ARENA_SIZE);
+	decoder->jpeg_context = sys_malloc(SRAMCCM,
+		sizeof(struct jpeg_decompress_struct));
+	decoder->jpeg_error = sys_malloc(SRAMCCM, sizeof(Video_JpegError_t));
+	decoder->jpeg_provider = sys_malloc(SRAMCCM, sizeof(JPEG_MemoryProvider_t));
+	decoder->jpeg_arena = (u8 *)sys_malloc(SRAMCCM, VIDEO_MJPEG_ARENA_SIZE);
 	if(decoder->source_buffer == NULL ||
 	   decoder->stripe[0] == NULL || decoder->stripe[1] == NULL ||
 	   decoder->jpeg_context == NULL || decoder->jpeg_error == NULL ||
@@ -146,19 +148,19 @@ void Video_MJPEG_Close(Video_MJPEG_t *decoder)
 	}
 	if(decoder->jpeg_context != NULL)
 	{
-		Video_Memory_Free(decoder->jpeg_context);
+		sys_free(SRAMCCM, decoder->jpeg_context);
 	}
 	if(decoder->jpeg_error != NULL)
 	{
-		Video_Memory_Free(decoder->jpeg_error);
+		sys_free(SRAMCCM, decoder->jpeg_error);
 	}
 	if(decoder->jpeg_provider != NULL)
 	{
-		Video_Memory_Free(decoder->jpeg_provider);
+		sys_free(SRAMCCM, decoder->jpeg_provider);
 	}
 	if(decoder->jpeg_arena != NULL)
 	{
-		Video_Memory_Free(decoder->jpeg_arena);
+		sys_free(SRAMCCM, decoder->jpeg_arena);
 	}
 	memset(decoder, 0, sizeof(*decoder));
 }

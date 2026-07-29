@@ -4,7 +4,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 
 ## 项目
 
-- **MCU**: STM32F407ZGT6（Cortex-M4F @ 168 MHz (OverClock 216Mhz)，1 MB Flash，192 KB 内部 SRAM + 1 MB 外部 SRAM）
+- **MCU**: STM32F407ZGT6（Cortex-M4F @ 168 MHz (OverClock 240Mhz)，1 MB Flash，192 KB 内部 SRAM + 1 MB 外部 SRAM）
 - **屏幕**: ST7789，320×240，16-bit RGB565，SPI 接口
 - **工具链**: Keil MDK-ARM V5.32（ARMCLANG / AC6 编译器）
 - **配置**: 双 CubeMX 工程 — 主固件 `Star Gamer.ioc` + BootLoader `BootLoader/StarGamerBootLoader/StarGamerBootLoader.ioc`
@@ -26,7 +26,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 |------|------|------|
 | **Core** | `Core/Src/`, `Core/Inc/` | `main.c`（入口、外设初始化），`freertos.c`（空闲/定时器任务），`stm32f4xx_it.c`（ISR），HAL MSP/timebase |
 | **Drivers** | `Drivers/` | CMSIS、STM32F4 HAL、`LCD/`（ST7789 SPI 显示驱动，含 RGB565 块传输/缩放裁剪） |
-| **System** | `System/` | `sys.h`（u8/u16/u32、位带宏 PAout/PAin），`Malloc`（CCM + SRAMEX 双堆分配器），`System_Status`（系统状态/错误码/资源表/设置持久化），`firmware_start.c`（系统初始化 + HardFault LCD 显示），`Memory_Dump`（HardFault 内存转储到 W25Q64 / SD 卡），`adt_chain`（链表），`kfifo`（内核 FIFO，Linux 风格泛型队列，用于 PCM 音频缓冲），`ccm_memory.h`、`StarGamer_CCM.sct`（链接脚本） |
+| **System** | `System/` | `sys.h`（u8/u16/u32、位带宏 PAout/PAin），`Malloc`（三池分配器：SRAMCCM + SRAMEX + SRAMSTACK，`sys_malloc`/`sys_free`/`sys_malloc_aligned`），`System_Status`（系统状态/错误码/资源表/设置持久化），`firmware_start.c`（系统初始化 + HardFault LCD 显示），`Memory_Dump`（HardFault 内存转储到 W25Q64 / SD 卡），`adt_chain`（链表），`kfifo`（内核 FIFO，Linux 风格泛型队列，用于 PCM 音频缓冲），`ccm_memory.h`、`StarGamer_CCM.sct`（链接脚本，4 个执行区） |
 | **BSP** | `BSP/` | `w25q64`（SPI NOR Flash），`i2s`（I2S3 音频输出 + DMA，增强 API：`audio_card_open_prepare`，含碰撞统计），`at24c02`（I2C EEPROM），`key`（8 键驱动 + 游戏键位别名） |
 | **Middlewares** | `Middlewares/` | FreeRTOS、FatFs（SDIO，codepage 936）、LibJPEG（自定义 `jpeg_memory_provider`）、LVGL、NES 模拟器、Arduboy 兼容层、BMP 图像库（占位）、**Helix MP3 解码库**（ARM Cortex-M4 定点优化，24 个源文件含 ARM 汇编） |
 | **GUI** | `GUI/` | LVGL 页面管理器架构（见下方 GUI 章节） |
@@ -42,6 +42,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | **PCB** | `PCB/` | 立创 EDA 硬件设计工程文件（`ProPrj_StarGamer_*.epro2`） |
 | **Docs** | `Docs/` | 架构设计文档：AVI 视频播放器（完整设计 + 撕裂分析 + 高码率卡顿优化方案 + 日志优化点）、BootLoader 设计、Arduboy 移植、Helix MP3 移植、CCM 栈优化、GUI SRAM 优化 |
 | **Star Gamer ELF** | `Star Gamer ELF/` | 独立 Keil ARMCLANG 工程，构建 AXF 可重定位 demo 应用（`axf_demo.c` — 图形绘制/按键计数器，`dl_User_api.h` — 用户 API 编号），产物 `Star Gamer ELF.axf` 放到 SD 卡根目录后由 AXF Loader 页面加载运行 |
+| **Star Gamer ELF - 2048** | `Star Gamer ELF - 2048/` | 独立 Keil 工程，构建 AXF 2048 游戏应用（`game_2048.c` — 320×240 RGB565 帧缓冲、方向键滑动、PB7 退出），产物 `Star Gamer ELF - 2048.axf` 由 AXF Loader 加载运行 |
 | **Tools** | `Tools/` | PC 端开发工具：`hexdump`（文件十六进制查看，C + Python）、`map_analyzer`（ARMCLANG .map 内存分析，C + Python tkinter GUI + PyInstaller 打包 .exe） |
 | **Tests** | `Tests/AVI_Parser_Host/`、`Tests/AXF_Loader_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`）；AXF 加载器主机端验证脚本 `validate_axf.py`；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
 
@@ -98,15 +99,24 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 
 ### 内存架构
 
-- **内部 SRAM**: 192 KB（128 KB 主 SRAM + 64 KB CCM）
-  - 主 SRAM（0x20000000）：`.data/.bss`、FreeRTOS `ucHeap`、静态全局对象。GUI 页面上下文逐步迁移到 SRAMEX
-  - CCM（0x10000000）：仅 CPU 可访问，**禁止 DMA**。由 `Malloc` 以 `SRAMCCM`（0）管理，64 KB 全用作堆（`ccm_memory.h`），主要用于 RTOS 任务栈分配
-- **外部 SRAM**: 1 MB FSMC SRAM（0x68000000–0x680FFFFF）。由 `Malloc` 以 `SRAMEX`（1）管理（963 KB 可用，32 字节块）。LVGL 堆、帧缓冲、GUI 页面上下文、视频缓冲、PCM FIFO 均走 SRAMEX
-- **分配器**: `mymalloc(memx, size)` / `myfree(memx, ptr)`，`memx` = `SRAMCCM`（0）或 `SRAMEX`（1）。已移除废弃的 `SRAMMAIN` 测试堆，`SRAMBANK` 固定为 2
-- **帧缓冲**: 150 KB LCD 屏幕缓冲，从外部 SRAM 分配；第一缓冲区默认为 LVGL 渲染目标
-- **视频内存**: 散列文件保留 80 KB 片上 SRAM 专用段（0x2000C000–0x2001FFFF，`RW_VIDEO_SRAM`）用于 Video Task 栈、FatFs/JPEG 对象、LCD DMA 条带；Video_Memory 从 SRAMEX 分配 80 KB + JPEG arena 38 KB；32 KB PCM FIFO + 4 KB PCM I/O 缓冲 + I2S DMA 双缓冲走 SRAMEX
-- **线程栈回收**: 临时线程（图片解码、NES、Arduboy）支持栈回收，通过 `sys_thread_stack_free()` 在父上下文释放，可回收约 20 KB CCM
-- **BootLoader 预留**: Flash 低 64 KB（扇区 0–3，0x08000000–0x0800FFFF）预留给 BootLoader，App 起始地址 0x08010000
+三个内存池由 `Malloc` 统一管理（`SRAMBANK = 3`），链接脚本 `StarGamer_CCM.sct` 定义 4 个执行区：
+
+| 池 | 物理位置 | 大小 | 块 | 用途 |
+|---|---------|------|------|------|
+| `SRAMCCM` (0) | CCM 0x10000000 | 60 KB | 32 B | CPU-only 热数据：MJPEG arena 38 KB、LibJPEG 上下文 |
+| `SRAMEX` (1) | 外部 SRAM 0x68000000 | 960 KB | 32 B | DMA 缓冲、LVGL 堆、帧缓冲、GUI 上下文、PCM FIFO、I2S DMA、NES stripe |
+| `SRAMSTACK` (2) | 主 SRAM 0x20010000 | 60 KB（动态） | 256 B | RTOS 任务栈专用（前 4 KB 固定为 `defaultTask` 栈） |
+
+- **主 SRAM（128 KB，0x20000000）**：
+  - `0x20000000–0x20005FFF`（24 KB，`RW_IRAM1`）：`.data/.bss`、MSP、C 库 heap、FreeRTOS 控制对象
+  - `0x20006000–0x2000FFFF`（40 KB，`RW_VIDEO_SRAM`）：`Video_Memory` 片上高速池（FIL、AVI 上下文、MJPEG source、RGB 行缓冲、LCD DMA 双 stripe），40 KB 硬上限，分配失败中止视频启动
+  - `0x20010000–0x2001FFFF`（64 KB，`RW_TASK_STACK`）：任务栈专区 — 前 4 KB 为 CubeMX 生成的 `defaultTaskBuffer`，后 60 KB 由 `SRAMSTACK` 以 256 B 块管理
+- **CCM（64 KB，0x10000000）**：60 KB `SRAMCCM` 堆 + 4 KB 分配表（`RW_CCM_MAP` 0x1000F000）。**严禁放置 DMA 源/目标**
+- **外部 SRAM（1 MB，0x68000000）**：960 KB 数据池 + ~60 KB 分配表 + ~4 KB guard。LVGL 堆、150 KB LCD 帧缓冲、GUI 页面上下文、32 KB PCM FIFO + 4 KB I/O 缓冲、I2S DMA 双缓冲、NES LCD stripe（运行时 SRAMEX 对齐分配，退出回收）
+- **分配器**: `sys_malloc(memx, size)` / `sys_free(memx, ptr)`，新增 `sys_malloc_aligned` / `sys_free_aligned` 对齐接口。`mymalloc`/`myfree` 宏已移除
+- **线程栈**: `sys_thread_stack_alloc(size)` 从 `SRAMSTACK`（主 SRAM）分配；临时线程退出后由父上下文调用 `sys_thread_stack_free()` 回收
+- **诊断**: `sysstats` 报告 CPU 和各池占用；`memfrag` 扫描 SRAMSTACK/SRAMCCM/SRAMEX 碎片率、最大连续块和分配失败次数
+- **BootLoader 预留**: Flash 低 64 KB（扇区 0–3，0x08000000–0x0800FFFF），App 起始地址 0x08010000
 
 ### 关键子系统
 
@@ -119,7 +129,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
   - SD 卡 SDIO 4-bit + DMA（RX: DMA2_Stream3，TX: DMA2_Stream6），FatFs codepage 936，已启用 512 B 对齐 scratch buffer
   - W25Q64（8 MB）SPI Flash（SPI2）：分区为字体区 2 MB + 内存转储区 4 MB + 固件暂存区 1 MB + 固件备份区 1 MB
   - AT24C02（256 B）I2C EEPROM：用于 IAP 双槽容错记录 + 系统设置持久化
-- **NES 模拟器**: 入口 `nes_main.c`，核心 `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`，`NES_SKIP_FRAME = 2`（跳帧），mapper 文件 `000.cpp`–`255.cpp`。渲染逻辑已适配优化
+- **NES 模拟器**: 入口 `nes_main.c`，核心 `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`，`NES_SKIP_FRAME = 2`（跳帧），mapper 文件 `000.cpp`–`255.cpp`。LCD 双 stripe（16 行 × 2）从 SRAMEX 对齐分配，退出回收，释放主 SRAM 静态空间
 - **Arduboy 游戏**: `Middlewares/Third_Party/Arduboy/` 含兼容层（Arduboy2 引擎核心）+ 3 款游戏（Buttons / Dino / FlappyBall）。128×64 1bpp framebuffer，通过 `APP/Arduboy/Arduboy_Runtime.c` 管理生命周期，`Arduboy_Port.c` 对接 LCD 显示和按键
 - **Helix MP3**: `Middlewares/libhelix/` 定点 Layer III 解码器，14 个 C 文件 + 2 个 ARM 汇编优化（`asmmisc_rvds.s`、`asmpoly_thumb2_rvds.s`）+ 移植适配层 `port/helix_support.c`，通过 `Player_MP3.c` 适配 codec 接口
 - **USB MSC**: `USB_DEVICE/`，SD 卡模拟 U 盘，通过 CubeMX USB OTG FS 驱动 + ST 官方 USB 设备库实现
@@ -181,12 +191,12 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **命名**: 文件大小写混合（`Player.c`、`LCD.c`）；函数 `snake_case`（系统/BSP）、`CamelCase`（HAL 相关）、`nes_lowercase`（NES 模拟器）；结构体 `typedef struct Name { ... } Name_t;`；宏 `UPPER_SNAKE_CASE`
 - **GUI 模块命名**: `GUI_<功能>.c/h`，注册函数 `GUI_<功能>_Register()`，显示函数 `GUI_<功能>_Show()`
 - **Media 模块命名**: `Player_<格式>.c/h` 或 `Video_<组件>.c/h`
-- **内存池选择**: DMA 缓冲区 **必须**走 `SRAMEX`；CPU-only 数据（线程栈、局部缓冲）走 `SRAMCCM` 或主 SRAM
+- **内存池选择**: DMA 缓冲区 **必须**走 `SRAMEX` 或片上 `Video_Memory` 池；CPU-only 热数据（MJPEG arena）走 `SRAMCCM`；RTOS 任务栈走 `SRAMSTACK`
 - **IAP 共享协议**: App 和 BootLoader 通过 `IAP/IAP_Protocol.h` 共用 flash 分区地址、EEPROM 槽位定义、记录结构体宏 `IAP_RECORD_MEMBERS`
 
 ## 常见陷阱
 
-1. **CCM DMA 限制**: 绝不能从 `SRAMCCM` 分配 DMA 缓冲区——DMA 控制器无法访问 CCM。DMA 缓冲区始终使用 `SRAMEX`
+1. **CCM DMA 限制**: 绝不能从 `SRAMCCM` 分配 DMA 缓冲区——DMA 控制器无法访问 CCM。DMA 缓冲区使用 `SRAMEX` 或片上 `Video_Memory` 池（`RW_VIDEO_SRAM`）
 2. **CubeMX 重新生成**: 始终将自定义代码放在 `USER CODE` 块内。主固件和 BootLoader 各有独立的 CubeMX 工程
 3. **类型不匹配**: 使用 `u8`/`u16`/`u32`，而非标准 `uint8_t` 类型
 4. **RTOS API**: 使用 CMSIS-RTOS V2（`cmsis_os2.h`），而非原生 FreeRTOS 调用
@@ -195,7 +205,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 7. **HardFault 调试**: HardFault 信息会自动显示在 LCD 上（320×240，5×7 字体），无需串口或调试器即可查看寄存器状态
 8. **LCD 接口**: 本工程 ST7789 走 **SPI** 接口（非 FSMC 并行）。视频播放期间 Video Task 独占 SPI1/LCD
 9. **SDIO DMA 对齐**: FatFs 通过 `ENABLE_SCRATCH_BUFFER` 提供 512 B 对齐缓冲区，避免 DMA word 对齐覆盖压缩流边界
-10. **GUI 页面上下文**: 页面级 `static` 全局变量（内嵌 `GUI_FileManage_t`）占用大量主 SRAM（单个约 13 KB），新增页面应优先从 SRAMEX 动态分配
+10. **GUI 页面上下文**: 页面级 `static` 全局变量（内嵌 `GUI_FileManage_t`）占用主 SRAM（`RW_IRAM1` 仅 24 KB），新增页面应优先从 SRAMEX 动态分配
 11. **视频 DMA 碰撞**: 高码率 AVI 播放时音频 DMA 事件可能合并丢失，`collide/dma` 统计指标需关注；相关优化方案见 `Docs/AVI高码率卡顿优化方案.md`
 12. **IAP 记录**: EEPROM 双槽（SLOT0: 128, SLOT1: 168）通过序列号实现断电安全写入；修改 `IAP_RECORD_MEMBERS` 前确认 `IAP_RECORD_SIZE` 一致性
 
@@ -205,10 +215,10 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - `reasonix.toml` 为 Reasonix 权限配置文件
 - `.agents/skills/arm-cortex-expert/` 为 ARM Cortex-M 专家技能
 - `BootLoader/StarGamerBootLoader/` 为独立 CubeMX 工程，与主固件共享 Drivers/BSP 部分代码，已编译可用
-- `Star Gamer ELF/` 为独立 Keil 工程，用于构建 AXF demo 应用，编译后 `Star Gamer ELF.axf` 放 SD 卡根目录由 AXF Loader 页面加载
+- `Star Gamer ELF/` 为独立 Keil 工程，用于构建 AXF demo 应用；`Star Gamer ELF - 2048/` 为 2048 游戏 AXF 应用工程，产物分别放 SD 卡根目录由 AXF Loader 页面加载
 - `IAP/` 已完整实现（含跳转前 Flash ART 缓存刷新、CONTROL 寄存器清零等加固措施），App 和 BootLoader 通过 `IAP_Protocol.h` 共享协议定义
 - `PCB/` 含立创 EDA 硬件设计工程文件
-- `Docs/` 目录含详细设计文档，修改前应查阅相关文档；`Docs/SRAMEX 优化方案.md` 为空白占位
+- `Docs/` 目录含详细设计文档，修改前应查阅相关文档；`Docs/内存规划重构.md` 描述最新 SRAM 分区布局
 - `Tests/` 含 AVI 解析器 PC 端回归测试 + AXF 加载器主机端验证 + SDIO IRQ 优先级验证脚本 + 真实 AVI 样本文件
 - `Middlewares/libhelix/port/helix_support.c` 为 Helix MP3 移植适配层
 - `Middlewares/Third_Party/BMP/` 为 BMP 图像库占位，尚未实现

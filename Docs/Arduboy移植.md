@@ -113,7 +113,7 @@ RTOS 约束：
 
 - 仅使用 CMSIS-RTOS V2 API。
 - 预分配 TCB 和控制块。
-- 游戏任务栈通过 `sys_thread_stack_alloc()` 从 CCM 分配，初始建议 4 KB，并在硬件上测量余量。
+- 游戏任务栈通过 `sys_thread_stack_alloc()` 从主 SRAM 任务栈专区分配，初始建议 4 KB，并在硬件上测量余量。
 - 不使用原生 FreeRTOS 任务 API。
 - 不使用强制任务终止作为正常退出机制。
 

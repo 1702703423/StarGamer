@@ -254,12 +254,12 @@ MP3 接入前应满足以下任一方案：
 | MP3 压缩输入 | 5,120 B | SRAMEX，SDIO DMA 可访问 |
 | PCM 临时帧 | 4,608 B | SRAMEX |
 | I2S 双半缓冲 | 9,216 B | SRAMEX，DMA 可访问 |
-| Audio task stack | 12,288 B | SRAMCCM |
+| Audio task stack | 12,288 B | 主 SRAM 任务栈专区 |
 | 合计 | 约 43 KiB SRAMEX + 12 KiB CCM | 约 55 KiB |
 
 MP3 播放时 decoder、输入、PCM 和 DMA 最大实用约 43 KiB，统一从共享 `SRAMEX` 池动态分配，Stop 和自然 EOF 后释放块。
 
-原 8 KiB Audio task 栈在上板错误路径中测得 `task_stack_free=0`，因此提高为 12 KiB。`audiostat` 在任务运行时通过 CMSIS-RTOS2 读取实时 high-water 余量；需要在最重的 320 kbps/48 kHz/stereo 文件上继续验证。不要未经测量把 decoder state 放进 CCM；当前 CCM 还承担 default、LVGL、key、timer、Player 等线程栈。
+原 8 KiB Audio task 栈在上板错误路径中测得 `task_stack_free=0`，因此提高为 12 KiB。`audiostat` 在任务运行时通过 CMSIS-RTOS2 读取实时 high-water 余量；需要在最重的 320 kbps/48 kHz/stereo 文件上继续验证。任务栈现由主 SRAM 64 KB专区承载；CCM 保留给 MJPEG CPU-only 工作区，不应未经容量评估把 MP3 decoder state 迁入 CCM。
 
 ### 8.2 Flash
 

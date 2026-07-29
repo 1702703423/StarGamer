@@ -109,7 +109,7 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 static void *defaultTaskStackMem;
-static osThreadAttr_t defaultTaskCcmAttributes;
+static osThreadAttr_t defaultTaskStackAttributes;
 
 /* USER CODE END PV */
 
@@ -214,15 +214,13 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_MUTEX */
   sys_mem_init(SRAMCCM);
-  defaultTaskStackMem = sys_thread_stack_alloc(DEFAULT_TASK_STACK_SIZE);
-  if (defaultTaskStackMem == NULL)
-  {
-    Error_Handler();
-  }
-  defaultTaskCcmAttributes = defaultTask_attributes;
-  defaultTaskCcmAttributes.stack_mem = defaultTaskStackMem;
-  defaultTaskCcmAttributes.stack_size = DEFAULT_TASK_STACK_SIZE;
-#define defaultTask_attributes defaultTaskCcmAttributes
+  sys_mem_init(SRAMSTACK);
+  defaultTaskStackMem = &defaultTaskBuffer[0];
+  sys_mem_set(defaultTaskStackMem, 0U, DEFAULT_TASK_STACK_SIZE);
+  defaultTaskStackAttributes = defaultTask_attributes;
+  defaultTaskStackAttributes.stack_mem = defaultTaskStackMem;
+  defaultTaskStackAttributes.stack_size = DEFAULT_TASK_STACK_SIZE;
+#define defaultTask_attributes defaultTaskStackAttributes
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 

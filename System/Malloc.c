@@ -8,25 +8,33 @@
 #define SYS_MEM_BLOCK_CONTINUE   ((MT_TYPE)0xFFFFU)
 #define SYS_MEM_LOCK_UNUSED      ((s32)-1)
 
+__attribute__((section(".bss.ccm_heap_map"), aligned(32), used))
 static MT_TYPE mem2mapbase[MEM2_ALLOC_TABLE_SIZE];
 #define mem3mapbase ((MT_TYPE *)MEM3_MAP_BASE)
+static MT_TYPE thread_stack_map[THREAD_STACK_ALLOC_TABLE_SIZE];
+
+__attribute__((section(".bss.thread_stack_sram"), aligned(8), used))
+static u8 thread_stack_pool[THREAD_STACK_POOL_SIZE];
 
 const u32 memtblsize[SRAMBANK] =
 {
     MEM2_ALLOC_TABLE_SIZE,
     MEM3_ALLOC_TABLE_SIZE,
+    THREAD_STACK_ALLOC_TABLE_SIZE,
 };
 
 const u32 memblksize[SRAMBANK] =
 {
     MEM2_BLOCK_SIZE,
     MEM3_BLOCK_SIZE,
+    THREAD_STACK_BLOCK_SIZE,
 };
 
 const u32 memsize[SRAMBANK] =
 {
     MEM2_MAX_SIZE,
     MEM3_MAX_SIZE,
+    THREAD_STACK_POOL_SIZE,
 };
 
 struct _m_mallco_dev mallco_dev =
@@ -36,12 +44,15 @@ struct _m_mallco_dev mallco_dev =
     {
         (u8 *)CCM_HEAP_BASE,
         (u8 *)SRAMEX_BASE,
+        thread_stack_pool,
     },
     {
         mem2mapbase,
         mem3mapbase,
+        thread_stack_map,
     },
     {
+        0U,
         0U,
         0U,
     },
@@ -497,7 +508,7 @@ void *sys_thread_stack_alloc(u32 stack_size)
     }
 
     alloc_size = SYS_ALIGN8(stack_size);
-    stack = sys_malloc_aligned(SRAMCCM, alloc_size, 8U);
+    stack = sys_malloc_aligned(SRAMSTACK, alloc_size, 8U);
     if (stack != NULL)
     {
         sys_mem_set(stack, 0U, alloc_size);
@@ -508,7 +519,25 @@ void *sys_thread_stack_alloc(u32 stack_size)
 
 void sys_thread_stack_free(void *ptr)
 {
-    sys_free_aligned(SRAMCCM, ptr);
+    sys_free_aligned(SRAMSTACK, ptr);
+}
+
+void sys_thread_stack_get_stats(thread_stack_stats_t *stats)
+{
+    mem_frag_info_t frag;
+
+    if (stats == NULL)
+    {
+        return;
+    }
+
+    sys_mem_frag_info(SRAMSTACK, &frag);
+    stats->region_size = THREAD_STACK_REGION_SIZE;
+    stats->fixed_bytes = THREAD_STACK_FIXED_SIZE;
+    stats->dynamic_pool_size = THREAD_STACK_POOL_SIZE;
+    stats->dynamic_used_bytes = frag.used_blocks * frag.block_size;
+    stats->free_bytes = frag.free_blocks * frag.block_size;
+    stats->largest_free_block = frag.largest_free_blocks * frag.block_size;
 }
 
 void *lv_mem_malloc(u32 size)

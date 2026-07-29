@@ -177,7 +177,7 @@ max consecutive    1 -> 8
 | 视频专用 RGB565 merged output | 已完成 | 4:2:0/4:2:2 快速路径；其他格式回退 RGB888 |
 | `JDCT_IFAST`、关闭 fancy upsampling | 已完成 | 当前 LibJPEG 快速配置 |
 | 双条带 LCD DMA | 已完成 | 当前 20 行条带，`lcd_wait_max=2` |
-| 视频热数据内部 SRAM 池 | 已完成 | 80 KB 专用段，当前使用 79872 B |
+| 视频热数据内部 SRAM 池 | 已完成 | 40 KB专用段保留 DMA 可达对象；LibJPEG 工作区迁入 CCM |
 | parser/PCM/JPEG I/O trace | 已完成 | 已有 last/max/slow，但缺少累计和分位统计 |
 | READ/SEEK 分离历史峰值 | 未完成 | 当前 max 无法知道来自 READ 还是 SEEK |
 | JPEG CPU 分段 DWT 统计 | 未完成 | 无法继续细分 Huffman/IDCT/merged output |
@@ -439,7 +439,7 @@ oversized_drop
 
 - 统计每帧 8 KB source refill 次数和累计时间。
 - 评估 12/16 KB source buffer，而不是直接复制参考工程的 48 KB 整帧缓冲。
-- 当前 80 KB 视频池只剩约 2016 B，扩大 source buffer 前必须重新规划内存。
+- 当前 40 KB视频池在 8 KB source、双 20 行 stripe 和可选 RGB888 行缓冲下预计仅余约 3 KB，扩大 source buffer 前仍须重新规划内存。
 - 不建议直接把 LibJPEG 热工作区整体迁移到 FSMC SRAM；CPU 随机访问外部 SRAM 可能抵消减少 I/O 调用的收益。
 
 #### 如果 RGB888 fallback 被命中

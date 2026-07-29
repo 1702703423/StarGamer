@@ -115,15 +115,15 @@ vmem pool=81920 current=73152 peak=73152 largest=8736 fail=0
 - 若 PCM 小块读取占比高，结合 `VIDEO_PCM_PACKAGE_MS` 调大包长或减少 pending audio 分段次数。
 - 若最大读取耗时偶发很高，优先检查 SD 卡簇连续性和 FatFs sector cache 放置，而不是先改 JPEG。
 
-### 2.5 继续压缩视频池占用
+### 2.5 继续监控视频池与 CCM 占用
 
-视频池 80 KB 中当前占用 73 KB，最大连续空闲块只有 8736 B。虽然 `fail=0`，但继续加功能或遇到更复杂 JPEG 时容易碰到上限。
+LibJPEG arena 已迁入 60 KB CCM 堆，片上视频池缩为 40 KB，只保留 DMA 可达对象。按当前 8 KB source、双 20 行 stripe、上下文和可选 RGB888 行缓冲估算，视频池峰值约 37 KB；必须通过 `sysstats`/`memfrag` 同时观察视频池和 CCM。
 
 可回收点：
 
-- `task_stack_free=6360`，如果 VideoTask 栈当前为 8 KB，可在异常路径和长测通过后试降到 6 KB。
+- VideoTask 栈已进入主 SRAM 64 KB任务栈专区；仍应依据 high-water 数据决定是否从 8 KB下调。
 - `jpeg_arena_peak=28160`，当前 38 KB arena 有约 10 KB 余量；多素材测试后可试 32 KB。
-- 保留至少 6 KB 连续空闲块作为安全垫，不能只看 `fail=0`。
+- 视频池当前空间较紧，不得继续增加 stripe/source 大小；CCM arena 至少保留实测峰值之外的安全余量，不能只看 `fail=0`。
 
 建议验收：
 

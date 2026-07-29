@@ -9,10 +9,17 @@ LR_IROM1 0x08010000 0x000F0000  {
    .ANY (+RO)
    .ANY (+XO)
   }
-  RW_IRAM1 0x20000000 0x0000C000  {
+  RW_IRAM1 0x20000000 0x00006000  {
    .ANY (+RW +ZI)
   }
-  RW_VIDEO_SRAM 0x2000C000 UNINIT 0x00014000  {
+  RW_VIDEO_SRAM 0x20006000 UNINIT 0x0000A000  {
    video_memory.o (.bss.video_sram)
+  }
+  RW_TASK_STACK 0x20010000 UNINIT 0x00010000  {
+   main.o (.bss.defaultTaskBuffer)
+   malloc.o (.bss.thread_stack_sram)
+  }
+  RW_CCM_MAP 0x1000F000 UNINIT 0x00001000  {
+   malloc.o (.bss.ccm_heap_map)
   }
 }
