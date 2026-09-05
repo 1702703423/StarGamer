@@ -14,7 +14,8 @@
 
 #define SYSTEM_SETTINGS_EEPROM_ADDR       0U
 #define SYSTEM_SETTINGS_MAGIC             0x53544753UL
-#define SYSTEM_SETTINGS_VERSION           6U
+#define SYSTEM_SETTINGS_VERSION           7U
+#define SYSTEM_SETTINGS_VERSION_V6        6U
 #define SYSTEM_SETTINGS_VERSION_V5        5U
 #define SYSTEM_SETTINGS_VERSION_V4        4U
 #define SYSTEM_SETTINGS_VERSION_V3        3U
@@ -25,6 +26,7 @@
 #define SYSTEM_SETTINGS_DEFAULT_FONT_LINE 21U
 #define SYSTEM_SETTINGS_DEFAULT_AXF_STACK SYSTEM_AXF_STACK_16KB
 #define SYSTEM_SETTINGS_DEFAULT_CLOCK      SYSTEM_CLOCK_240MHZ
+#define SYSTEM_SETTINGS_DEFAULT_TOAST_DURATION SYSTEM_TOAST_DURATION_DEFAULT
 #define SYSTEM_DEBUG_LOG_BUFFER_SIZE       192U
 
 static const u32 s_system_axf_stack_sizes[SYSTEM_AXF_STACK_LEVEL_COUNT] =
@@ -130,6 +132,34 @@ typedef struct System_SettingsV4
 	u8 AxfStackLevel;
 } System_SettingsV4_t;
 
+typedef struct System_SettingsV6
+{
+	u32 volume;
+	u8 Debug;
+	u8 UsbMscEnabled;
+	u16 ScreenLight;
+	u8 FontInstalled;
+	u8 FontBpp;
+	u8 FontLineHeight;
+	u8 FontBaseLine;
+	u32 FontFlashAddress;
+	u32 FontSize;
+	u16 FontMinUnicode;
+	u16 FontMaxUnicode;
+	u8 DebugShellEnabled;
+	u8 DebugAudioLogEnabled;
+	u8 DebugVideoLogEnabled;
+	u8 DebugLibjpegLogEnabled;
+	u8 DebugFatfsLogEnabled;
+	u8 MemoryDumpEnabled;
+	u8 MemoryDumpCcmEnabled;
+	u8 MemoryDumpMainSramEnabled;
+	u8 MemoryDumpSramexEnabled;
+	u8 ThemeLightEnabled;
+	u8 AxfStackLevel;
+	u8 ClockProfile;
+} System_SettingsV6_t;
+
 typedef struct System_Settings_Record
 {
 	u32 magic;
@@ -139,6 +169,16 @@ typedef struct System_Settings_Record
 	System_Settings_t settings;
 	u32 checksum;
 } System_Settings_Record_t;
+
+typedef struct System_Settings_RecordV6
+{
+	u32 magic;
+	u16 version;
+	u16 size;
+	u32 sequence;
+	System_SettingsV6_t settings;
+	u32 checksum;
+} System_Settings_RecordV6_t;
 
 typedef struct System_Settings_RecordV5
 {
@@ -188,6 +228,7 @@ typedef struct System_Settings_RecordV1
 typedef union System_Settings_Storage
 {
 	System_Settings_Record_t current;
+	System_Settings_RecordV6_t v6;
 	System_Settings_RecordV5_t v5;
 	System_Settings_RecordV4_t v4;
 	System_Settings_RecordV3_t v3;
@@ -742,6 +783,14 @@ u8 lvgl_ui_pause_point(void)
 	return paused;
 }
 
+u8 lvgl_ui_is_active(void)
+{
+	/* The LVGL task owns the display while no other thread holds it and no
+	 * handover has been requested. */
+	return (lvglThreadId != NULL && s_lvgl_display_owner == NULL &&
+	        s_lvgl_pause_requested == 0U) ? 1U : 0U;
+}
+
 void System_Settings_SetDefaults(System_Settings_t* settings)
 {
 	if (settings == NULL)
@@ -765,6 +814,7 @@ void System_Settings_SetDefaults(System_Settings_t* settings)
 	settings->ThemeLightEnabled = 0U;
 	settings->AxfStackLevel = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;
 	settings->ClockProfile = SYSTEM_SETTINGS_DEFAULT_CLOCK;
+	settings->ToastDuration = SYSTEM_SETTINGS_DEFAULT_TOAST_DURATION;
 	settings->ScreenLight = SYSTEM_SETTINGS_DEFAULT_LIGHT;
 	settings->FontFlashAddress = SYSTEM_FONT_FLASH_ADDR;
 	settings->FontLineHeight = SYSTEM_SETTINGS_DEFAULT_FONT_LINE;
@@ -876,6 +926,7 @@ int System_Settings_Load(void)
 	System_Settings_Record_t flash_slot0;
 	System_Settings_Record_t flash_slot1;
 	System_Settings_Record_t* record;
+	System_Settings_RecordV6_t* v6;
 	System_Settings_RecordV5_t* v5;
 	System_Settings_RecordV4_t* v4;
 	System_Settings_RecordV3_t* v3;
@@ -905,154 +956,194 @@ int System_Settings_Load(void)
 	}
 	else
 	{
-		v5 = &storage.v5;
-		checksum = System_Settings_Checksum((const u8*)v5,
-			(u16)(sizeof(*v5) - sizeof(v5->checksum)));
-		if (v5->magic == SYSTEM_SETTINGS_MAGIC &&
-		    v5->version == SYSTEM_SETTINGS_VERSION_V5 &&
-		    v5->size == (u16)sizeof(System_Settings_t) &&
-		    v5->checksum == checksum)
+		v6 = &storage.v6;
+		checksum = System_Settings_Checksum((const u8*)v6,
+			(u16)(sizeof(*v6) - sizeof(v6->checksum)));
+		if (v6->magic == SYSTEM_SETTINGS_MAGIC &&
+		    v6->version == SYSTEM_SETTINGS_VERSION_V6 &&
+		    v6->size == (u16)sizeof(System_SettingsV6_t) &&
+		    v6->checksum == checksum)
 		{
-			System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V5,
-				0U, &v5->settings);
+			System_Settings_SetDefaults(&settings);
+			settings.volume = v6->settings.volume;
+			settings.Debug = v6->settings.Debug;
+			settings.UsbMscEnabled = v6->settings.UsbMscEnabled;
+			settings.ScreenLight = v6->settings.ScreenLight;
+			settings.FontInstalled = v6->settings.FontInstalled;
+			settings.FontBpp = v6->settings.FontBpp;
+			settings.FontLineHeight = v6->settings.FontLineHeight;
+			settings.FontBaseLine = v6->settings.FontBaseLine;
+			settings.FontFlashAddress = v6->settings.FontFlashAddress;
+			settings.FontSize = v6->settings.FontSize;
+			settings.FontMinUnicode = v6->settings.FontMinUnicode;
+			settings.FontMaxUnicode = v6->settings.FontMaxUnicode;
+			settings.DebugShellEnabled = v6->settings.DebugShellEnabled;
+			settings.DebugAudioLogEnabled = v6->settings.DebugAudioLogEnabled;
+			settings.DebugVideoLogEnabled = v6->settings.DebugVideoLogEnabled;
+			settings.DebugLibjpegLogEnabled = v6->settings.DebugLibjpegLogEnabled;
+			settings.DebugFatfsLogEnabled = v6->settings.DebugFatfsLogEnabled;
+			settings.MemoryDumpEnabled = v6->settings.MemoryDumpEnabled;
+			settings.MemoryDumpCcmEnabled = v6->settings.MemoryDumpCcmEnabled;
+			settings.MemoryDumpMainSramEnabled = v6->settings.MemoryDumpMainSramEnabled;
+			settings.MemoryDumpSramexEnabled = v6->settings.MemoryDumpSramexEnabled;
+			settings.ThemeLightEnabled = v6->settings.ThemeLightEnabled;
+			settings.AxfStackLevel = v6->settings.AxfStackLevel;
+			settings.ClockProfile = v6->settings.ClockProfile;
+			System_Settings_Normalize(&settings);
+			System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V6,
+				v6->sequence, &settings);
 		}
 		else
 		{
-			v4 = &storage.v4;
-			checksum = System_Settings_Checksum((const u8*)v4,
-				(u16)(sizeof(*v4) - sizeof(v4->checksum)));
-			if (v4->magic == SYSTEM_SETTINGS_MAGIC &&
-			    v4->version == SYSTEM_SETTINGS_VERSION_V4 &&
-			    v4->size == (u16)sizeof(System_SettingsV4_t) &&
-			    v4->checksum == checksum)
+			v5 = &storage.v5;
+			checksum = System_Settings_Checksum((const u8*)v5,
+				(u16)(sizeof(*v5) - sizeof(v5->checksum)));
+			if (v5->magic == SYSTEM_SETTINGS_MAGIC &&
+			    v5->version == SYSTEM_SETTINGS_VERSION_V5 &&
+			    v5->size == (u16)sizeof(System_Settings_t) &&
+			    v5->checksum == checksum)
 			{
-				System_Settings_SetDefaults(&settings);
-				settings.volume = v4->settings.volume;
-				settings.Debug = v4->settings.Debug;
-				settings.UsbMscEnabled = v4->settings.UsbMscEnabled;
-				settings.ScreenLight = v4->settings.ScreenLight;
-				settings.FontInstalled = v4->settings.FontInstalled;
-				settings.FontBpp = v4->settings.FontBpp;
-				settings.FontLineHeight = v4->settings.FontLineHeight;
-				settings.FontBaseLine = v4->settings.FontBaseLine;
-				settings.FontFlashAddress = v4->settings.FontFlashAddress;
-				settings.FontSize = v4->settings.FontSize;
-				settings.FontMinUnicode = v4->settings.FontMinUnicode;
-				settings.FontMaxUnicode = v4->settings.FontMaxUnicode;
-				settings.DebugShellEnabled = v4->settings.DebugShellEnabled;
-				settings.DebugAudioLogEnabled = v4->settings.DebugAudioLogEnabled;
-				settings.DebugVideoLogEnabled = v4->settings.DebugVideoLogEnabled;
-				settings.DebugLibjpegLogEnabled = v4->settings.DebugLibjpegLogEnabled;
-				settings.DebugFatfsLogEnabled = v4->settings.DebugFatfsLogEnabled;
-				settings.MemoryDumpEnabled = v4->settings.MemoryDumpEnabled;
-				settings.MemoryDumpCcmEnabled = v4->settings.MemoryDumpCcmEnabled;
-				settings.MemoryDumpMainSramEnabled = v4->settings.MemoryDumpMainSramEnabled;
-				settings.MemoryDumpSramexEnabled = v4->settings.MemoryDumpSramexEnabled;
-				settings.ThemeLightEnabled = v4->settings.ThemeLightEnabled;
-				settings.AxfStackLevel = v4->settings.AxfStackLevel;
-				System_Settings_Normalize(&settings);
-				System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V4,
-					0U, &settings);
+				System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V5,
+					0U, &v5->settings);
 			}
 			else
 			{
-				v3 = &storage.v3;
-				checksum = System_Settings_Checksum((const u8*)v3,
-					(u16)(sizeof(*v3) - sizeof(v3->checksum)));
-				if (v3->magic == SYSTEM_SETTINGS_MAGIC &&
-				    v3->version == SYSTEM_SETTINGS_VERSION_V3 &&
-				    v3->size == (u16)sizeof(System_SettingsV3_t) &&
-				    v3->checksum == checksum)
+				v4 = &storage.v4;
+				checksum = System_Settings_Checksum((const u8*)v4,
+					(u16)(sizeof(*v4) - sizeof(v4->checksum)));
+				if (v4->magic == SYSTEM_SETTINGS_MAGIC &&
+				    v4->version == SYSTEM_SETTINGS_VERSION_V4 &&
+				    v4->size == (u16)sizeof(System_SettingsV4_t) &&
+				    v4->checksum == checksum)
 				{
 					System_Settings_SetDefaults(&settings);
-					settings.volume = v3->settings.volume;
-					settings.Debug = v3->settings.Debug;
-					settings.UsbMscEnabled = v3->settings.UsbMscEnabled;
-					settings.ScreenLight = v3->settings.ScreenLight;
-					settings.FontInstalled = v3->settings.FontInstalled;
-					settings.FontBpp = v3->settings.FontBpp;
-					settings.FontLineHeight = v3->settings.FontLineHeight;
-					settings.FontBaseLine = v3->settings.FontBaseLine;
-					settings.FontFlashAddress = v3->settings.FontFlashAddress;
-					settings.FontSize = v3->settings.FontSize;
-					settings.FontMinUnicode = v3->settings.FontMinUnicode;
-					settings.FontMaxUnicode = v3->settings.FontMaxUnicode;
-					settings.DebugShellEnabled = v3->settings.DebugShellEnabled;
-					settings.DebugAudioLogEnabled = v3->settings.DebugAudioLogEnabled;
-					settings.DebugVideoLogEnabled = v3->settings.DebugVideoLogEnabled;
-					settings.DebugLibjpegLogEnabled = v3->settings.DebugLibjpegLogEnabled;
-					settings.DebugFatfsLogEnabled = v3->settings.DebugFatfsLogEnabled;
-					settings.MemoryDumpEnabled = v3->settings.MemoryDumpEnabled;
-					settings.MemoryDumpCcmEnabled = v3->settings.MemoryDumpCcmEnabled;
-					settings.MemoryDumpMainSramEnabled = v3->settings.MemoryDumpMainSramEnabled;
-					settings.MemoryDumpSramexEnabled = v3->settings.MemoryDumpSramexEnabled;
-					settings.ThemeLightEnabled = v3->settings.ThemeLightEnabled;
+					settings.volume = v4->settings.volume;
+					settings.Debug = v4->settings.Debug;
+					settings.UsbMscEnabled = v4->settings.UsbMscEnabled;
+					settings.ScreenLight = v4->settings.ScreenLight;
+					settings.FontInstalled = v4->settings.FontInstalled;
+					settings.FontBpp = v4->settings.FontBpp;
+					settings.FontLineHeight = v4->settings.FontLineHeight;
+					settings.FontBaseLine = v4->settings.FontBaseLine;
+					settings.FontFlashAddress = v4->settings.FontFlashAddress;
+					settings.FontSize = v4->settings.FontSize;
+					settings.FontMinUnicode = v4->settings.FontMinUnicode;
+					settings.FontMaxUnicode = v4->settings.FontMaxUnicode;
+					settings.DebugShellEnabled = v4->settings.DebugShellEnabled;
+					settings.DebugAudioLogEnabled = v4->settings.DebugAudioLogEnabled;
+					settings.DebugVideoLogEnabled = v4->settings.DebugVideoLogEnabled;
+					settings.DebugLibjpegLogEnabled = v4->settings.DebugLibjpegLogEnabled;
+					settings.DebugFatfsLogEnabled = v4->settings.DebugFatfsLogEnabled;
+					settings.MemoryDumpEnabled = v4->settings.MemoryDumpEnabled;
+					settings.MemoryDumpCcmEnabled = v4->settings.MemoryDumpCcmEnabled;
+					settings.MemoryDumpMainSramEnabled = v4->settings.MemoryDumpMainSramEnabled;
+					settings.MemoryDumpSramexEnabled = v4->settings.MemoryDumpSramexEnabled;
+					settings.ThemeLightEnabled = v4->settings.ThemeLightEnabled;
+					settings.AxfStackLevel = v4->settings.AxfStackLevel;
 					System_Settings_Normalize(&settings);
-					System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V3,
+					System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V4,
 						0U, &settings);
 				}
 				else
 				{
-					v2 = &storage.v2;
-					checksum = System_Settings_Checksum((const u8*)v2,
-						(u16)(sizeof(*v2) - sizeof(v2->checksum)));
-					if (v2->magic == SYSTEM_SETTINGS_MAGIC &&
-					    v2->version == SYSTEM_SETTINGS_VERSION_V2 &&
-					    v2->size == (u16)sizeof(System_SettingsV2_t) &&
-					    v2->checksum == checksum)
+					v3 = &storage.v3;
+					checksum = System_Settings_Checksum((const u8*)v3,
+						(u16)(sizeof(*v3) - sizeof(v3->checksum)));
+					if (v3->magic == SYSTEM_SETTINGS_MAGIC &&
+					    v3->version == SYSTEM_SETTINGS_VERSION_V3 &&
+					    v3->size == (u16)sizeof(System_SettingsV3_t) &&
+					    v3->checksum == checksum)
 					{
 						System_Settings_SetDefaults(&settings);
-						settings.volume = v2->settings.volume;
-						settings.Debug = v2->settings.Debug;
-						settings.UsbMscEnabled = v2->settings.UsbMscEnabled;
-						settings.ScreenLight = v2->settings.ScreenLight;
-						settings.FontInstalled = v2->settings.FontInstalled;
-						settings.FontBpp = v2->settings.FontBpp;
-						settings.FontLineHeight = v2->settings.FontLineHeight;
-						settings.FontBaseLine = v2->settings.FontBaseLine;
-						settings.FontFlashAddress = v2->settings.FontFlashAddress;
-						settings.FontSize = v2->settings.FontSize;
-						settings.FontMinUnicode = v2->settings.FontMinUnicode;
-						settings.FontMaxUnicode = v2->settings.FontMaxUnicode;
-						settings.DebugShellEnabled = v2->settings.DebugShellEnabled;
-						settings.DebugAudioLogEnabled = v2->settings.DebugAudioLogEnabled;
-						settings.DebugVideoLogEnabled = v2->settings.DebugVideoLogEnabled;
-						settings.DebugLibjpegLogEnabled = v2->settings.DebugLibjpegLogEnabled;
-						settings.DebugFatfsLogEnabled = v2->settings.DebugFatfsLogEnabled;
-						settings.MemoryDumpEnabled = v2->settings.MemoryDumpEnabled;
-						settings.MemoryDumpCcmEnabled = v2->settings.MemoryDumpCcmEnabled;
-						settings.MemoryDumpMainSramEnabled = v2->settings.MemoryDumpMainSramEnabled;
-						settings.MemoryDumpSramexEnabled = v2->settings.MemoryDumpSramexEnabled;
+						settings.volume = v3->settings.volume;
+						settings.Debug = v3->settings.Debug;
+						settings.UsbMscEnabled = v3->settings.UsbMscEnabled;
+						settings.ScreenLight = v3->settings.ScreenLight;
+						settings.FontInstalled = v3->settings.FontInstalled;
+						settings.FontBpp = v3->settings.FontBpp;
+						settings.FontLineHeight = v3->settings.FontLineHeight;
+						settings.FontBaseLine = v3->settings.FontBaseLine;
+						settings.FontFlashAddress = v3->settings.FontFlashAddress;
+						settings.FontSize = v3->settings.FontSize;
+						settings.FontMinUnicode = v3->settings.FontMinUnicode;
+						settings.FontMaxUnicode = v3->settings.FontMaxUnicode;
+						settings.DebugShellEnabled = v3->settings.DebugShellEnabled;
+						settings.DebugAudioLogEnabled = v3->settings.DebugAudioLogEnabled;
+						settings.DebugVideoLogEnabled = v3->settings.DebugVideoLogEnabled;
+						settings.DebugLibjpegLogEnabled = v3->settings.DebugLibjpegLogEnabled;
+						settings.DebugFatfsLogEnabled = v3->settings.DebugFatfsLogEnabled;
+						settings.MemoryDumpEnabled = v3->settings.MemoryDumpEnabled;
+						settings.MemoryDumpCcmEnabled = v3->settings.MemoryDumpCcmEnabled;
+						settings.MemoryDumpMainSramEnabled = v3->settings.MemoryDumpMainSramEnabled;
+						settings.MemoryDumpSramexEnabled = v3->settings.MemoryDumpSramexEnabled;
+						settings.ThemeLightEnabled = v3->settings.ThemeLightEnabled;
 						System_Settings_Normalize(&settings);
-						System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V2,
+						System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V3,
 							0U, &settings);
 					}
 					else
 					{
-						legacy = &storage.legacy;
-						checksum = System_Settings_Checksum((const u8*)legacy,
-							(u16)(sizeof(*legacy) - sizeof(legacy->checksum)));
-						if (legacy->magic == SYSTEM_SETTINGS_MAGIC &&
-						    legacy->version == SYSTEM_SETTINGS_VERSION_V1 &&
-						    legacy->size == (u16)sizeof(System_SettingsV1_t) &&
-						    legacy->checksum == checksum)
+						v2 = &storage.v2;
+						checksum = System_Settings_Checksum((const u8*)v2,
+							(u16)(sizeof(*v2) - sizeof(v2->checksum)));
+						if (v2->magic == SYSTEM_SETTINGS_MAGIC &&
+						    v2->version == SYSTEM_SETTINGS_VERSION_V2 &&
+						    v2->size == (u16)sizeof(System_SettingsV2_t) &&
+						    v2->checksum == checksum)
 						{
 							System_Settings_SetDefaults(&settings);
-							settings.volume = legacy->settings.volume;
-							settings.Debug = legacy->settings.Debug;
-							settings.UsbMscEnabled = legacy->settings.UsbMscEnabled;
-							settings.ScreenLight = legacy->settings.ScreenLight;
-							settings.FontInstalled = legacy->settings.FontInstalled;
-							settings.FontBpp = legacy->settings.FontBpp;
-							settings.FontLineHeight = legacy->settings.FontLineHeight;
-							settings.FontBaseLine = legacy->settings.FontBaseLine;
-							settings.FontFlashAddress = legacy->settings.FontFlashAddress;
-							settings.FontSize = legacy->settings.FontSize;
-							settings.FontMinUnicode = legacy->settings.FontMinUnicode;
-							settings.FontMaxUnicode = legacy->settings.FontMaxUnicode;
+							settings.volume = v2->settings.volume;
+							settings.Debug = v2->settings.Debug;
+							settings.UsbMscEnabled = v2->settings.UsbMscEnabled;
+							settings.ScreenLight = v2->settings.ScreenLight;
+							settings.FontInstalled = v2->settings.FontInstalled;
+							settings.FontBpp = v2->settings.FontBpp;
+							settings.FontLineHeight = v2->settings.FontLineHeight;
+							settings.FontBaseLine = v2->settings.FontBaseLine;
+							settings.FontFlashAddress = v2->settings.FontFlashAddress;
+							settings.FontSize = v2->settings.FontSize;
+							settings.FontMinUnicode = v2->settings.FontMinUnicode;
+							settings.FontMaxUnicode = v2->settings.FontMaxUnicode;
+							settings.DebugShellEnabled = v2->settings.DebugShellEnabled;
+							settings.DebugAudioLogEnabled = v2->settings.DebugAudioLogEnabled;
+							settings.DebugVideoLogEnabled = v2->settings.DebugVideoLogEnabled;
+							settings.DebugLibjpegLogEnabled = v2->settings.DebugLibjpegLogEnabled;
+							settings.DebugFatfsLogEnabled = v2->settings.DebugFatfsLogEnabled;
+							settings.MemoryDumpEnabled = v2->settings.MemoryDumpEnabled;
+							settings.MemoryDumpCcmEnabled = v2->settings.MemoryDumpCcmEnabled;
+							settings.MemoryDumpMainSramEnabled = v2->settings.MemoryDumpMainSramEnabled;
+							settings.MemoryDumpSramexEnabled = v2->settings.MemoryDumpSramexEnabled;
 							System_Settings_Normalize(&settings);
-							System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V1,
+							System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V2,
 								0U, &settings);
+						}
+						else
+						{
+							legacy = &storage.legacy;
+							checksum = System_Settings_Checksum((const u8*)legacy,
+								(u16)(sizeof(*legacy) - sizeof(legacy->checksum)));
+							if (legacy->magic == SYSTEM_SETTINGS_MAGIC &&
+							    legacy->version == SYSTEM_SETTINGS_VERSION_V1 &&
+							    legacy->size == (u16)sizeof(System_SettingsV1_t) &&
+							    legacy->checksum == checksum)
+							{
+								System_Settings_SetDefaults(&settings);
+								settings.volume = legacy->settings.volume;
+								settings.Debug = legacy->settings.Debug;
+								settings.UsbMscEnabled = legacy->settings.UsbMscEnabled;
+								settings.ScreenLight = legacy->settings.ScreenLight;
+								settings.FontInstalled = legacy->settings.FontInstalled;
+								settings.FontBpp = legacy->settings.FontBpp;
+								settings.FontLineHeight = legacy->settings.FontLineHeight;
+								settings.FontBaseLine = legacy->settings.FontBaseLine;
+								settings.FontFlashAddress = legacy->settings.FontFlashAddress;
+								settings.FontSize = legacy->settings.FontSize;
+								settings.FontMinUnicode = legacy->settings.FontMinUnicode;
+								settings.FontMaxUnicode = legacy->settings.FontMaxUnicode;
+								System_Settings_Normalize(&settings);
+								System_Settings_ConsiderCandidate(&best, 1U, SYSTEM_SETTINGS_VERSION_V1,
+									0U, &settings);
+							}
 						}
 					}
 				}
@@ -1304,6 +1395,36 @@ int System_Settings_SetClockProfile(u8 profile)
 	return code;
 }
 
+u8 System_Settings_ToastDurationSec(void)
+{
+	return System_Settings.ToastDuration;
+}
+
+int System_Settings_SetToastDuration(u8 seconds)
+{
+	u8 old_duration;
+	int code;
+
+	if (seconds < SYSTEM_TOAST_DURATION_MIN)
+	{
+		seconds = SYSTEM_TOAST_DURATION_MIN;
+	}
+	if (seconds > SYSTEM_TOAST_DURATION_MAX)
+	{
+		seconds = SYSTEM_TOAST_DURATION_MAX;
+	}
+
+	old_duration = System_Settings.ToastDuration;
+	System_Settings.ToastDuration = seconds;
+	code = System_Settings_Save();
+	if (code != SYSTEM_STATUS_OK)
+	{
+		System_Settings.ToastDuration = old_duration;
+	}
+
+	return code;
+}
+
 u8 System_DebugEnabled(void)
 {
 	return (System_Settings.Debug != 0U) ? 1U : 0U;
@@ -1452,6 +1573,11 @@ static void System_Settings_Normalize(System_Settings_t* settings)
 	if (settings->AxfStackLevel >= SYSTEM_AXF_STACK_LEVEL_COUNT)
 	{
 		settings->AxfStackLevel = SYSTEM_SETTINGS_DEFAULT_AXF_STACK;
+	}
+	if (settings->ToastDuration < SYSTEM_TOAST_DURATION_MIN ||
+	    settings->ToastDuration > SYSTEM_TOAST_DURATION_MAX)
+	{
+		settings->ToastDuration = SYSTEM_SETTINGS_DEFAULT_TOAST_DURATION;
 	}
 	valid_font = (settings->FontInstalled != 0U &&
 	              settings->FontFlashAddress == SYSTEM_FONT_FLASH_ADDR &&

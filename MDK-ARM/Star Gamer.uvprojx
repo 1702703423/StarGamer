@@ -4621,6 +4621,16 @@
               <FilePath>..\GUI\GUI_Manage.h</FilePath>
             </File>
             <File>
+              <FileName>GUI_Message.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\GUI_Message.c</FilePath>
+            </File>
+            <File>
+              <FileName>GUI_Message.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\GUI\GUI_Message.h</FilePath>
+            </File>
+            <File>
               <FileName>GUI_FileManage.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\GUI\GUI_FileManage.c</FilePath>

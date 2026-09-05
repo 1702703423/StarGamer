@@ -27,6 +27,7 @@
 #include "../GUI/GUI_Main.h"
 #include "../GUI/GUI_Start.h"
 #include "../GUI/GUI_Theme.h"
+#include "../GUI/GUI_Message.h"
 
 /* External globals */
 extern Shell shell;
@@ -908,6 +909,10 @@ static void lvgl_start_task()
 
 static int GUI_Init(void)
 {
+	/* The message box flush timer must be created in the LVGL thread;
+	 * failure is non-fatal because GUI_Message_Enqueue retries lazily. */
+	(void)GUI_Message_Init();
+
 	return GUI_Main_Init();
 }
 

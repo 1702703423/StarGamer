@@ -12,6 +12,9 @@
 
 #define SYSTEM_AXF_STACK_LEVEL_COUNT 5U
 #define SYSTEM_CLOCK_PROFILE_COUNT   3U
+#define SYSTEM_TOAST_DURATION_MIN    1U
+#define SYSTEM_TOAST_DURATION_MAX    10U
+#define SYSTEM_TOAST_DURATION_DEFAULT 3U
 
 typedef enum System_ClockProfile
 {
@@ -97,6 +100,7 @@ typedef struct System_Settings
 	u8 ThemeLightEnabled;
 	u8 AxfStackLevel;
 	u8 ClockProfile;
+	u8 ToastDuration;
 }System_Settings_t;
 
 typedef enum System_DebugLog
@@ -149,6 +153,7 @@ int lvgl_start_ui(void);
 int lvgl_stop_ui(void);
 int lvgl_recover_ui(osThreadId_t owner);
 u8 lvgl_ui_pause_point(void);
+u8 lvgl_ui_is_active(void);
 void System_Settings_SetDefaults(System_Settings_t* settings);
 int System_Settings_Init(void);
 int System_Settings_Load(void);
@@ -166,6 +171,8 @@ u32 System_Settings_ClockFrequencyMHz(void);
 u32 System_Settings_ClockPllN(void);
 u32 System_Settings_ClockPllQ(void);
 int System_Settings_SetClockProfile(u8 profile);
+u8 System_Settings_ToastDurationSec(void);
+int System_Settings_SetToastDuration(u8 seconds);
 u8 System_DebugEnabled(void);
 u8 System_DebugShellEnabled(void);
 u8 System_DebugLogEnabled(System_DebugLog_t source);

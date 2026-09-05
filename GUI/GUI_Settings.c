@@ -1,6 +1,7 @@
 #include "GUI_Settings.h"
 #include "GUI_Font.h"
 #include "GUI_Theme.h"
+#include "GUI_Message.h"
 #include "IAP.h"
 #include "System_Status.h"
 #include "usb_device.h"
@@ -38,6 +39,11 @@
 #define GUI_SETTINGS_DEBUG_LIST_W    288
 #define GUI_SETTINGS_DEBUG_LIST_H    142
 #define GUI_SETTINGS_DEBUG_SWITCH_X  226
+#define GUI_SETTINGS_MSG_TEST_COUNT  3U
+
+/* UTF-8 bytes for the CJK word meaning "test"; written as escapes so the
+ * source stays encoding-independent (the XBF font renders it on device). */
+#define GUI_SETTINGS_MSG_TEST_TEXT  "\xE6\xB5\x8B\xE8\xAF\x95"
 
 typedef enum
 {
@@ -78,6 +84,13 @@ typedef struct
 
 typedef struct
 {
+	GUI_Message_Kind_t kind;
+	const char *symbol;
+	const char *text;
+} GUI_SettingsMsgTestItem_t;
+
+typedef struct
+{
 	Page_Struct_t *page;
 	lv_obj_t *screen;
 	lv_obj_t *back_btn;
@@ -101,6 +114,9 @@ typedef struct
 	lv_obj_t *clock_value;
 	lv_obj_t *axf_stack_btn;
 	lv_obj_t *axf_stack_value;
+	lv_obj_t *toast_duration_btn;
+	lv_obj_t *toast_duration_value;
+	lv_obj_t *msg_test_btns[GUI_SETTINGS_MSG_TEST_COUNT];
 	lv_obj_t *about_btn;
 	lv_obj_t *debug_btn;
 	lv_obj_t *first_item_btn;
@@ -119,6 +135,8 @@ static void GUI_Settings_CreateThemeSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateUsbMscSwitch(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateClockSelector(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateAxfStackSelector(GUI_SettingsContext_t *context);
+static void GUI_Settings_CreateToastDurationSelector(GUI_SettingsContext_t *context);
+static void GUI_Settings_CreateMessageTestItems(GUI_SettingsContext_t *context);
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item);
 static void GUI_Settings_CreateAboutPanel(GUI_SettingsContext_t *context);
 static void GUI_Settings_CreateDebugPanel(GUI_SettingsContext_t *context);
@@ -129,6 +147,8 @@ static void GUI_Settings_ThemeEvent(lv_event_t *event);
 static void GUI_Settings_UsbMscEvent(lv_event_t *event);
 static void GUI_Settings_ClockEvent(lv_event_t *event);
 static void GUI_Settings_AxfStackEvent(lv_event_t *event);
+static void GUI_Settings_ToastDurationEvent(lv_event_t *event);
+static void GUI_Settings_MessageTestEvent(lv_event_t *event);
 static void GUI_Settings_AboutCloseEvent(lv_event_t *event);
 static void GUI_Settings_DebugCloseEvent(lv_event_t *event);
 static void GUI_Settings_DebugItemEvent(lv_event_t *event);
@@ -155,6 +175,9 @@ static void GUI_Settings_UpdateClock(GUI_SettingsContext_t *context);
 static void GUI_Settings_SetClockProfile(GUI_SettingsContext_t *context, u8 profile);
 static void GUI_Settings_UpdateAxfStack(GUI_SettingsContext_t *context);
 static void GUI_Settings_SetAxfStackLevel(GUI_SettingsContext_t *context, u8 level);
+static void GUI_Settings_UpdateToastDuration(GUI_SettingsContext_t *context);
+static void GUI_Settings_SetToastDuration(GUI_SettingsContext_t *context, u8 seconds);
+static u8 GUI_Settings_ToastDurationIndex(u8 seconds);
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled);
 static void GUI_Settings_SetStatus(GUI_SettingsContext_t *context, const char *text);
 static void GUI_Settings_RebuildFocus(GUI_SettingsContext_t *context, lv_obj_t *focus_obj);
@@ -181,6 +204,21 @@ static const GUI_SettingsItem_t s_setting_items[] =
 	{GUI_SETTINGS_ACTION_DEBUG, GUI_ICON_BUG, "Debug"},
 	{GUI_SETTINGS_ACTION_ABOUT, GUI_ICON_INFO, "About"}
 };
+
+static const GUI_SettingsMsgTestItem_t s_msg_test_items[GUI_SETTINGS_MSG_TEST_COUNT] =
+{
+	{GUI_MESSAGE_KIND_TOAST, GUI_ICON_INFO, "Toast Test"},
+	{GUI_MESSAGE_KIND_CONFIRM, GUI_ICON_CHECK_CIRCLE, "Confirm Test"},
+	{GUI_MESSAGE_KIND_YESNO, GUI_ICON_MORE_HORIZ, "Yes / No Test"}
+};
+
+static const u8 s_toast_duration_presets[] = {1U, 2U, 3U, 5U, 10U};
+
+#define GUI_SETTINGS_TOAST_DURATION_COUNT \
+	((u8)(sizeof(s_toast_duration_presets) / sizeof(s_toast_duration_presets[0])))
+#define GUI_SETTINGS_TOAST_DURATION_DEFAULT_INDEX 2U
+
+static char s_toast_value_text[8];
 
 static const GUI_SettingsDebugItem_t s_debug_items[GUI_SETTINGS_DEBUG_ITEM_COUNT] =
 {
@@ -243,6 +281,7 @@ static int GUI_Settings_PageBuild(Page_Struct_t *page)
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
 	GUI_Settings_UpdateClock(&s_settings);
 	GUI_Settings_UpdateAxfStack(&s_settings);
+	GUI_Settings_UpdateToastDuration(&s_settings);
 	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_UpdateFontState(&s_settings);
 
@@ -259,6 +298,7 @@ static int GUI_Settings_PageLoaded(Page_Struct_t *page, void *user_data)
 	GUI_Settings_UpdateUsbMscSwitch(&s_settings);
 	GUI_Settings_UpdateClock(&s_settings);
 	GUI_Settings_UpdateAxfStack(&s_settings);
+	GUI_Settings_UpdateToastDuration(&s_settings);
 	GUI_Settings_UpdateDebugSwitches(&s_settings);
 	GUI_Settings_RebuildFocus(&s_settings, s_settings.first_item_btn);
 	GUI_Settings_WaitInputRelease();
@@ -315,6 +355,8 @@ static void GUI_Settings_CreateList(GUI_SettingsContext_t *context)
 	GUI_Settings_CreateUsbMscSwitch(context);
 	GUI_Settings_CreateClockSelector(context);
 	GUI_Settings_CreateAxfStackSelector(context);
+	GUI_Settings_CreateToastDurationSelector(context);
+	GUI_Settings_CreateMessageTestItems(context);
 
 	for (i = 0U; i < (u8)(sizeof(s_setting_items) / sizeof(s_setting_items[0])); i++)
 	{
@@ -519,6 +561,83 @@ static void GUI_Settings_CreateAxfStackSelector(GUI_SettingsContext_t *context)
 		             -GUI_SETTINGS_ROW_VALUE_PAD, 0);
 	}
 	GUI_Settings_UpdateAxfStack(context);
+}
+
+static void GUI_Settings_CreateToastDurationSelector(GUI_SettingsContext_t *context)
+{
+	lv_obj_t *icon;
+	lv_obj_t *label;
+
+	if (context == NULL || context->list == NULL)
+	{
+		return;
+	}
+
+	context->toast_duration_btn = lv_btn_create(context->list);
+	lv_obj_clear_flag(context->toast_duration_btn, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(context->toast_duration_btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+	lv_obj_set_size(context->toast_duration_btn, GUI_SETTINGS_LIST_W - 8,
+	                GUI_SETTINGS_ROW_H);
+	GUI_M3_StyleListItem(context->toast_duration_btn);
+	lv_obj_set_style_pad_all(context->toast_duration_btn, 0, 0);
+	lv_obj_add_event_cb(context->toast_duration_btn, GUI_Settings_ToastDurationEvent,
+	                    LV_EVENT_CLICKED, NULL);
+	lv_obj_add_event_cb(context->toast_duration_btn, GUI_Settings_ToastDurationEvent,
+	                    LV_EVENT_KEY, NULL);
+
+	icon = GUI_M3_CreateIconLabel(context->toast_duration_btn, GUI_ICON_TUNE,
+	                              GUI_THEME_COLOR_ON_SURFACE_VARIANT, 0U);
+	if (icon != NULL)
+	{
+		lv_obj_align(icon, LV_ALIGN_LEFT_MID, GUI_SETTINGS_ROW_ICON_X, 0);
+	}
+
+	label = GUI_M3_CreateLabel(context->toast_duration_btn, "Toast Duration",
+	                           GUI_M3_TYPE_BODY, GUI_THEME_COLOR_ON_SURFACE);
+	if (label != NULL)
+	{
+		lv_obj_align(label, LV_ALIGN_LEFT_MID, GUI_SETTINGS_ROW_LABEL_X, 0);
+	}
+
+	context->toast_duration_value = GUI_M3_CreateLabel(context->toast_duration_btn, "",
+	                                                   GUI_M3_TYPE_LABEL,
+	                                                   GUI_THEME_COLOR_ON_SURFACE_VARIANT);
+	if (context->toast_duration_value != NULL)
+	{
+		lv_label_set_long_mode(context->toast_duration_value, LV_LABEL_LONG_CLIP);
+		lv_obj_set_width(context->toast_duration_value, 58);
+		lv_obj_set_style_text_align(context->toast_duration_value, LV_TEXT_ALIGN_RIGHT, 0);
+		lv_obj_align(context->toast_duration_value, LV_ALIGN_RIGHT_MID,
+		             -GUI_SETTINGS_ROW_VALUE_PAD, 0);
+	}
+	GUI_Settings_UpdateToastDuration(context);
+}
+
+static void GUI_Settings_CreateMessageTestItems(GUI_SettingsContext_t *context)
+{
+	u8 i;
+
+	if (context == NULL || context->list == NULL)
+	{
+		return;
+	}
+
+	for (i = 0U; i < GUI_SETTINGS_MSG_TEST_COUNT; i++)
+	{
+		lv_obj_t *btn = lv_list_add_btn(context->list, s_msg_test_items[i].symbol,
+		                                s_msg_test_items[i].text);
+		lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+		lv_obj_set_height(btn, GUI_SETTINGS_ROW_H);
+		lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+		                      LV_FLEX_ALIGN_CENTER);
+		GUI_M3_StyleListItem(btn);
+		GUI_Settings_ApplyRowIconFont(btn);
+		lv_obj_add_event_cb(btn, GUI_Settings_MessageTestEvent, LV_EVENT_CLICKED,
+		                    (void *)&s_msg_test_items[i]);
+		lv_obj_add_event_cb(btn, GUI_Settings_MessageTestEvent, LV_EVENT_KEY,
+		                    (void *)&s_msg_test_items[i]);
+		context->msg_test_btns[i] = btn;
+	}
 }
 
 static void GUI_Settings_AddListItem(GUI_SettingsContext_t *context, const GUI_SettingsItem_t *item)
@@ -953,6 +1072,90 @@ static void GUI_Settings_AxfStackEvent(lv_event_t *event)
 	else if (key != LV_KEY_ENTER)
 	{
 		(void)GUI_Settings_HandleKey(key);
+	}
+}
+
+static void GUI_Settings_ToastDurationEvent(lv_event_t *event)
+{
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+	u8 index;
+
+	if (s_settings.about_visible != 0U || s_settings.debug_visible != 0U)
+	{
+		return;
+	}
+
+	index = GUI_Settings_ToastDurationIndex(System_Settings_ToastDurationSec());
+	if (code == LV_EVENT_CLICKED)
+	{
+		index = (u8)((index + 1U) % GUI_SETTINGS_TOAST_DURATION_COUNT);
+		GUI_Settings_SetToastDuration(&s_settings, s_toast_duration_presets[index]);
+		return;
+	}
+	if (code != LV_EVENT_KEY)
+	{
+		return;
+	}
+
+	key = lv_event_get_key(event);
+	if (key == LV_KEY_RIGHT)
+	{
+		index = (u8)((index + 1U) % GUI_SETTINGS_TOAST_DURATION_COUNT);
+		GUI_Settings_SetToastDuration(&s_settings, s_toast_duration_presets[index]);
+	}
+	else if (key == LV_KEY_LEFT)
+	{
+		index = (index == 0U) ? (u8)(GUI_SETTINGS_TOAST_DURATION_COUNT - 1U) :
+		        (u8)(index - 1U);
+		GUI_Settings_SetToastDuration(&s_settings, s_toast_duration_presets[index]);
+	}
+	else if (key == LV_KEY_ESC)
+	{
+		(void)Page_Back();
+	}
+	else if (key != LV_KEY_ENTER)
+	{
+		(void)GUI_Settings_HandleKey(key);
+	}
+}
+
+static void GUI_Settings_MessageTestEvent(lv_event_t *event)
+{
+	const GUI_SettingsMsgTestItem_t *item =
+		(const GUI_SettingsMsgTestItem_t *)lv_event_get_user_data(event);
+	lv_event_code_t code = lv_event_get_code(event);
+	u32 key;
+
+	if (item == NULL || s_settings.about_visible != 0U ||
+	    s_settings.debug_visible != 0U)
+	{
+		return;
+	}
+
+	if (code == LV_EVENT_CLICKED ||
+	    (code == LV_EVENT_KEY && (lv_event_get_key(event) == LV_KEY_ENTER ||
+	                              lv_event_get_key(event) == LV_KEY_RIGHT)))
+	{
+		GUI_Settings_WaitInputRelease();
+		if (GUI_Message_Show(item->kind, NULL, GUI_SETTINGS_MSG_TEST_TEXT,
+		                     NULL, NULL) == SYSTEM_STATUS_OK)
+		{
+			GUI_Settings_SetStatus(&s_settings, "Message box shown");
+		}
+		else
+		{
+			GUI_Settings_SetStatus(&s_settings, "Message box unavailable");
+		}
+	}
+	else if (code == LV_EVENT_KEY && (lv_event_get_key(event) == LV_KEY_ESC ||
+	                                  lv_event_get_key(event) == LV_KEY_LEFT))
+	{
+		(void)Page_Back();
+	}
+	else if (code == LV_EVENT_KEY)
+	{
+		(void)GUI_Settings_HandleKey(lv_event_get_key(event));
 	}
 }
 
@@ -1614,6 +1817,54 @@ static void GUI_Settings_SetAxfStackLevel(GUI_SettingsContext_t *context, u8 lev
 
 	GUI_Settings_UpdateAxfStack(context);
 	GUI_Settings_SetStatus(context, s_axf_stack_labels[level]);
+}
+
+static void GUI_Settings_UpdateToastDuration(GUI_SettingsContext_t *context)
+{
+	u8 seconds;
+
+	if (context == NULL || context->toast_duration_value == NULL)
+	{
+		return;
+	}
+
+	seconds = System_Settings_ToastDurationSec();
+	(void)snprintf(s_toast_value_text, sizeof(s_toast_value_text), "%us",
+	               (unsigned int)seconds);
+	lv_label_set_text(context->toast_duration_value, s_toast_value_text);
+}
+
+static void GUI_Settings_SetToastDuration(GUI_SettingsContext_t *context, u8 seconds)
+{
+	if (context == NULL)
+	{
+		return;
+	}
+
+	if (System_Settings_SetToastDuration(seconds) != SYSTEM_STATUS_OK)
+	{
+		GUI_Settings_UpdateToastDuration(context);
+		GUI_Settings_SetStatus(context, "Toast duration save failed");
+		return;
+	}
+
+	GUI_Settings_UpdateToastDuration(context);
+	GUI_Settings_SetStatus(context, "Toast duration saved");
+}
+
+static u8 GUI_Settings_ToastDurationIndex(u8 seconds)
+{
+	u8 i;
+
+	for (i = 0U; i < GUI_SETTINGS_TOAST_DURATION_COUNT; i++)
+	{
+		if (s_toast_duration_presets[i] == seconds)
+		{
+			return i;
+		}
+	}
+
+	return GUI_SETTINGS_TOAST_DURATION_DEFAULT_INDEX;
 }
 
 static void GUI_Settings_SetListButtonEnabled(lv_obj_t *btn, u8 enabled)
