@@ -4,35 +4,12 @@
 
 #define NES_LCD_STRIPE_LINES 16
 #define NES_LCD_STRIPE_WORDS_PER_LINE (NES_BACKBUF_WIDTH / 2)
-#define NES_LCD_STRIPE_BUFFER_SIZE \
-	(2U * NES_LCD_STRIPE_LINES * NES_LCD_STRIPE_WORDS_PER_LINE * sizeof(u32))
 
 static u16 nes_lcd_palette[64];
-static u32 (*nes_lcd_stripe)[NES_LCD_STRIPE_LINES * NES_LCD_STRIPE_WORDS_PER_LINE];
+static u32 nes_lcd_stripe[2][NES_LCD_STRIPE_LINES * NES_LCD_STRIPE_WORDS_PER_LINE] __ALIGNED(4);
 static u8 nes_lcd_palette_ready;
 static u8 nes_lcd_stripe_index;
 static u8 nes_lcd_stripe_rows;
-
-u8 nes_ppu_lcd_buffer_alloc(void)
-{
-	if(nes_lcd_stripe == NULL)
-	{
-		nes_lcd_stripe = (u32 (*)[NES_LCD_STRIPE_LINES *
-			NES_LCD_STRIPE_WORDS_PER_LINE])sys_malloc_aligned(
-				SRAMEX, NES_LCD_STRIPE_BUFFER_SIZE, 32U);
-	}
-
-	return (nes_lcd_stripe != NULL) ? 0U : 1U;
-}
-
-void nes_ppu_lcd_buffer_free(void)
-{
-	if(nes_lcd_stripe != NULL)
-	{
-		sys_free_aligned(SRAMEX, nes_lcd_stripe);
-		nes_lcd_stripe = NULL;
-	}
-}
 
 static void nes_lcd_prepare_palette(void)
 {

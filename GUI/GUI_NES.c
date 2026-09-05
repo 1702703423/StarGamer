@@ -131,7 +131,6 @@ static int GUI_NES_PageBuild(Page_Struct_t *page)
 	config.status_text = "ROM";
 	config.extensions = s_nes_extensions;
 	config.extension_count = (u8)(sizeof(s_nes_extensions) / sizeof(s_nes_extensions[0]));
-	config.accent_color = 0xE84E40U;
 	config.open = GUI_NES_OpenRom;
 	config.back = GUI_NES_Back;
 	config.user_data = context;

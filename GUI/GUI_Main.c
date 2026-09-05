@@ -9,21 +9,24 @@
 #include "GUI_Axf.h"
 #include "GUI_Theme.h"
 
-#define GUI_MENU_ITEM_W 72
-#define GUI_MENU_ITEM_H 78
-#define GUI_MENU_START_X 8
-#define GUI_MENU_START_Y 48
-#define GUI_MENU_GAP_X 6
-#define GUI_MENU_GAP_Y 8
-#define GUI_MENU_COLS 4
+/* Material Design 3 home grid metrics (320 x 240 panel) */
+#define GUI_MENU_ITEM_W   72
+#define GUI_MENU_ITEM_H   84
+#define GUI_MENU_START_X  7
+#define GUI_MENU_START_Y  48
+#define GUI_MENU_GAP_X    6
+#define GUI_MENU_GAP_Y    8
+#define GUI_MENU_COLS     4
+#define GUI_MENU_ICON_BOX 42
 
 typedef struct
 {
 	Page_ID_t page_id;
 	const char *name;
 	const char *label;
-	const char *symbol;
-	u32 color;
+	const char *icon;
+	GUI_ThemeColor_t container;
+	GUI_ThemeColor_t on_container;
 } GUI_MenuItem_t;
 
 static int GUI_MainPageBuild(Page_Struct_t *page);
@@ -39,14 +42,22 @@ static void GUI_BackButtonEvent(lv_event_t *event);
 
 static const GUI_MenuItem_t s_menu_items[] =
 {
-	{GUI_PAGE_NES, "NES", "NES", LV_SYMBOL_PLAY, 0xE84E40U},
-	{GUI_PAGE_ARDUBOY, "Arduboy", "Arduboy", LV_SYMBOL_KEYBOARD, 0x43A047U},
-	{GUI_PAGE_MUSIC, "Music", "Music", LV_SYMBOL_AUDIO, 0x1E88E5U},
-	{GUI_PAGE_VIDEO, "Video Player", "Video", LV_SYMBOL_VIDEO, 0xD81B60U},
-	{GUI_PAGE_IMAGE, "Image", "Image", LV_SYMBOL_IMAGE, 0x8E24AAU},
-	{GUI_PAGE_TEXT, "Text", "Text", LV_SYMBOL_FILE, 0x546E7AU},
-	{GUI_PAGE_AXF_LOADER, "AXF Loader", "AXF", LV_SYMBOL_UPLOAD, 0x00897BU},
-	{GUI_PAGE_SETTINGS, "Settings", "Settings", LV_SYMBOL_SETTINGS, 0xF9A825U},
+	{GUI_PAGE_NES, "NES", "NES", GUI_ICON_GAMEPAD,
+	 GUI_THEME_COLOR_PRIMARY_CONTAINER, GUI_THEME_COLOR_ON_PRIMARY_CONTAINER},
+	{GUI_PAGE_ARDUBOY, "Arduboy", "Arduboy", GUI_ICON_VIDEOGAME,
+	 GUI_THEME_COLOR_SECONDARY_CONTAINER, GUI_THEME_COLOR_ON_SECONDARY_CONTAINER},
+	{GUI_PAGE_MUSIC, "Music", "Music", GUI_ICON_MUSIC,
+	 GUI_THEME_COLOR_TERTIARY_CONTAINER, GUI_THEME_COLOR_ON_TERTIARY_CONTAINER},
+	{GUI_PAGE_VIDEO, "Video Player", "Video", GUI_ICON_MOVIE,
+	 GUI_THEME_COLOR_PRIMARY_CONTAINER, GUI_THEME_COLOR_ON_PRIMARY_CONTAINER},
+	{GUI_PAGE_IMAGE, "Image", "Image", GUI_ICON_IMAGE,
+	 GUI_THEME_COLOR_SECONDARY_CONTAINER, GUI_THEME_COLOR_ON_SECONDARY_CONTAINER},
+	{GUI_PAGE_TEXT, "Text", "Text", GUI_ICON_DESCRIPTION,
+	 GUI_THEME_COLOR_TERTIARY_CONTAINER, GUI_THEME_COLOR_ON_TERTIARY_CONTAINER},
+	{GUI_PAGE_AXF_LOADER, "AXF Loader", "AXF", GUI_ICON_MEMORY,
+	 GUI_THEME_COLOR_PRIMARY_CONTAINER, GUI_THEME_COLOR_ON_PRIMARY_CONTAINER},
+	{GUI_PAGE_SETTINGS, "Settings", "Settings", GUI_ICON_SETTINGS,
+	 GUI_THEME_COLOR_SECONDARY_CONTAINER, GUI_THEME_COLOR_ON_SECONDARY_CONTAINER},
 };
 
 #define GUI_MENU_ITEM_COUNT ((u8)(sizeof(s_menu_items) / sizeof(s_menu_items[0])))
@@ -71,55 +82,6 @@ static const GUI_MenuItem_t *GUI_FindMenuItem(Page_ID_t id)
 	return NULL;
 }
 
-static void GUI_ApplyScreenBase(lv_obj_t *screen)
-{
-	lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
-	lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-}
-
-static void GUI_CreateHeader(lv_obj_t *screen, const char *title)
-{
-	lv_obj_t *label;
-	lv_obj_t *line;
-
-	label = lv_label_create(screen);
-	lv_label_set_text(label, title);
-	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_align(label, LV_ALIGN_TOP_LEFT, 12, 9);
-
-	line = lv_obj_create(screen);
-	lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(line, 296, 1);
-	lv_obj_set_pos(line, 12, 36);
-	lv_obj_set_style_radius(line, 0, 0);
-	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
-	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-}
-
-static lv_obj_t *GUI_CreateIconBadge(lv_obj_t *parent, const char *symbol, u32 color, lv_coord_t size)
-{
-	lv_obj_t *badge;
-	lv_obj_t *icon;
-
-	badge = lv_obj_create(parent);
-	lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(badge, size, size);
-	lv_obj_set_style_radius(badge, 8, 0);
-	lv_obj_set_style_border_width(badge, 0, 0);
-	lv_obj_set_style_bg_color(badge, lv_color_hex(color), 0);
-	lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
-	lv_obj_set_style_pad_all(badge, 0, 0);
-
-	icon = lv_label_create(badge);
-	lv_label_set_text(icon, symbol);
-	lv_obj_set_style_text_color(icon, lv_color_white(), 0);
-	lv_obj_center(icon);
-
-	return badge;
-}
-
 static void GUI_CreateMenuButton(lv_obj_t *screen, const GUI_MenuItem_t *item, u8 index)
 {
 	u8 col;
@@ -136,36 +98,50 @@ static void GUI_CreateMenuButton(lv_obj_t *screen, const GUI_MenuItem_t *item, u
 	y = GUI_MENU_START_Y + (lv_coord_t)row * (GUI_MENU_ITEM_H + GUI_MENU_GAP_Y);
 
 	btn = lv_btn_create(screen);
+	if (btn == NULL)
+	{
+		return;
+	}
+
 	lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_size(btn, GUI_MENU_ITEM_W, GUI_MENU_ITEM_H);
 	lv_obj_set_pos(btn, x, y);
-	lv_obj_set_style_radius(btn, 8, 0);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-	lv_obj_set_style_border_width(btn, 1, 0);
-	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(btn, lv_color_hex(item->color), 0);
-	lv_obj_set_style_outline_width(btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_pad(btn, 1, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_color(btn, lv_color_hex(item->color), LV_STATE_FOCUSED);
+	lv_obj_set_style_radius(btn, GUI_M3_RADIUS_LG, 0);
+	lv_obj_set_style_border_width(btn, 0, 0);
 	lv_obj_set_style_shadow_width(btn, 0, 0);
 	lv_obj_set_style_pad_all(btn, 0, 0);
+	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_SURFACE_CONTAINER_HIGH), 0);
+	lv_obj_set_style_bg_color(btn, GUI_M3_StateLayer(GUI_THEME_COLOR_SURFACE_CONTAINER_HIGH,
+	                                                 GUI_THEME_COLOR_ON_SURFACE,
+	                                                 GUI_M3_STATE_PRESSED_OPA), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_SECONDARY_CONTAINER), LV_STATE_FOCUSED);
+	GUI_M3_ApplyFocusRing(btn, GUI_THEME_COLOR_PRIMARY);
 	lv_obj_add_event_cb(btn, GUI_MenuButtonEvent, LV_EVENT_CLICKED, (void *)item);
 	lv_obj_add_event_cb(btn, GUI_MenuButtonEvent, LV_EVENT_KEY, (void *)item);
 	lv_obj_add_event_cb(btn, GUI_MenuButtonEvent, LV_EVENT_FOCUSED, (void *)item);
 	s_menu_buttons[index] = btn;
 
-	badge = GUI_CreateIconBadge(btn, item->symbol, item->color, 34);
-	lv_obj_align(badge, LV_ALIGN_TOP_MID, 0, 8);
+	badge = GUI_M3_CreateIconContainer(btn, item->icon, GUI_MENU_ICON_BOX,
+	                                   item->container, item->on_container, 1U);
+	if (badge != NULL)
+	{
+		lv_obj_align(badge, LV_ALIGN_TOP_MID, 0, 9);
+	}
 
 	name = lv_label_create(btn);
-	lv_label_set_text(name, item->label);
-	lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-	lv_obj_set_width(name, GUI_MENU_ITEM_W - 8);
-	lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_style_text_color(name, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
-	lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -8);
+	if (name != NULL)
+	{
+		lv_label_set_text(name, item->label);
+		lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+		lv_obj_set_width(name, GUI_MENU_ITEM_W - 6);
+		lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_style_text_font(name, GUI_M3_Font(GUI_M3_TYPE_LABEL), 0);
+		lv_obj_set_style_text_color(name, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE), 0);
+		lv_obj_set_style_text_color(name, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SECONDARY_CONTAINER),
+		                            LV_STATE_FOCUSED);
+		lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -9);
+	}
 }
 
 static int GUI_MainPageBuild(Page_Struct_t *page)
@@ -179,8 +155,8 @@ static int GUI_MainPageBuild(Page_Struct_t *page)
 
 	memset(s_menu_buttons, 0, sizeof(s_menu_buttons));
 
-	GUI_ApplyScreenBase(page->screen);
-	GUI_CreateHeader(page->screen, "Star Gamer");
+	GUI_M3_ApplyScreen(page->screen);
+	(void)GUI_M3_CreateTopAppBar(page->screen, "Star Gamer");
 
 	for (i = 0U; i < GUI_MENU_ITEM_COUNT; i++)
 	{
@@ -194,10 +170,10 @@ static int GUI_AppShellBuild(Page_Struct_t *page)
 {
 	const GUI_MenuItem_t *item;
 	const char *name;
-	const char *symbol;
-	u32 color;
-	lv_obj_t *back;
-	lv_obj_t *back_icon;
+	const char *icon;
+	GUI_ThemeColor_t container;
+	GUI_ThemeColor_t on_container;
+	lv_obj_t *bar;
 	lv_obj_t *badge;
 	lv_obj_t *title;
 	lv_obj_t *state;
@@ -209,47 +185,31 @@ static int GUI_AppShellBuild(Page_Struct_t *page)
 
 	item = GUI_FindMenuItem(page->id);
 	name = (page->name != NULL) ? page->name : "App";
-	symbol = (item != NULL) ? item->symbol : LV_SYMBOL_DIRECTORY;
-	color = (item != NULL) ? item->color : 0x607D8BU;
+	icon = (item != NULL) ? item->icon : GUI_ICON_FOLDER;
+	container = (item != NULL) ? item->container : GUI_THEME_COLOR_SECONDARY_CONTAINER;
+	on_container = (item != NULL) ? item->on_container : GUI_THEME_COLOR_ON_SECONDARY_CONTAINER;
 
-	GUI_ApplyScreenBase(page->screen);
-	GUI_CreateHeader(page->screen, name);
+	GUI_M3_ApplyScreen(page->screen);
+	bar = GUI_M3_CreateTopAppBar(page->screen, name);
+	(void)GUI_M3_AppBarSetNav(bar, GUI_ICON_ARROW_BACK, GUI_BackButtonEvent, NULL);
 
-	back = lv_btn_create(page->screen);
-	lv_obj_clear_flag(back, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(back, 42, 28);
-	lv_obj_set_pos(back, 268, 6);
-	lv_obj_set_style_radius(back, 8, 0);
-	lv_obj_set_style_bg_color(back, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
-	lv_obj_set_style_bg_color(back, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_opa(back, LV_OPA_COVER, 0);
-	lv_obj_set_style_border_width(back, 0, 0);
-	lv_obj_set_style_border_width(back, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(back, lv_color_hex(color), LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_width(back, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_pad(back, 1, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_color(back, lv_color_hex(color), LV_STATE_FOCUSED);
-	lv_obj_set_style_shadow_width(back, 0, 0);
-	lv_obj_set_style_pad_all(back, 0, 0);
-	lv_obj_add_event_cb(back, GUI_BackButtonEvent, LV_EVENT_CLICKED, NULL);
+	badge = GUI_M3_CreateIconContainer(page->screen, icon, 76, container, on_container, 1U);
+	if (badge != NULL)
+	{
+		lv_obj_align(badge, LV_ALIGN_CENTER, 0, -16);
+	}
 
-	back_icon = lv_label_create(back);
-	lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-	lv_obj_set_style_text_color(back_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_center(back_icon);
+	title = GUI_M3_CreateLabel(page->screen, name, GUI_M3_TYPE_TITLE, GUI_THEME_COLOR_ON_SURFACE);
+	if (title != NULL)
+	{
+		lv_obj_align(title, LV_ALIGN_CENTER, 0, 40);
+	}
 
-	badge = GUI_CreateIconBadge(page->screen, symbol, color, 72);
-	lv_obj_align(badge, LV_ALIGN_CENTER, 0, -18);
-
-	title = lv_label_create(page->screen);
-	lv_label_set_text(title, name);
-	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_align(title, LV_ALIGN_CENTER, 0, 36);
-
-	state = lv_label_create(page->screen);
-	lv_label_set_text(state, "Ready");
-	lv_obj_set_style_text_color(state, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_MUTED), 0);
-	lv_obj_align(state, LV_ALIGN_CENTER, 0, 58);
+	state = GUI_M3_CreateLabel(page->screen, "Ready", GUI_M3_TYPE_BODY, GUI_THEME_COLOR_ON_SURFACE_VARIANT);
+	if (state != NULL)
+	{
+		lv_obj_align(state, LV_ALIGN_CENTER, 0, 64);
+	}
 
 	return SYSTEM_STATUS_OK;
 }
@@ -473,7 +433,7 @@ static int GUI_Main_ShowPage(Page_ID_t id)
 		case GUI_PAGE_SETTINGS:
 			return GUI_Settings_Show();
 		default:
-			return Page_Show_Anim(id, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+			return Page_Show_Anim(id, LV_SCR_LOAD_ANIM_MOVE_LEFT, GUI_M3_MOTION_PAGE, 0U);
 	}
 }
 

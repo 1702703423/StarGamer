@@ -1,7 +1,5 @@
 # GUI SRAM 优化方案
 
-> 历史说明：本文的 48 KB普通 SRAM / 80 KB视频池 / CCM 栈描述已被新内存规划取代。当前地址划分和分配规则见 [内存规划重构.md](内存规划重构.md)。GUI 上下文迁移到 `SRAMEX` 的原则仍然有效。
-
 ## 结论
 
 `GUI_IMAGE`、`GUI_FONT`、`GUI_TEXT`、`GUI_NES`、`GUI_PLAYER` 占用主 128KB SRAM 高的主因不是 LVGL 对象、图片解码缓冲、文本渲染缓冲或线程栈，而是这些模块把完整页面上下文定义成了文件级 `static` 全局变量，且每个上下文都内嵌一份 `GUI_FileManage_t`。

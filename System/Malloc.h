@@ -12,10 +12,9 @@
 
 #define SRAMCCM                    0U
 #define SRAMEX                     1U
-#define SRAMSTACK                  2U
 #define LVGL_MEM_POOL              SRAMEX
 
-#define SRAMBANK                   3U
+#define SRAMBANK                   2U
 
 #define MEM2_BLOCK_SIZE            32U
 #define MEM2_MAX_SIZE              CCMRAMSize
@@ -31,30 +30,8 @@
 #define MEM3_GUARD_BASE            (MEM3_MAP_BASE + MEM3_MAP_SIZE)
 #define MEM3_GUARD_SIZE            (SRAMEX_TOTAL_SIZE - (MEM3_MAX_SIZE + MEM3_MAP_SIZE))
 
-#define THREAD_STACK_REGION_BASE       0x20010000UL
-#define THREAD_STACK_REGION_SIZE       (64UL * 1024UL)
-#define THREAD_STACK_FIXED_SIZE        (4UL * 1024UL)
-#define THREAD_STACK_POOL_SIZE         (THREAD_STACK_REGION_SIZE - THREAD_STACK_FIXED_SIZE)
-#define THREAD_STACK_BLOCK_SIZE        256U
-#define THREAD_STACK_ALLOC_TABLE_SIZE  (THREAD_STACK_POOL_SIZE / THREAD_STACK_BLOCK_SIZE)
-#define THREAD_STACK_REGION_END        (THREAD_STACK_REGION_BASE + THREAD_STACK_REGION_SIZE)
-
-#if ((MEM2_ALLOC_TABLE_SIZE > 0x7FFFUL) || \
-     (MEM3_ALLOC_TABLE_SIZE > 0x7FFFUL) || \
-     (THREAD_STACK_ALLOC_TABLE_SIZE > 0x7FFFUL))
+#if ((MEM2_ALLOC_TABLE_SIZE > 0x7FFFUL) || (MEM3_ALLOC_TABLE_SIZE > 0x7FFFUL))
 #error "Memory allocator block count exceeds metadata capacity"
-#endif
-
-#if ((MEM2_ALLOC_TABLE_SIZE * MT_TYPE_SIZE) > CCM_ALLOC_MAP_SIZE)
-#error "CCM allocator map exceeds its reserved region"
-#endif
-
-#if ((THREAD_STACK_POOL_SIZE % THREAD_STACK_BLOCK_SIZE) != 0U)
-#error "Task stack pool must contain a whole number of allocator blocks"
-#endif
-
-#if (THREAD_STACK_REGION_END > 0x20020000UL)
-#error "Task stack region exceeds internal SRAM"
 #endif
 
 #define SRAM_ADDR_BEGIN            ((u32)SRAMEX_BASE)
@@ -109,16 +86,6 @@ typedef struct {
     u32 block_size;           /* 每块字节数 */
 } mem_frag_info_t;
 
-typedef struct {
-    u32 region_size;
-    u32 fixed_bytes;
-    u32 dynamic_pool_size;
-    u32 dynamic_used_bytes;
-    u32 free_bytes;
-    u32 largest_free_block;
-} thread_stack_stats_t;
-
 void sys_mem_frag_info(u8 memx, mem_frag_info_t *info);
-void sys_thread_stack_get_stats(thread_stack_stats_t *stats);
 
 #endif

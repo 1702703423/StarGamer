@@ -172,7 +172,7 @@ const char *Arduboy_Runtime_ResultText(Arduboy_RuntimeResult_t result)
 		case ARDUBOY_RUNTIME_RESULT_CORE_TEST_FAILED:
 			return "Core self-test failed";
 		case ARDUBOY_RUNTIME_RESULT_STACK_FAILED:
-			return "task stack allocation failed";
+			return "CCM stack allocation failed";
 		case ARDUBOY_RUNTIME_RESULT_THREAD_FAILED:
 			return "Game task failed";
 		case ARDUBOY_RUNTIME_RESULT_DISPLAY_BUSY:

@@ -105,8 +105,6 @@ void set_mirroring(uint32 nt0, uint32 nt1, uint32 nt2, uint32 nt3);//设置垂�
 uint8 ReadLowRegs(uint32 addr);
 void  WriteLowRegs(uint32 addr, uint8 data);
 void scanline_draw(int LineNo);
-u8 nes_ppu_lcd_buffer_alloc(void);
-void nes_ppu_lcd_buffer_free(void);
 void do_scanline_and_draw(uint8* buf);
 
 // Rick
@@ -122,6 +120,7 @@ void update_tile(int byteOffset, uint8 data);
 
 void ppu_close(void);
 #endif
+
 
 
 

@@ -1,0 +1,5 @@
+*** Using Compiler 'V6.19', folder: 'D:\Keil_v5\ARM\ARMCLANG\Bin'
+Build target 'Star Gamer'
+After Build - User command #1: fromelf.exe --bin -o "Star Gamer\Star Gamer.HEX.bin" "Star Gamer\Star Gamer.axf"
+"Star Gamer\Star Gamer.axf" - 0 Error(s), 0 Warning(s).
+Build Time Elapsed:  00:00:18

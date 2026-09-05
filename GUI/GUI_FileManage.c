@@ -4,15 +4,11 @@
 
 #define GUI_FM_SCREEN_W             320
 #define GUI_FM_SCREEN_H             240
-#define GUI_FM_HEADER_H             38
-#define GUI_FM_TOOL_BTN_W           42
-#define GUI_FM_TOOL_BTN_H           28
 #define GUI_FM_LIST_X               10
 #define GUI_FM_LIST_Y               62
 #define GUI_FM_LIST_W               300
 #define GUI_FM_LIST_H               146
-#define GUI_FM_ROW_H                30
-#define GUI_FM_DEFAULT_ACCENT       0xE84E40U
+#define GUI_FM_ROW_H                GUI_M3_LIST_ROW_H
 #define GUI_FM_STATUS_LEN           48U
 #define GUI_FM_NAME_UTF8_SIZE       (((GUI_FILEMANAGE_NAME_SIZE - 1U) * 3U / 2U) + 2U)
 #define GUI_FM_PATH_UTF8_SIZE       (((GUI_FILEMANAGE_PATH_SIZE - 1U) * 3U / 2U) + 2U)
@@ -20,7 +16,6 @@
 static void GUI_FM_ApplyScreenBase(lv_obj_t *screen);
 static void GUI_FM_CreateHeader(GUI_FileManage_t *manager);
 static void GUI_FM_CreateList(GUI_FileManage_t *manager);
-static void GUI_FM_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb, GUI_FileManage_t *manager);
 static void GUI_FM_BackEvent(lv_event_t *event);
 static void GUI_FM_RefreshEvent(lv_event_t *event);
 static void GUI_FM_ItemEvent(lv_event_t *event);
@@ -44,12 +39,12 @@ static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager);
 static u8 GUI_FM_PathJoin(char *dst, u32 dst_size, const char *dir, const char *name);
 static u8 GUI_FM_CopyText(char *dst, u32 dst_size, const char *src);
 static void GUI_FM_ApplyTextFont(lv_obj_t *obj);
+static void GUI_FM_ApplyIconFont(lv_obj_t *row);
 static u8 GUI_FM_ExtensionAccepted(GUI_FileManage_t *manager, const FILINFO *info);
 static int GUI_FM_StrCaseCmp(const char *a, const char *b);
 static const char *GUI_FM_GetName(const FILINFO *info);
 static const char *GUI_FM_GetExt(const char *name);
 static void GUI_FM_SetDefaultStatus(GUI_FileManage_t *manager);
-static u32 GUI_FM_Accent(const GUI_FileManage_t *manager);
 
 int GUI_FileManage_Create(GUI_FileManage_t *manager, Page_Struct_t *page, const GUI_FileManageConfig_t *config)
 {
@@ -250,70 +245,25 @@ u8 GUI_FileManage_BuildItemPath(const GUI_FileManage_t *manager, const GUI_FileM
 
 static void GUI_FM_ApplyScreenBase(lv_obj_t *screen)
 {
-	lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
-	lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+	GUI_M3_ApplyScreen(screen);
 }
 
 static void GUI_FM_CreateHeader(GUI_FileManage_t *manager)
 {
 	const char *title;
-	lv_obj_t *label;
-	lv_obj_t *line;
+	lv_obj_t *bar;
 
 	title = (manager->config.title != NULL) ? manager->config.title : "File";
 
-	label = lv_label_create(manager->screen);
-	lv_label_set_text(label, title);
-	lv_obj_set_style_text_color(label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_align(label, LV_ALIGN_TOP_LEFT, 12, 9);
-
-	GUI_FM_CreateToolButton(&manager->back_btn, manager->screen, LV_SYMBOL_LEFT, 220, GUI_FM_BackEvent, manager);
-	GUI_FM_CreateToolButton(&manager->refresh_btn, manager->screen, LV_SYMBOL_REFRESH, 268, GUI_FM_RefreshEvent, manager);
-
-	line = lv_obj_create(manager->screen);
-	lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(line, 296, 1);
-	lv_obj_set_pos(line, 12, 36);
-	lv_obj_set_style_radius(line, 0, 0);
-	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
-	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+	bar = GUI_M3_CreateTopAppBar(manager->screen, title);
+	manager->back_btn = GUI_M3_AppBarSetNav(bar, GUI_ICON_ARROW_BACK, GUI_FM_BackEvent, manager);
+	manager->refresh_btn = GUI_M3_AppBarAddAction(bar, GUI_ICON_REFRESH, GUI_FM_RefreshEvent, manager);
 
 	manager->path_label = lv_label_create(manager->screen);
 	lv_label_set_long_mode(manager->path_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(manager->path_label, GUI_FM_SCREEN_W - 24);
-	lv_obj_set_pos(manager->path_label, 12, 43);
-	lv_obj_set_style_text_color(manager->path_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
-}
-
-static void GUI_FM_CreateToolButton(lv_obj_t **btn, lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb, GUI_FileManage_t *manager)
-{
-	lv_obj_t *icon;
-
-	*btn = lv_btn_create(parent);
-	lv_obj_clear_flag(*btn, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(*btn, GUI_FM_TOOL_BTN_W, GUI_FM_TOOL_BTN_H);
-	lv_obj_set_pos(*btn, x, 6);
-	lv_obj_set_style_radius(*btn, 8, 0);
-	lv_obj_set_style_bg_color(*btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
-	lv_obj_set_style_bg_color(*btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_opa(*btn, LV_OPA_COVER, 0);
-	lv_obj_set_style_border_width(*btn, 0, 0);
-	lv_obj_set_style_border_width(*btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(*btn, lv_color_hex(GUI_FM_Accent(manager)), LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_width(*btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_pad(*btn, 1, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_color(*btn, lv_color_hex(GUI_FM_Accent(manager)), LV_STATE_FOCUSED);
-	lv_obj_set_style_shadow_width(*btn, 0, 0);
-	lv_obj_set_style_pad_all(*btn, 0, 0);
-	lv_obj_add_event_cb(*btn, cb, LV_EVENT_CLICKED, manager);
-	lv_obj_add_event_cb(*btn, cb, LV_EVENT_KEY, manager);
-
-	icon = lv_label_create(*btn);
-	lv_label_set_text(icon, symbol);
-	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_center(icon);
+	lv_obj_set_width(manager->path_label, GUI_FM_SCREEN_W - 28);
+	lv_obj_set_pos(manager->path_label, 14, GUI_M3_APPBAR_H + 4);
+	lv_obj_set_style_text_color(manager->path_label, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
 }
 
 static void GUI_FM_CreateList(GUI_FileManage_t *manager)
@@ -321,19 +271,14 @@ static void GUI_FM_CreateList(GUI_FileManage_t *manager)
 	manager->list = lv_list_create(manager->screen);
 	lv_obj_set_size(manager->list, GUI_FM_LIST_W, GUI_FM_LIST_H);
 	lv_obj_set_pos(manager->list, GUI_FM_LIST_X, GUI_FM_LIST_Y);
-	lv_obj_set_style_radius(manager->list, 6, 0);
-	lv_obj_set_style_border_width(manager->list, 1, 0);
-	lv_obj_set_style_border_color(manager->list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BORDER), 0);
-	lv_obj_set_style_bg_color(manager->list, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BG), 0);
-	lv_obj_set_style_bg_opa(manager->list, LV_OPA_COVER, 0);
-	lv_obj_set_style_pad_all(manager->list, 2, 0);
+	GUI_M3_StyleList(manager->list);
 	lv_obj_set_scrollbar_mode(manager->list, LV_SCROLLBAR_MODE_AUTO);
 
 	manager->status_label = lv_label_create(manager->screen);
 	lv_label_set_long_mode(manager->status_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(manager->status_label, GUI_FM_SCREEN_W - 24);
-	lv_obj_set_pos(manager->status_label, 12, 216);
-	lv_obj_set_style_text_color(manager->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_MUTED), 0);
+	lv_obj_set_width(manager->status_label, GUI_FM_SCREEN_W - 28);
+	lv_obj_set_pos(manager->status_label, 14, 216);
+	lv_obj_set_style_text_color(manager->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
 }
 
 static void GUI_FM_BackEvent(lv_event_t *event)
@@ -846,7 +791,14 @@ static void GUI_FM_RebuildList(GUI_FileManage_t *manager)
 	if (manager->item_count == 0U)
 	{
 		const char *text = (manager->config.empty_text != NULL) ? manager->config.empty_text : "No files";
-		(void)lv_list_add_text(manager->list, text);
+		lv_obj_t *empty = lv_list_add_text(manager->list, text);
+
+		if (empty != NULL)
+		{
+			lv_obj_set_style_bg_opa(empty, LV_OPA_TRANSP, 0);
+			lv_obj_set_style_text_color(empty, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
+			lv_obj_set_style_pad_hor(empty, 12, 0);
+		}
 	}
 
 	if (group != NULL && page_active != 0U)
@@ -867,19 +819,19 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 
 	if (item->type == GUI_FILEMANAGE_ITEM_PARENT)
 	{
-		icon = LV_SYMBOL_UP;
+		icon = GUI_ICON_ARROW_UPWARD;
 	}
 	else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 	{
-		icon = LV_SYMBOL_DIRECTORY;
+		icon = GUI_ICON_FOLDER;
 	}
 	else if (item->type == GUI_FILEMANAGE_ITEM_NEXT)
 	{
-		icon = LV_SYMBOL_NEXT;
+		icon = GUI_ICON_MORE_HORIZ;
 	}
 	else
 	{
-		icon = LV_SYMBOL_FILE;
+		icon = GUI_ICON_DESCRIPTION;
 	}
 
 	if (GUI_FileManage_OemToUtf8(display_name, sizeof(display_name), item->name) == 0U)
@@ -889,18 +841,9 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 
 	btn = lv_list_add_btn(manager->list, icon, display_name);
 	lv_obj_set_height(btn, GUI_FM_ROW_H);
-	lv_obj_set_style_radius(btn, 4, 0);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG), 0);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
-	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-	lv_obj_set_style_border_width(btn, 0, 0);
-	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(btn, lv_color_hex(GUI_FM_Accent(manager)), LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_width(btn, 0, 0);
-	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
-	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_FOCUSED), LV_STATE_FOCUSED);
+	GUI_M3_StyleListItem(btn);
 	GUI_FM_ApplyTextFont(btn);
+	GUI_FM_ApplyIconFont(btn);
 	lv_obj_add_event_cb(btn, GUI_FM_ItemEvent, LV_EVENT_CLICKED, item);
 	lv_obj_add_event_cb(btn, GUI_FM_ItemEvent, LV_EVENT_KEY, item);
 }
@@ -1161,6 +1104,27 @@ static void GUI_FM_ApplyTextFont(lv_obj_t *obj)
 	lv_obj_set_style_text_font(obj, (font != NULL) ? font : LV_FONT_DEFAULT, 0);
 }
 
+/* The leading glyph of a list row is rendered by an lv_img symbol source, so it
+ * needs the Material Symbols font instead of the inherited text font. */
+static void GUI_FM_ApplyIconFont(lv_obj_t *row)
+{
+	lv_obj_t *icon;
+
+	if (row == NULL || lv_obj_get_child_cnt(row) == 0U)
+	{
+		return;
+	}
+
+	icon = lv_obj_get_child(row, 0);
+	if (icon != NULL)
+	{
+		lv_obj_set_style_text_font(icon, GUI_M3_IconFont(), 0);
+		lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
+		lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SECONDARY_CONTAINER),
+		                            LV_STATE_FOCUSED);
+	}
+}
+
 static u8 GUI_FM_ExtensionAccepted(GUI_FileManage_t *manager, const FILINFO *info)
 {
 	const char *ext;
@@ -1307,12 +1271,6 @@ static void GUI_FM_SetDefaultStatus(GUI_FileManage_t *manager)
 	GUI_FileManage_SetStatus(manager, text);
 }
 
-static u32 GUI_FM_Accent(const GUI_FileManage_t *manager)
-{
-	if (manager == NULL || manager->config.accent_color == 0U)
-	{
-		return GUI_FM_DEFAULT_ACCENT;
-	}
-
-	return manager->config.accent_color;
-}
+/* MD3 keeps one primary accent per scheme, so the legacy per-page accent_color
+ * field in GUI_FileManageConfig_t is intentionally unused: every browser page now
+ * shares the same tonal palette from GUI_Theme. */

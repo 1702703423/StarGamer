@@ -6,6 +6,7 @@
 #define GUI_START_DELAY_MS       400U
 #define GUI_START_SPINNER_TIME   900U
 #define GUI_START_SPINNER_ARC    72U
+#define GUI_START_LOGO_SIZE      72
 
 static lv_obj_t *s_start_screen = NULL;
 static lv_obj_t *s_start_spinner = NULL;
@@ -19,8 +20,8 @@ static void GUI_Start_ShowFailure(void);
 
 int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 {
+	lv_obj_t *logo;
 	lv_obj_t *title;
-	lv_obj_t *accent;
 
 	if (ready_callback == NULL || s_start_screen != NULL || s_start_timer != NULL)
 	{
@@ -33,34 +34,26 @@ int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 		return OUT_OF_HEAP_MEMORY;
 	}
 
-	lv_obj_clear_flag(s_start_screen, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_style_bg_color(s_start_screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
-	lv_obj_set_style_bg_opa(s_start_screen, LV_OPA_COVER, 0);
-	lv_obj_set_style_pad_all(s_start_screen, 0, 0);
+	GUI_M3_ApplyScreen(s_start_screen);
 
-	title = lv_label_create(s_start_screen);
+	logo = GUI_M3_CreateIconContainer(s_start_screen, GUI_ICON_GAMEPAD, GUI_START_LOGO_SIZE,
+	                                  GUI_THEME_COLOR_PRIMARY_CONTAINER,
+	                                  GUI_THEME_COLOR_ON_PRIMARY_CONTAINER, 1U);
+	if (logo == NULL)
+	{
+		GUI_Start_Reset();
+		return OUT_OF_HEAP_MEMORY;
+	}
+	lv_obj_align(logo, LV_ALIGN_CENTER, 0, -56);
+
+	title = GUI_M3_CreateLabel(s_start_screen, "Star Gamer", GUI_M3_TYPE_HEADLINE,
+	                           GUI_THEME_COLOR_ON_SURFACE);
 	if (title == NULL)
 	{
 		GUI_Start_Reset();
 		return OUT_OF_HEAP_MEMORY;
 	}
-	lv_label_set_text(title, "Star Gamer");
-	lv_obj_set_style_text_color(title, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_align(title, LV_ALIGN_CENTER, 0, -54);
-
-	accent = lv_obj_create(s_start_screen);
-	if (accent == NULL)
-	{
-		GUI_Start_Reset();
-		return OUT_OF_HEAP_MEMORY;
-	}
-	lv_obj_clear_flag(accent, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(accent, 64, 2);
-	lv_obj_set_style_radius(accent, 0, 0);
-	lv_obj_set_style_border_width(accent, 0, 0);
-	lv_obj_set_style_bg_color(accent, lv_color_hex(0x26A69AU), 0);
-	lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, 0);
-	lv_obj_align(accent, LV_ALIGN_CENTER, 0, -31);
+	lv_obj_align(title, LV_ALIGN_CENTER, 0, 4);
 
 	s_start_spinner = lv_spinner_create(s_start_screen,
 	                                    GUI_START_SPINNER_TIME,
@@ -70,22 +63,18 @@ int GUI_Start_Show(GUI_StartReadyCallback_t ready_callback)
 		GUI_Start_Reset();
 		return OUT_OF_HEAP_MEMORY;
 	}
-	lv_obj_set_size(s_start_spinner, 46, 46);
-	lv_obj_set_style_arc_width(s_start_spinner, 4, LV_PART_MAIN);
-	lv_obj_set_style_arc_color(s_start_spinner, GUI_Theme_LvColor(GUI_THEME_COLOR_SLIDER_BG), LV_PART_MAIN);
-	lv_obj_set_style_arc_width(s_start_spinner, 4, LV_PART_INDICATOR);
-	lv_obj_set_style_arc_color(s_start_spinner, lv_color_hex(0x26A69AU), LV_PART_INDICATOR);
-	lv_obj_center(s_start_spinner);
+	lv_obj_set_size(s_start_spinner, 34, 34);
+	GUI_M3_StyleSpinner(s_start_spinner);
+	lv_obj_align(s_start_spinner, LV_ALIGN_CENTER, 0, 50);
 
-	s_start_status = lv_label_create(s_start_screen);
+	s_start_status = GUI_M3_CreateLabel(s_start_screen, "Starting GUI...", GUI_M3_TYPE_BODY,
+	                                    GUI_THEME_COLOR_ON_SURFACE_VARIANT);
 	if (s_start_status == NULL)
 	{
 		GUI_Start_Reset();
 		return OUT_OF_HEAP_MEMORY;
 	}
-	lv_label_set_text(s_start_status, "Starting GUI...");
-	lv_obj_set_style_text_color(s_start_status, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
-	lv_obj_align(s_start_status, LV_ALIGN_CENTER, 0, 46);
+	lv_obj_align(s_start_status, LV_ALIGN_CENTER, 0, 88);
 
 	s_start_timer = lv_timer_create(GUI_Start_TimerCallback, GUI_START_DELAY_MS, NULL);
 	if (s_start_timer == NULL)
@@ -165,7 +154,7 @@ static void GUI_Start_ShowFailure(void)
 	if (s_start_status != NULL)
 	{
 		lv_label_set_text(s_start_status, "GUI start failed");
-		lv_obj_set_style_text_color(s_start_status, lv_color_hex(0xE84E40U), 0);
+		lv_obj_set_style_text_color(s_start_status, GUI_Theme_LvColor(GUI_THEME_COLOR_ERROR), 0);
 		lv_obj_invalidate(s_start_status);
 	}
 }

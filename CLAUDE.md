@@ -33,7 +33,7 @@ Post-build actions automatically generate `.bin` files from the ELF output.
 |------|---------|
 | `Core/Src/`, `Core/Inc/` | Entry point (`main.c`), peripheral init, FreeRTOS task creation (`freertos.c`), ISRs (`stm32f4xx_it.c`), HAL MSP/timebase |
 | `Drivers/` | CMSIS headers, STM32F4xx HAL drivers, **LCD driver** (ST7789 SPI with RGB565 block transfer/scaling, DMA timeout handling) |
-| `System/` | Core utilities: `sys.h` (ubiquitous types, bit-band macros), `Malloc` (three-pool allocator: SRAMCCM + SRAMEX + SRAMSTACK, `sys_malloc`/`sys_free`/`sys_malloc_aligned`), `System_Status` (state/errors/resources/settings), `firmware_start.c` (init + HardFault LCD dump), `Memory_Dump` (HardFault memory dump to W25Q64 / SD card), `adt_chain` (linked list), `kfifo` (Linux-style generic kernel FIFO for PCM audio) |
+| `System/` | Core utilities: `sys.h` (ubiquitous types, bit-band macros), `Malloc` (dual-bank CCM+SRAMEX allocator, `sys_malloc`/`sys_free`/`sys_malloc_aligned`), `System_Status` (state/errors/resources/settings), `firmware_start.c` (init + HardFault LCD dump), `Memory_Dump` (HardFault memory dump to W25Q64 / SD card), `adt_chain` (linked list), `kfifo` (Linux-style generic kernel FIFO for PCM audio) |
 | `BSP/` | Board support: `w25q64` (SPI NOR Flash), `i2s` (I2S3 audio+DMA with collision stats), `at24c02` (I2C EEPROM), `key` (8-button driver) |
 | `Middlewares/` | FreeRTOS, FatFs (SDIO, codepage 936), LibJPEG (custom `jpeg_memory_provider`), LVGL, NES emulator, Arduboy compat layer, BMP image library (stub), **Helix MP3** (ARM Cortex-M4 fixed-point, 24 source files incl. ARM asm) |
 | `GUI/` | LVGL page manager: `GUI_Manage`, `GUI_Main`, `GUI_NES`, `GUI_Arduboy`, `GUI_Player` (with Seek UI), `GUI_Image`, `GUI_Text`, `GUI_Settings`, `GUI_Video`, `GUI_Font` (install+uninstall), `GUI_FileManage`, `GUI_Start`, `GUI_Axf` (AXF loader with state machine/monitor/stack reclaim) |
@@ -95,27 +95,25 @@ Unified page architecture based on `GUI_Manage.c/h`:
 | **AVI parser** | `AVI_Parser.c/h` | RIFF/AVI container, little-endian reads, chunk tolerance, Seek |
 | **MJPEG decode** | `Video_MJPEG.c/h` | MJPEG frame decode pipeline, LibJPEG streaming, tunable stripe height, JPEG arena peak stats |
 | **PCM audio** | `Video_PCM.c/h` | AVI PCM decode, 32 KB kfifo buffering, DMA double-half-buffer, underrun/collision stats |
-| **Video memory** | `Video_Memory.c/h` | Frame buffer pool (SRAMEX), stripe buffers, 77 KB aligned allocator |
+| **Video memory** | `Video_Memory.c/h` | Frame buffer pool (on-chip `RW_VIDEO_SRAM` 80 KB, 32 B aligned, linked list + coalesce), stripe buffers |
 
 ### Memory Architecture
 
-Three memory pools managed by `Malloc` (`SRAMBANK = 3`), scatter file `StarGamer_CCM.sct` defines 4 execution regions:
+Two memory pools managed by `Malloc` (`SRAMBANK = 2`), scatter file `StarGamer_CCM.sct` defines 1 Flash + 2 SRAM execution regions:
 
 | Pool | Physical Location | Size | Block | Purpose |
 |------|-------------------|------|-------|---------|
-| `SRAMCCM` (0) | CCM 0x10000000 | 60 KB | 32 B | CPU-only hot data: MJPEG arena 38 KB, LibJPEG context |
-| `SRAMEX` (1) | External SRAM 0x68000000 | 960 KB | 32 B | DMA buffers, LVGL heap, frame buffers, GUI contexts, PCM FIFO, I2S DMA, NES stripe |
-| `SRAMSTACK` (2) | Main SRAM 0x20010000 | 60 KB (dynamic) | 256 B | RTOS task stacks (first 4 KB fixed for `defaultTask`) |
+| `SRAMCCM` (0) | CCM 0x10000000 | 64 KB | 32 B | RTOS task stacks + CPU-only hot data (no DMA) |
+| `SRAMEX` (1) | External SRAM 0x68000000 | 960 KB | 32 B | DMA buffers, LVGL heap, frame buffers, GUI contexts, PCM FIFO, I2S DMA |
 
 - **Main SRAM (128 KB, 0x20000000)**:
-  - `0x20000000–0x20005FFF` (24 KB, `RW_IRAM1`): `.data/.bss`, MSP, C lib heap, FreeRTOS control objects
-  - `0x20006000–0x2000FFFF` (40 KB, `RW_VIDEO_SRAM`): `Video_Memory` on-chip fast pool (FIL, AVI context, MJPEG source, RGB line buffers, LCD DMA double stripe), 40 KB hard cap, allocation failure aborts video start
-  - `0x20010000–0x2001FFFF` (64 KB, `RW_TASK_STACK`): task stack region — first 4 KB CubeMX `defaultTaskBuffer`, remaining 60 KB managed by `SRAMSTACK` in 256 B blocks
-- **CCM (64 KB, 0x10000000)**: 60 KB `SRAMCCM` heap + 4 KB allocator map (`RW_CCM_MAP` 0x1000F000). **Never place DMA source/destination here**
-- **External SRAM (1 MB, 0x68000000)**: 960 KB data pool + ~60 KB map + ~4 KB guard. LVGL heap, 150 KB LCD frame buffer, GUI page contexts, 32 KB PCM FIFO + 4 KB I/O buffer, I2S DMA double buffer, NES LCD stripe (runtime SRAMEX aligned allocation, freed on exit)
+  - `0x20000000–0x2000BFFF` (48 KB, `RW_IRAM1`): `.data/.bss`, MSP, C lib heap, FreeRTOS control objects, NES LCD stripe static buffers
+  - `0x2000C000–0x2001FFFF` (80 KB, `RW_VIDEO_SRAM`): `Video_Memory` on-chip fast pool (VideoTask stack, FIL, AVI context, MJPEG source, LibJPEG context + 38 KB arena, RGB line buffers, LCD DMA double stripe), 80 KB hard cap, allocation failure aborts video start
+- **CCM (64 KB, 0x10000000)**: full 64 KB `SRAMCCM` heap (task stacks + CPU-only hot data). **Never place DMA source/destination here**
+- **External SRAM (1 MB, 0x68000000)**: 960 KB data pool + ~60 KB map + ~4 KB guard. LVGL heap, 150 KB LCD frame buffer, GUI page contexts, 32 KB PCM FIFO + 4 KB I/O buffer, I2S DMA double buffer
 - **Allocator**: `sys_malloc(memx, size)` / `sys_free(memx, ptr)`, plus `sys_malloc_aligned` / `sys_free_aligned` for aligned allocations. `mymalloc`/`myfree` macros removed
-- **Thread stacks**: `sys_thread_stack_alloc(size)` from `SRAMSTACK` (main SRAM); temporary threads recycle via `sys_thread_stack_free()` from parent context
-- **Diagnostics**: `sysstats` reports CPU and all pool usage; `memfrag` scans SRAMSTACK/SRAMCCM/SRAMEX fragmentation, largest contiguous block, and allocation failure count
+- **Thread stacks**: `sys_thread_stack_alloc(size)` from `SRAMCCM` (CCM); temporary threads recycle via `sys_thread_stack_free()` from parent context
+- **Diagnostics**: `sysstats` reports CPU and CCM/SRAMEX usage; `memfrag` scans SRAMCCM/SRAMEX fragmentation, largest contiguous block, and allocation failure count
 - **BootLoader reservation**: Flash low 64 KB (sectors 0-3) reserved for BootLoader; App starts at 0x08010000
 
 ### Key Subsystems
@@ -123,7 +121,7 @@ Three memory pools managed by `Malloc` (`SRAMBANK = 3`), scatter file `StarGamer
 - **LCD**: ST7789 240×320 RGB565, **SPI interface** (DMA writes). Driver `Drivers/LCD/LCD.c`, extended RGB565 block transfer & crop/scale. Backlight PWM (TIM12 CH2), `USE_HORIZONTAL = 1`. DMA timeout handling improved
 - **Audio**: I2S3 (SPI3) + DMA → external DAC. `BSP/i2s.c` "sound card" API: `audio_card_init()`, `audio_card_open_prepare()`, `audio_card_open()`, `audio_card_write()`, double-buffered DMA with callback (`audio_card_register_tx()`), collision stats
 - **Storage**: SD card SDIO 4-bit + DMA; W25Q64 8 MB SPI Flash (font 2MB + memory dump 4MB + FW staging 1MB + FW backup 1MB); AT24C02 256B I2C EEPROM (IAP dual-slot records + system settings). FatFs with `ENABLE_SCRATCH_BUFFER` for DMA alignment
-- **NES Emulator**: Entry `nes_main.c`, core `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`, `NES_SKIP_FRAME = 2`, 240+ mappers. LCD double stripe (16 lines × 2) allocated from SRAMEX at runtime, freed on exit, freeing main SRAM static space
+- **NES Emulator**: Entry `nes_main.c`, core `nes_ppu.c`/`nes_apu.c`/`nes_mapper.c`/`6502.s`, `NES_SKIP_FRAME = 2`, 240+ mappers. LCD double stripe (16 lines × 2) is a static array in main SRAM
 - **Arduboy**: `Middlewares/Third_Party/Arduboy/` Arduboy2 engine core + 3 games. 128×64 1bpp framebuffer, runtime via `APP/Arduboy/Arduboy_Runtime.c`, port layer in `Arduboy_Port.c`
 - **Helix MP3**: `Middlewares/libhelix/` fixed-point Layer III decoder. 14 C files + 2 ARM asm files + port adapter `port/helix_support.c`. Adapted via `Player_MP3.c` implementing the codec interface
 - **USB MSC**: `USB_DEVICE/`, SD card as USB mass storage via CubeMX USB OTG FS + ST official USB device library
@@ -200,10 +198,9 @@ Fast bit-band GPIO access via `sys.h`:
 
 ### Memory Allocation
 
-- `mymalloc(memx, size)` / `myfree(memx, ptr)` from `System/Malloc.h`
-  - `memx = SRAMCCM` (0): CPU-only data (MJPEG arena, LibJPEG context) — **no DMA!**
+- `sys_malloc(memx, size)` / `sys_free(memx, ptr)` from `System/Malloc.h` (aligned variants: `sys_malloc_aligned` / `sys_free_aligned`)
+  - `memx = SRAMCCM` (0): RTOS task stacks + CPU-only data — **no DMA!**
   - `memx = SRAMEX` (1): DMA buffers, large allocations, shared data, GUI page contexts
-  - `memx = SRAMSTACK` (2): RTOS task stacks only
 
 ### CubeMX Integration
 
@@ -238,6 +235,6 @@ Fast bit-band GPIO access via `sys.h`:
 7. **HardFault**: Auto-displayed on LCD (no serial/debugger needed).
 8. **LCD interface**: ST7789 uses **SPI** (not FSMC parallel). Video Task takes exclusive SPI1/LCD ownership during playback.
 9. **SDIO DMA alignment**: `ENABLE_SCRATCH_BUFFER` provides 512 B aligned buffer.
-10. **GUI contexts**: Page-level `static` globals (~13 KB each) consume main SRAM (`RW_IRAM1` is only 24 KB). Prefer SRAMEX `sys_malloc` for new pages.
+10. **GUI contexts**: Page-level `static` globals (~13 KB each) consume main SRAM (`RW_IRAM1` is 48 KB). Prefer SRAMEX `sys_malloc` for new pages.
 11. **Video DMA collisions**: High-bitrate AVI playback may lose audio DMA events due to flag merging; monitor `collide/dma` stats. See `Docs/AVI高码率卡顿优化方案.md`.
 12. **IAP records**: EEPROM dual-slot (SLOT0: 128, SLOT1: 168) uses sequence numbers for power-safe writes; verify `IAP_RECORD_SIZE` consistency before modifying `IAP_RECORD_MEMBERS`.

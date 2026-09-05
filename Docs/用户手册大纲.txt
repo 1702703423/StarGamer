@@ -1,0 +1,214 @@
+用户手册大纲
+总体结构：
+1.功能介绍：NES,ARDUBOY,MUSIC,VIDEO,IMAGE,TXT,AXF,SETTINGS 
+2.二次开发指导：1.系统Shell命令 2.Shell命令导出 3.固件API使用 4.AXF API使用
+3.系统架构:重点介绍：1.内存及存储框架。2.SDIO底层防御性队列。3.GUI管理器。4.LVGL LCD握手机制。5.BootLoader+IAP。6.AXF加载器架构。7.视频播放器架构，LibJPEG,，LCD流水线
+补充视频性能报告：
+==========23.976FPS 2M码率=================
+admin:/$ videostat
+Video stats:
+  state=PLAYING result=Video ready busy=1
+  phase=VIDEO_WAIT_CLOCK age=2 loop=1272 cursor=0x005DD782 file=0x005DB73C
+  path=0:/AVI/▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒¶ԭ▒▒▒▒▒▒ȫ▒▒▒桹.avi
+  video 320x240 frames=4171 fps=23.976 frame_us=41708
+  fourcc handler=MJPG compression=MJPG scale=125 rate=2997
+  audio has=1 pcm=1 rate=22050 ch=2 bits=16 align=4 avg=88200
+  chunks video=431 audio=841 decoded=414 displayed=414 dropped=16 jpeg_err=0
+  chunk type=0 fourcc=00dc off=0x005DB73C size=8262
+  progress parser=2 video=2 audio=3 display=4 ticks
+  control position=105/1000 volume=50 seek=0 failed=0
+  timing jpeg_max=102 lcd_wait=711 lcd_wait_max=2 lcd_dma_timeout=0
+  pcm in=1582360 out_frames=395163 fifo=15632/24576 peak=26280 underrun=9
+  queue video=0 audio=0 deadline_frames=395457
+  pending off=0x005DB734 remain=0 end=0x005DB734 age=0 fifo_free=17136 waits=0
+  audio chunk=1880 max=1884 run=0/0 max_run=2/3764
+  clock epoch=0 played=395163 media=390624 replay=0 silence=4539 delta=-294 dma_age=17
+  drop late=10 oversize=0 prebuffer=6 consecutive=0 max=2
+  audio dma=747 half=374 full=373 collide=0 late=0
+  audio refill=747 missed=0 qpeak=1 media=390624 replay=0 silence=4539
+  audio udr=0 dma_err=0 i2s_err=0 last_err=0x00000000 last_sr=0x00000000
+  io read_calls=1625 read_bytes=5957144 read_err=0 eoi=0
+  io active owner=NONE op=NONE age=0 off=0x00000000 request=0
+  io ticks parser=0/34/1 pcm=1/52/6 (last/max/slow)
+  io ticks jpeg=2/39/7 video=0/1/0 (last/max/slow)
+  avi err=0 off=0x00000000 fourcc=.... size=0 index_skip=0 oversize=0 pcm_tail=0
+  avi retry=0 resync=0 from=0x00000000 to=0x00000000 pcm_result=0
+  pcm fatfs op=0 fr=0 off=0x00000000 request=0 read=0
+  jpeg_arena_peak=27840 arena_fail=0 task_stack_free=6344
+  vmem pool=81920 current=79872 peak=79872 largest=2016 fail=0
+  mem ccm=449/1000 ex=314/1000
+Return: 0, 0x00000000
+
+admin:/$ videostat
+Video stats:
+  state=PLAYING result=Video ready busy=1
+  phase=JPEG_DECODE age=27 loop=5270 cursor=0x018195CA file=0x01819200
+  path=0:/AVI/▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒¶ԭ▒▒▒▒▒▒ȫ▒▒▒桹.avi
+  video 320x240 frames=4171 fps=23.976 frame_us=41708
+  fourcc handler=MJPG compression=MJPG scale=125 rate=2997
+  audio has=1 pcm=1 rate=22050 ch=2 bits=16 align=4 avg=88200
+  chunks video=1784 audio=3486 decoded=1753 displayed=1753 dropped=30 jpeg_err=0
+  chunk type=0 fourcc=00dc off=0x01817154 size=9333
+  progress parser=27 video=27 audio=28 display=29 ticks
+  control position=433/1000 volume=50 seek=0 failed=0
+  timing jpeg_max=102 lcd_wait=3080 lcd_wait_max=2 lcd_dma_timeout=0
+  pcm in=6559192 out_frames=1640429 fifo=11400/24576 peak=26280 underrun=9
+  queue video=0 audio=0 deadline_frames=1639771
+  pending off=0x0181714C remain=0 end=0x0181714C age=0 fifo_free=21368 waits=0
+  audio chunk=1880 max=1884 run=0/0 max_run=2/3764
+  clock epoch=0 played=1640429 media=1635890 replay=0 silence=4539 delta=658 dma_age=14
+  drop late=24 oversize=0 prebuffer=6 consecutive=0 max=2
+  audio dma=3101 half=1551 full=1550 collide=0 late=0
+  audio refill=3101 missed=0 qpeak=1 media=1635890 replay=0 silence=4539
+  audio udr=0 dma_err=0 i2s_err=0 last_err=0x00000000 last_sr=0x00000000
+  io read_calls=6841 read_bytes=24919570 read_err=0 eoi=0
+  io active owner=JPEG op=READ age=0 off=0x01819154 request=1141
+  io ticks parser=0/34/1 pcm=1/52/18 (last/max/slow)
+  io ticks jpeg=2/47/14 video=0/1/0 (last/max/slow)
+  avi err=0 off=0x00000000 fourcc=.... size=0 index_skip=0 oversize=0 pcm_tail=0
+  avi retry=0 resync=0 from=0x00000000 to=0x00000000 pcm_result=0
+  pcm fatfs op=0 fr=0 off=0x00000000 request=0 read=0
+  jpeg_arena_peak=27840 arena_fail=0 task_stack_free=6292
+  vmem pool=81920 current=79872 peak=79872 largest=2016 fail=0
+  mem ccm=449/1000 ex=314/1000
+Return: 0, 0x00000000
+
+admin:/$ videostat
+Video stats:
+  state=PLAYING result=Video ready busy=1
+  phase=JPEG_DECODE age=26 loop=7250 cursor=0x0213B182 file=0x0213A600
+  path=0:/AVI/▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒¶ԭ▒▒▒▒▒▒ȫ▒▒▒桹.avi
+  video 320x240 frames=4171 fps=23.976 frame_us=41708
+  fourcc handler=MJPG compression=MJPG scale=125 rate=2997
+  audio has=1 pcm=1 rate=22050 ch=2 bits=16 align=4 avg=88200
+  chunks video=2454 audio=4796 decoded=2407 displayed=2407 dropped=46 jpeg_err=0
+  chunk type=0 fourcc=00dc off=0x0213859A size=11240
+  progress parser=26 video=26 audio=27 display=28 ticks
+  control position=597/1000 volume=50 seek=0 failed=0
+  timing jpeg_max=102 lcd_wait=4229 lcd_wait_max=2 lcd_dma_timeout=0
+  pcm in=9024088 out_frames=2256714 fifo=11156/24576 peak=26280 underrun=9
+  queue video=0 audio=0 deadline_frames=2255949
+  pending off=0x02138592 remain=0 end=0x02138592 age=0 fifo_free=21612 waits=0
+  audio chunk=1880 max=1884 run=0/0 max_run=2/3764
+  clock epoch=0 played=2256714 media=2252175 replay=0 silence=4539 delta=765 dma_age=7
+  drop late=40 oversize=0 prebuffer=6 consecutive=0 max=2
+  audio dma=4266 half=2133 full=2133 collide=0 late=0
+  audio refill=4266 missed=0 qpeak=1 media=2252175 replay=0 silence=4539
+  audio udr=0 dma_err=0 i2s_err=0 last_err=0x00000000 last_sr=0x00000000
+  io read_calls=9390 read_bytes=34299327 read_err=0 eoi=0
+  io active owner=JPEG op=READ age=0 off=0x0213A59A request=3048
+  io ticks parser=0/34/1 pcm=1/52/27 (last/max/slow)
+  io ticks jpeg=4/47/23 video=0/1/0 (last/max/slow)
+  avi err=0 off=0x00000000 fourcc=.... size=0 index_skip=0 oversize=0 pcm_tail=0
+  avi retry=0 resync=0 from=0x00000000 to=0x00000000 pcm_result=0
+  pcm fatfs op=0 fr=0 off=0x00000000 request=0 read=0
+  jpeg_arena_peak=27840 arena_fail=0 task_stack_free=6292
+  vmem pool=81920 current=79872 peak=79872 largest=2016 fail=0
+  mem ccm=449/1000 ex=314/1000
+Return: 0, 0x00000000
+
+==================25FPS 10M码率=================================
+admin:/$ videostat
+Video stats:
+  state=PLAYING result=Video ready busy=1
+  phase=JPEG_DECODE age=1 loop=2523 cursor=0x014FC02E file=0x014F5200
+  path=0:/AVI/High Equality Video.avi
+  video 320x240 frames=5329 fps=25.000 frame_us=40000
+  fourcc handler=MJPG compression=MJPG scale=1 rate=25
+  audio has=1 pcm=1 rate=22050 ch=2 bits=16 align=4 avg=88200
+  chunks video=878 audio=1645 decoded=721 displayed=721 dropped=156 jpeg_err=0
+  chunk type=0 fourcc=00dc off=0x014F50E4 size=28489
+  progress parser=1 video=1 audio=2 display=3 ticks
+  control position=146/1000 volume=100 seek=0 failed=0
+  timing jpeg_max=69 lcd_wait=1419 lcd_wait_max=2 lcd_dma_timeout=0
+  pcm in=3095168 out_frames=773927 fifo=8564/24576 peak=26280 underrun=16
+  queue video=0 audio=0 deadline_frames=773514
+  pending off=0x014F50DC remain=0 end=0x014F50DC age=0 fifo_free=24204 waits=0
+  audio chunk=1880 max=1884 run=0/0 max_run=2/3764
+  clock epoch=0 played=773927 media=770593 replay=0 silence=3334 delta=413 dma_age=5
+  drop late=150 oversize=0 prebuffer=6 consecutive=0 max=1
+  audio dma=1463 half=732 full=731 collide=0 late=0
+  audio refill=1463 missed=0 qpeak=1 media=770593 replay=0 silence=3334
+  audio udr=0 dma_err=0 i2s_err=0 last_err=0x00000000 last_sr=0x00000000
+  io read_calls=3719 read_bytes=17260522 read_err=0 eoi=0
+  io active owner=JPEG op=READ age=1 off=0x014F50E4 request=8192
+  io ticks parser=0/1/0 pcm=1/2/0 (last/max/slow)
+  io ticks jpeg=1/5/0 video=0/1/0 (last/max/slow)
+  avi err=0 off=0x00000000 fourcc=.... size=0 index_skip=0 oversize=0 pcm_tail=0
+  avi retry=0 resync=0 from=0x00000000 to=0x00000000 pcm_result=0
+  pcm fatfs op=0 fr=0 off=0x00000000 request=0 read=0
+  jpeg_arena_peak=27840 arena_fail=0 task_stack_free=6292
+  vmem pool=81920 current=79872 peak=79872 largest=2016 fail=0
+  mem ccm=449/1000 ex=226/1000
+Return: 0, 0x00000000
+
+admin:/$ videostat
+Video stats:
+  state=PLAYING result=Video ready busy=1
+  phase=JPEG_DECODE age=28 loop=3860 cursor=0x0206E162 file=0x0206CA00
+  path=0:/AVI/High Equality Video.avi
+  video 320x240 frames=5329 fps=25.000 frame_us=40000
+  fourcc handler=MJPG compression=MJPG scale=1 rate=25
+  audio has=1 pcm=1 rate=22050 ch=2 bits=16 align=4 avg=88200
+  chunks video=1343 audio=2517 decoded=1109 displayed=1109 dropped=233 jpeg_err=0
+  chunk type=0 fourcc=00dc off=0x02068918 size=22601
+  progress parser=28 video=28 audio=29 display=30 ticks
+  control position=227/1000 volume=100 seek=0 failed=0
+  timing jpeg_max=69 lcd_wait=2115 lcd_wait_max=2 lcd_dma_timeout=0
+  pcm in=4735924 out_frames=1185489 fifo=3296/24576 peak=26280 underrun=17
+  queue video=0 audio=0 deadline_frames=1183644
+  pending off=0x02068910 remain=0 end=0x02068910 age=0 fifo_free=29472 waits=0
+  audio chunk=1884 max=1884 run=0/0 max_run=2/3764
+  clock epoch=0 played=1185489 media=1182099 replay=0 silence=3390 delta=1845 dma_age=4
+  drop late=227 oversize=0 prebuffer=6 consecutive=0 max=1
+  audio dma=2241 half=1121 full=1120 collide=0 late=0
+  audio refill=2241 missed=0 qpeak=1 media=1182099 replay=0 silence=3390
+  audio udr=0 dma_err=0 i2s_err=0 last_err=0x00000000 last_sr=0x00000000
+  io read_calls=5818 read_bytes=27317633 read_err=0 eoi=0
+  io active owner=JPEG op=READ age=0 off=0x0206C918 request=6217
+  io ticks parser=1/1/0 pcm=0/2/0 (last/max/slow)
+  io ticks jpeg=2/5/0 video=0/1/0 (last/max/slow)
+  avi err=0 off=0x00000000 fourcc=.... size=0 index_skip=0 oversize=0 pcm_tail=0
+  avi retry=0 resync=0 from=0x00000000 to=0x00000000 pcm_result=0
+  pcm fatfs op=0 fr=0 off=0x00000000 request=0 read=0
+  jpeg_arena_peak=27840 arena_fail=0 task_stack_free=6292
+  vmem pool=81920 current=79872 peak=79872 largest=2016 fail=0
+  mem ccm=449/1000 ex=226/1000
+Return: 0, 0x00000000
+
+admin:/$ videostat
+Video stats:
+  state=PLAYING result=Video ready busy=1
+  phase=JPEG_DECODE age=30 loop=4369 cursor=0x0257B1B0 file=0x02579200
+  path=0:/AVI/High Equality Video.avi
+  video 320x240 frames=5329 fps=25.000 frame_us=40000
+  fourcc handler=MJPG compression=MJPG scale=1 rate=25
+  audio has=1 pcm=1 rate=22050 ch=2 bits=16 align=4 avg=88200
+  chunks video=1520 audio=2849 decoded=1226 displayed=1226 dropped=293 jpeg_err=0
+  chunk type=0 fourcc=00dc off=0x02575080 size=24879
+  progress parser=30 video=30 audio=31 display=32 ticks
+  control position=262/1000 volume=100 seek=0 failed=0
+  timing jpeg_max=273 lcd_wait=2319 lcd_wait_max=2 lcd_dma_timeout=0
+  pcm in=5360616 out_frames=1341015 fifo=25548/24576 peak=30708 underrun=27
+  queue video=0 audio=0 deadline_frames=1339758
+  pending off=0x02575078 remain=0 end=0x02575078 age=0 fifo_free=7220 waits=0
+  audio chunk=1884 max=1884 run=0/0 max_run=2/3764
+  clock epoch=0 played=1341015 media=1332709 replay=0 silence=8306 delta=1257 dma_age=3
+  drop late=287 oversize=0 prebuffer=6 consecutive=0 max=8
+  audio dma=2535 half=1268 full=1267 collide=0 late=0
+  audio refill=2535 missed=0 qpeak=1 media=1332709 replay=0 silence=8306
+  audio udr=0 dma_err=0 i2s_err=0 last_err=0x00000000 last_sr=0x00000000
+  io read_calls=6575 read_bytes=30967901 read_err=0 eoi=0
+  io active owner=JPEG op=READ age=0 off=0x02579080 request=8192
+  io ticks parser=0/1/0 pcm=1/49/5 (last/max/slow)
+  io ticks jpeg=2/165/14 video=0/1/0 (last/max/slow)
+  avi err=0 off=0x00000000 fourcc=.... size=0 index_skip=0 oversize=0 pcm_tail=0
+  avi retry=0 resync=0 from=0x00000000 to=0x00000000 pcm_result=0
+  pcm fatfs op=0 fr=0 off=0x00000000 request=0 read=0
+  jpeg_arena_peak=27840 arena_fail=0 task_stack_free=6292
+  vmem pool=81920 current=79872 peak=79872 largest=2016 fail=0
+  mem ccm=449/1000 ex=226/1000
+Return: 0, 0x00000000
+
+建议使用流程图
+其他可自行补充

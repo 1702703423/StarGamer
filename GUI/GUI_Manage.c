@@ -105,9 +105,7 @@ static int Page_LoadFallback(void)
 		s_fallback_screen = lv_obj_create(NULL);
 		if (s_fallback_screen != NULL)
 		{
-			lv_obj_clear_flag(s_fallback_screen, LV_OBJ_FLAG_SCROLLABLE);
-			lv_obj_set_style_bg_color(s_fallback_screen, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
-			lv_obj_set_style_bg_opa(s_fallback_screen, LV_OPA_COVER, 0);
+			GUI_M3_ApplyScreen(s_fallback_screen);
 		}
 	}
 
@@ -373,7 +371,7 @@ int Page_Back(void)
 		return OPERATE_FAILED;
 	}
 
-	return Page_Load(fallback_page, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 120U, 0U, 1U, 0U);
+	return Page_Load(fallback_page, LV_SCR_LOAD_ANIM_MOVE_RIGHT, GUI_M3_MOTION_PAGE, 0U, 1U, 0U);
 }
 
 int Page_SetCallBack(Page_ID_t id, PageCallBack callback)

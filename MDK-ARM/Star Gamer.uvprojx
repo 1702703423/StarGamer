@@ -4740,6 +4740,16 @@
               <FileType>5</FileType>
               <FilePath>..\GUI\GUI_Theme.h</FilePath>
             </File>
+            <File>
+              <FileName>lv_font_md_icon_20.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\lv_font_md_icon_20.c</FilePath>
+            </File>
+            <File>
+              <FileName>lv_font_md_icon_28.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\GUI\lv_font_md_icon_28.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

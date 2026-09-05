@@ -14,13 +14,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#define GUI_IMAGE_ACCENT             0x8E24AAU
 #define GUI_IMAGE_MAX_W              320U
 #define GUI_IMAGE_MAX_H              240U
 #define GUI_IMAGE_SCREEN_W           320
 #define GUI_IMAGE_SCREEN_H           240
-#define GUI_IMAGE_CLOSE_W            34
-#define GUI_IMAGE_CLOSE_H            26
+#define GUI_IMAGE_CLOSE_MARGIN       8
 #define GUI_IMAGE_STATUS_LEN         64U
 #define GUI_IMAGE_DECODE_STACK_SIZE  8192U
 #define GUI_IMAGE_CLEANUP_DELAY_TICKS 2U
@@ -155,7 +153,7 @@ int GUI_Image_Show(void)
 		}
 	}
 
-	return Page_Show_Anim(GUI_PAGE_IMAGE, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+	return Page_Show_Anim(GUI_PAGE_IMAGE, LV_SCR_LOAD_ANIM_MOVE_LEFT, GUI_M3_MOTION_PAGE, 0U);
 }
 
 static int GUI_Image_PageBuild(Page_Struct_t *page)
@@ -185,7 +183,7 @@ static int GUI_Image_PageBuild(Page_Struct_t *page)
 	config.status_text = "Image";
 	config.extensions = s_image_extensions;
 	config.extension_count = (u8)(sizeof(s_image_extensions) / sizeof(s_image_extensions[0]));
-	config.accent_color = GUI_IMAGE_ACCENT;
+	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
 	config.open = GUI_Image_OpenFile;
 	config.back = GUI_Image_Back;
 	config.user_data = context;
@@ -350,43 +348,27 @@ static void GUI_Image_CreateViewer(GUI_ImageContext_t *context)
 		return;
 	}
 
+	/* MD3 full screen media surface hosting the decoded picture. */
 	context->viewer = lv_obj_create(context->file_manage.screen);
-	lv_obj_clear_flag(context->viewer, LV_OBJ_FLAG_SCROLLABLE);
+	GUI_M3_ApplyScreen(context->viewer);
 	lv_obj_add_flag(context->viewer, LV_OBJ_FLAG_CLICKABLE);
 	lv_obj_set_size(context->viewer, GUI_IMAGE_SCREEN_W, GUI_IMAGE_SCREEN_H);
 	lv_obj_set_pos(context->viewer, 0, 0);
-	lv_obj_set_style_radius(context->viewer, 0, 0);
-	lv_obj_set_style_border_width(context->viewer, 0, 0);
-	lv_obj_set_style_bg_color(context->viewer, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
-	lv_obj_set_style_bg_opa(context->viewer, LV_OPA_COVER, 0);
-	lv_obj_set_style_pad_all(context->viewer, 0, 0);
 
 	context->image = lv_img_create(context->viewer);
 	lv_obj_center(context->image);
 
-	context->close_btn = lv_btn_create(context->viewer);
-	lv_obj_clear_flag(context->close_btn, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(context->close_btn, GUI_IMAGE_CLOSE_W, GUI_IMAGE_CLOSE_H);
-	lv_obj_set_pos(context->close_btn, GUI_IMAGE_SCREEN_W - GUI_IMAGE_CLOSE_W - 6, 6);
-	lv_obj_set_style_radius(context->close_btn, 6, 0);
-	lv_obj_set_style_bg_color(context->close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
-	lv_obj_set_style_bg_color(context->close_btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_opa(context->close_btn, LV_OPA_80, 0);
-	lv_obj_set_style_border_width(context->close_btn, 0, 0);
-	lv_obj_set_style_border_width(context->close_btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(context->close_btn, lv_color_hex(GUI_IMAGE_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_width(context->close_btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_pad(context->close_btn, 1, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_color(context->close_btn, lv_color_hex(GUI_IMAGE_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_shadow_width(context->close_btn, 0, 0);
-	lv_obj_set_style_pad_all(context->close_btn, 0, 0);
-	lv_obj_add_event_cb(context->close_btn, GUI_Image_CloseEvent, LV_EVENT_CLICKED, context);
-	lv_obj_add_event_cb(context->close_btn, GUI_Image_CloseEvent, LV_EVENT_KEY, context);
-
-	context->close_icon = lv_label_create(context->close_btn);
-	lv_label_set_text(context->close_icon, LV_SYMBOL_CLOSE);
-	lv_obj_set_style_text_color(context->close_icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_center(context->close_icon);
+	/* MD3 tonal icon button floating over the media surface. */
+	context->close_btn = GUI_M3_CreateIconButton(context->viewer, GUI_ICON_CLOSE, GUI_M3_BUTTON_ICON_TONAL);
+	if (context->close_btn != NULL)
+	{
+		lv_obj_set_pos(context->close_btn,
+		               GUI_IMAGE_SCREEN_W - GUI_M3_ICON_BTN_SIZE - GUI_IMAGE_CLOSE_MARGIN,
+		               GUI_IMAGE_CLOSE_MARGIN);
+		lv_obj_add_event_cb(context->close_btn, GUI_Image_CloseEvent, LV_EVENT_CLICKED, context);
+		lv_obj_add_event_cb(context->close_btn, GUI_Image_CloseEvent, LV_EVENT_KEY, context);
+		context->close_icon = lv_obj_get_child(context->close_btn, 0);
+	}
 
 	lv_obj_add_flag(context->viewer, LV_OBJ_FLAG_HIDDEN);
 }

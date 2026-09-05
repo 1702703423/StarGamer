@@ -9,13 +9,24 @@
 #include <stdio.h>
 #include <string.h>
 
-#define GUI_TEXT_ACCENT                 0x546E7AU
 #define GUI_TEXT_IO_BUFFER_SIZE         2048U
 #define GUI_TEXT_RENDER_BUFFER_SIZE     8192U
 #define GUI_TEXT_HISTORY_DEPTH          16U
 #define GUI_TEXT_SCROLL_STEP            56
 #define GUI_TEXT_STATUS_LEN             80U
 #define GUI_TEXT_FALLBACK_UNICODE       0x53E3U
+
+/* MD3 viewer metrics: the top app bar owns y = 0 .. GUI_M3_APPBAR_H - 1. */
+#define GUI_TEXT_VIEWER_W               320
+#define GUI_TEXT_VIEWER_H               240
+#define GUI_TEXT_PANEL_X                10
+#define GUI_TEXT_PANEL_Y                (GUI_M3_APPBAR_H + 6)
+#define GUI_TEXT_PANEL_W                300
+#define GUI_TEXT_PANEL_H                162
+#define GUI_TEXT_LABEL_W                280
+#define GUI_TEXT_STATUS_X               12
+#define GUI_TEXT_STATUS_Y               216
+#define GUI_TEXT_STATUS_W               296
 
 #define GUI_TEXT_READ_OK                0U
 #define GUI_TEXT_READ_EOF               1U
@@ -87,7 +98,7 @@ static GUI_TextContext_t *GUI_Text_GetContext(void);
 static int GUI_Text_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem_t *item, void *user_data);
 static int GUI_Text_Back(GUI_FileManage_t *manager, void *user_data);
 static void GUI_Text_CreateViewer(GUI_TextContext_t *context);
-static lv_obj_t *GUI_Text_CreateIconButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb, GUI_TextContext_t *context);
+static void GUI_Text_StylePagingButton(lv_obj_t *btn);
 static void GUI_Text_BackEvent(lv_event_t *event);
 static void GUI_Text_PrevEvent(lv_event_t *event);
 static void GUI_Text_NextEvent(lv_event_t *event);
@@ -166,7 +177,7 @@ int GUI_Text_Show(void)
 		}
 	}
 
-	return Page_Show_Anim(GUI_PAGE_TEXT, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+	return Page_Show_Anim(GUI_PAGE_TEXT, LV_SCR_LOAD_ANIM_MOVE_LEFT, GUI_M3_MOTION_PAGE, 0U);
 }
 
 static int GUI_Text_PageBuild(Page_Struct_t *page)
@@ -195,7 +206,7 @@ static int GUI_Text_PageBuild(Page_Struct_t *page)
 	config.status_text = "Text";
 	config.extensions = s_text_extensions;
 	config.extension_count = (u8)(sizeof(s_text_extensions) / sizeof(s_text_extensions[0]));
-	config.accent_color = GUI_TEXT_ACCENT;
+	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
 	config.open = GUI_Text_OpenFile;
 	config.back = GUI_Text_Back;
 	config.user_data = context;
@@ -299,53 +310,37 @@ static int GUI_Text_Back(GUI_FileManage_t *manager, void *user_data)
 
 static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 {
-	lv_obj_t *line;
+	lv_obj_t *bar;
 
 	if (context == NULL || context->page == NULL || context->page->screen == NULL)
 	{
 		return;
 	}
 
+	/* MD3 full screen reading surface stacked over the file browser. */
 	context->viewer = lv_obj_create(context->page->screen);
 	if (context->viewer == NULL)
 	{
 		return;
 	}
-	lv_obj_clear_flag(context->viewer, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(context->viewer, 320, 240);
+	GUI_M3_ApplyScreen(context->viewer);
+	lv_obj_set_size(context->viewer, GUI_TEXT_VIEWER_W, GUI_TEXT_VIEWER_H);
 	lv_obj_set_pos(context->viewer, 0, 0);
-	lv_obj_set_style_radius(context->viewer, 0, 0);
-	lv_obj_set_style_border_width(context->viewer, 0, 0);
-	lv_obj_set_style_bg_color(context->viewer, GUI_Theme_LvColor(GUI_THEME_COLOR_SCREEN_BG), 0);
-	lv_obj_set_style_bg_opa(context->viewer, LV_OPA_COVER, 0);
-	lv_obj_set_style_pad_all(context->viewer, 0, 0);
 
-	context->back_btn = GUI_Text_CreateIconButton(context->viewer, LV_SYMBOL_LEFT, 8, GUI_Text_BackEvent, context);
-	context->prev_btn = GUI_Text_CreateIconButton(context->viewer, LV_SYMBOL_UP, 232, GUI_Text_PrevEvent, context);
-	context->next_btn = GUI_Text_CreateIconButton(context->viewer, LV_SYMBOL_DOWN, 274, GUI_Text_NextEvent, context);
+	/* MD3 top app bar: navigation icon plus the paging actions. */
+	bar = GUI_M3_CreateTopAppBar(context->viewer, "Text");
+	context->back_btn = GUI_M3_AppBarSetNav(bar, GUI_ICON_ARROW_BACK, GUI_Text_BackEvent, context);
+	context->prev_btn = GUI_M3_AppBarAddAction(bar, GUI_ICON_ARROW_UPWARD, GUI_Text_PrevEvent, context);
+	context->next_btn = GUI_M3_AppBarAddAction(bar, GUI_ICON_EXPAND_MORE, GUI_Text_NextEvent, context);
+	GUI_Text_StylePagingButton(context->prev_btn);
+	GUI_Text_StylePagingButton(context->next_btn);
 
-	context->title_label = lv_label_create(context->viewer);
+	/* The app bar title doubles as the file name label (CJK capable font). */
+	context->title_label = GUI_M3_AppBarGetTitle(bar);
 	if (context->title_label == NULL)
 	{
 		return;
 	}
-	lv_label_set_long_mode(context->title_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(context->title_label, 170);
-	lv_obj_set_pos(context->title_label, 52, 10);
-	lv_obj_set_style_text_color(context->title_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-
-	line = lv_obj_create(context->viewer);
-	if (line == NULL)
-	{
-		return;
-	}
-	lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(line, 296, 1);
-	lv_obj_set_pos(line, 12, 36);
-	lv_obj_set_style_radius(line, 0, 0);
-	lv_obj_set_style_border_width(line, 0, 0);
-	lv_obj_set_style_bg_color(line, GUI_Theme_LvColor(GUI_THEME_COLOR_HEADER_LINE), 0);
-	lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
 
 	context->text_panel = lv_obj_create(context->viewer);
 	if (context->text_panel == NULL)
@@ -353,21 +348,16 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 		return;
 	}
 	lv_obj_add_flag(context->text_panel, LV_OBJ_FLAG_CLICKABLE);
-	lv_obj_set_size(context->text_panel, 300, 166);
-	lv_obj_set_pos(context->text_panel, 10, 42);
+	lv_obj_set_size(context->text_panel, GUI_TEXT_PANEL_W, GUI_TEXT_PANEL_H);
+	lv_obj_set_pos(context->text_panel, GUI_TEXT_PANEL_X, GUI_TEXT_PANEL_Y);
 	lv_obj_set_scroll_dir(context->text_panel, LV_DIR_VER);
 	lv_obj_set_scrollbar_mode(context->text_panel, LV_SCROLLBAR_MODE_AUTO);
-	lv_obj_set_style_radius(context->text_panel, 6, 0);
-	lv_obj_set_style_border_width(context->text_panel, 1, 0);
-	lv_obj_set_style_border_color(context->text_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_PANEL_BORDER), 0);
-	lv_obj_set_style_border_width(context->text_panel, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(context->text_panel, lv_color_hex(GUI_TEXT_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_width(context->text_panel, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_pad(context->text_panel, 1, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_color(context->text_panel, lv_color_hex(GUI_TEXT_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_bg_color(context->text_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_VIEWER_BG), 0);
-	lv_obj_set_style_bg_opa(context->text_panel, LV_OPA_COVER, 0);
-	lv_obj_set_style_pad_all(context->text_panel, 8, 0);
+	GUI_M3_StyleTextPanel(context->text_panel);
+	GUI_M3_ApplyFocusRing(context->text_panel, GUI_THEME_COLOR_PRIMARY);
+	lv_obj_set_style_bg_color(context->text_panel, GUI_Theme_LvColor(GUI_THEME_COLOR_OUTLINE), LV_PART_SCROLLBAR);
+	lv_obj_set_style_bg_opa(context->text_panel, LV_OPA_40, LV_PART_SCROLLBAR);
+	lv_obj_set_style_radius(context->text_panel, GUI_M3_RADIUS_FULL, LV_PART_SCROLLBAR);
+	lv_obj_set_style_width(context->text_panel, 4, LV_PART_SCROLLBAR);
 	lv_obj_add_event_cb(context->text_panel, GUI_Text_ViewerEvent, LV_EVENT_KEY, context);
 
 	context->text_label = lv_label_create(context->text_panel);
@@ -376,8 +366,8 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 		return;
 	}
 	lv_label_set_long_mode(context->text_label, LV_LABEL_LONG_WRAP);
-	lv_obj_set_width(context->text_label, 280);
-	lv_obj_set_style_text_color(context->text_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_NORMAL), 0);
+	lv_obj_set_width(context->text_label, GUI_TEXT_LABEL_W);
+	lv_obj_set_style_text_color(context->text_label, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE), 0);
 	lv_obj_set_style_text_line_space(context->text_label, 2, 0);
 	lv_label_set_text_static(context->text_label, "");
 
@@ -387,50 +377,25 @@ static void GUI_Text_CreateViewer(GUI_TextContext_t *context)
 		return;
 	}
 	lv_label_set_long_mode(context->status_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(context->status_label, 296);
-	lv_obj_set_pos(context->status_label, 12, 216);
-	lv_obj_set_style_text_color(context->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
+	lv_obj_set_width(context->status_label, GUI_TEXT_STATUS_W);
+	lv_obj_set_pos(context->status_label, GUI_TEXT_STATUS_X, GUI_TEXT_STATUS_Y);
+	lv_obj_set_style_text_color(context->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
 	lv_label_set_text(context->status_label, "");
 
 	lv_obj_add_flag(context->viewer, LV_OBJ_FLAG_HIDDEN);
 }
 
-static lv_obj_t *GUI_Text_CreateIconButton(lv_obj_t *parent, const char *symbol, lv_coord_t x, lv_event_cb_t cb, GUI_TextContext_t *context)
+/* MD3 disabled icon button: flat container, content dimmed to 38 %. */
+static void GUI_Text_StylePagingButton(lv_obj_t *btn)
 {
-	lv_obj_t *btn;
-	lv_obj_t *icon;
-
-	btn = lv_btn_create(parent);
 	if (btn == NULL)
 	{
-		return NULL;
+		return;
 	}
 
-	lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_size(btn, 36, 28);
-	lv_obj_set_pos(btn, x, 5);
-	lv_obj_set_style_radius(btn, 8, 0);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG), 0);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_TOOL_BG_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_bg_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ROW_BG_DISABLED), LV_STATE_DISABLED);
-	lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-	lv_obj_set_style_border_width(btn, 0, 0);
-	lv_obj_set_style_border_width(btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_border_color(btn, lv_color_hex(GUI_TEXT_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_width(btn, 2, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_pad(btn, 1, LV_STATE_FOCUSED);
-	lv_obj_set_style_outline_color(btn, lv_color_hex(GUI_TEXT_ACCENT), LV_STATE_FOCUSED);
-	lv_obj_set_style_shadow_width(btn, 0, 0);
-	lv_obj_set_style_pad_all(btn, 0, 0);
-	lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, context);
-	lv_obj_add_event_cb(btn, cb, LV_EVENT_KEY, context);
-
-	icon = lv_label_create(btn);
-	lv_label_set_text(icon, symbol);
-	lv_obj_set_style_text_color(icon, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_PRIMARY), 0);
-	lv_obj_center(icon);
-
-	return btn;
+	lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_STATE_DISABLED);
+	lv_obj_set_style_text_opa(btn, GUI_M3_DISABLED_CONTENT_OPA, LV_STATE_DISABLED);
+	lv_obj_set_style_text_color(btn, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE), LV_STATE_DISABLED);
 }
 
 static void GUI_Text_BackEvent(lv_event_t *event)

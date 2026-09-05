@@ -3,6 +3,7 @@
 #include "Extern_API.h"
 #include "FreeRTOS.h"
 #include "GUI_FileManage.h"
+#include "GUI_Theme.h"
 #include "Malloc.h"
 #include "System_Status.h"
 #include "dl_lib.h"
@@ -12,7 +13,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define GUI_AXF_ACCENT                 0x00897BU
 #define GUI_AXF_LAUNCH_DELAY_MS        80U
 #define GUI_AXF_MONITOR_POLL_MS        10U
 #define GUI_AXF_EXIT_GRACE_MS          100U
@@ -155,7 +155,7 @@ int GUI_Axf_Show(void)
 	}
 
 	return Page_Show_Anim(GUI_PAGE_AXF_LOADER,
-	                      LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+	                      LV_SCR_LOAD_ANIM_MOVE_LEFT, GUI_M3_MOTION_PAGE, 0U);
 }
 
 static int GUI_Axf_PageBuild(Page_Struct_t *page)
@@ -182,7 +182,7 @@ static int GUI_Axf_PageBuild(Page_Struct_t *page)
 	config.extensions = s_axf_extensions;
 	config.extension_count = (u8)(sizeof(s_axf_extensions) /
 	                              sizeof(s_axf_extensions[0]));
-	config.accent_color = GUI_AXF_ACCENT;
+	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
 	config.open = GUI_Axf_OpenFile;
 	config.back = GUI_Axf_Back;
 	config.user_data = context;

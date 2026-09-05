@@ -27,7 +27,7 @@ Star Gamer 首版播放器建议明确限定为：
 5. 播放开始时通过现有 `lvgl_stop_ui()` 取得 LCD/SPI1 所有权，结束后通过 `lvgl_start_ui()` 恢复 GUI。
 6. 有音频时以已播放 PCM sample 数作为主时钟；无音频时使用 RTOS tick 的绝对时间点调度视频。
 7. 视频落后时只丢视频帧，不丢音频数据，也不通过加速音频追赶。
-8. VideoTask 使用主 SRAM 的 64 KB任务栈专区；`FIL`、AVI 上下文、source 和 LCD DMA 条带使用 `0x20006000..0x2000FFFF` 的 40 KB片上视频池；LibJPEG 控制对象和 38 KB arena 使用 CCM；PCM FIFO、I/O 缓冲和 I2S DMA 双缓冲使用 `SRAMEX`。
+8. 视频任务栈、FatFs/JPEG 对象和 LCD DMA 条带使用片上 SRAM `0x2000C000..0x2001FFFF` 的 80 KB 对齐内存池；32 KB PCM FIFO、4 KB PCM I/O 缓冲和 I2S DMA 双缓冲使用 DMA 可访问的 `SRAMEX`，绝不放入 CCM。
 
 该方案适合 STM32F407ZGT6、SPI LCD 和现有 1 MB 外部 SRAM 的资源条件。实际可稳定达到的帧率和 JPEG 质量必须在真机上测量后确定，首版不应预先承诺 25/30 fps。
 
@@ -227,7 +227,7 @@ void LCD_StreamEnd(void);
 - JPEG 解码输出可写入 RGB565 显示链路。
 - 使用 `JDCT_IFAST`。
 - 关闭 fancy upsampling 以降低 CPU 开销。
-- LibJPEG 的默认 `JMALLOC/JFREE` 映射到 `SRAMEX`。视频实例通过 `client_data` 安装专用 provider，其 context/error/provider 和 38 KB arena 从 `SRAMCCM` 分配；图片查看器等其他实例仍保持原分配路径。
+- LibJPEG 的默认 `JMALLOC/JFREE` 映射到 `SRAMEX`，视频实例通过 `client_data` 安装专用 provider，独占使用 `Video_Memory`；图片查看器等其他实例仍保持原分配路径。
 
 AVI MJPEG 可复用这些配置，但不能直接使用“读到 JPEG 文件 EOF”的普通 source。每个 MJPEG chunk 都是同一 AVI 文件中的一个有界 JPEG 数据段，因此必须新增带剩余长度的 source manager。
 
@@ -254,7 +254,7 @@ FatFs 已启用 `_FS_REENTRANT=1`，同一卷访问受 CMSIS mutex 保护。但�
 - 播放期间应避免其他高流量 SD 卡操作。
 - 每次读取应尽量使用连续、适度大小的块，减少小块 I/O。
 
-`FIL` 内含 sector cache，该缓存可能直接成为 SDIO DMA 目标。因此 `FIL` 和所有 FatFs DMA 可达对象必须放在 DMA 可访问的片上 SRAM 视频池中，不能放入任务栈或 CCM。
+`FIL` 内含 sector cache，该缓存可能直接成为 SDIO DMA 目标。因此 `FIL` 和所有 FatFs DMA 可达对象必须放在 DMA 可访问的片上 SRAM 视频池中，不能放在线程 CCM 栈上。
 
 ### 3.6 RTOS 和内存分配
 
@@ -262,9 +262,9 @@ FatFs 已启用 `_FS_REENTRANT=1`，同一卷访问受 CMSIS mutex 保护。但�
 
 - 使用 CMSIS-RTOS V2。
 - 使用静态 TCB。
-- 使用预分配 TCB，并通过 `sys_thread_stack_alloc()` 从主 SRAM 任务栈专区分配栈。
+- 使用预分配 TCB，并从 `Video_Memory` 分配 32 字节对齐任务栈。
 - 不直接调用原生 FreeRTOS API。
-- 视频的 `FIL`、控制对象、source 和 DMA 缓冲使用 `Video_Memory_Alloc()`；LibJPEG CPU-only 工作区使用 `SRAMCCM`；任务栈使用 `sys_thread_stack_alloc()`。禁止回退到原生 `malloc()`。
+- 视频的控制对象、codec 工作区和 DMA 缓冲统一使用 `Video_Memory_Alloc()`，禁止调用 `sys_malloc()`、`sys_thread_stack_alloc()` 或原生 `malloc()`。
 
 STM32F407 没有 D-cache，因此不需要 cache clean/invalidate；但 DMA 控制器完全不能访问 CCM，这一点必须通过分配边界保证。
 
@@ -409,7 +409,7 @@ u8 pcm_opened;
 - 文件位置在多个任务间同步。
 - seek 时跨任务清空状态。
 
-建议任务优先级从 `osPriorityAboveNormal` 起步，不能高于关键 DMA/系统服务所需优先级。任务栈初始建议 8 KB，统一从主 SRAM 任务栈专区分配，最终值必须由栈高水位测量决定。
+建议任务优先级从 `osPriorityAboveNormal` 起步，不能高于关键 DMA/系统服务所需优先级。任务栈初始建议 8 KB CCM，最终值必须由栈高水位测量决定。
 
 ### 5.3 ISR 规则
 
@@ -442,7 +442,7 @@ ISR 中禁止：
 7. 释放所有视频池临时块；播放器和 GUI 的常驻上下文保留到系统复位。
 8. 释放 LCD 所有权并调用 `lvgl_start_ui()`。
 9. 设置最终结果和 `IDLE` 状态。
-10. GUI 确认任务结束后再延迟释放静态 TCB 对象和任务栈专区中的动态栈。
+10. GUI 确认任务结束后再延迟释放静态 TCB 对象和 CCM 栈。
 
 如果 `lvgl_stop_ui()` 失败或超时，播放器应中止启动，不能强行操作 LCD。
 
@@ -721,7 +721,7 @@ LCD DMA 完成由 ISR 释放静态 CMSIS-RTOS 信号量。视频任务追上 DMA
 
 PCM 不需要 codec，但每个 `##wb` payload 必须独立通过 RIFF 边界验证。`Video_PCM_ReadChunkPart()` 每次最多读取 4 KB，读取长度向 `nBlockAlign` 对齐，再写入 32 KB FIFO；chunk 的 RIFF padding 不进入 FIFO。若 chunk payload 不是块对齐整数倍，播放器只播放有效前缀并丢弃尾部 1 至 3 字节，同时累计 `pcm_tail_bytes_dropped`，避免少量尾字节把整个容器误判为损坏。
 
-FIFO 和 I/O 缓冲均由 `sys_malloc(SRAMEX, ...)` 分配。它们不占用 40 KB片上视频池，也不会落入 DMA 不可访问的 CCM。PCM FIFO 是单生产者、单消费者模型：视频任务写入，音频 feed 线程读出；`in/out` 发布点使用 `volatile` 和 `__DMB()`，保证先拷贝数据、再发布长度，先读到长度、再读取数据。
+FIFO 和 I/O 缓冲均由 `sys_malloc(SRAMEX, ...)` 分配。它们不占用 80 KB 片上视频池，也不会落入 DMA 不可访问的 CCM。PCM FIFO 是单生产者、单消费者模型：视频任务写入，音频 feed 线程读出；`in/out` 发布点使用 `volatile` 和 `__DMB()`，保证先拷贝数据、再发布长度，先读到长度、再读取数据。
 
 ### 8.2 I2S 输出
 
@@ -883,18 +883,16 @@ MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧；PCM
 
 | 区域 | 条件 |
 |---|---|
-| CCM JPEG 堆 | `0x10000000..0x1000EFFF`，60 KB，只能由 CPU 访问，禁止 DMA |
-| CCM 分配表 | `0x1000F000..0x1000FFFF`，4 KB |
-| 普通片上 SRAM | `0x20000000..0x20005FFF`，24 KB，供普通 RW/ZI 使用 |
-| 视频独占片上 SRAM | `0x20006000..0x2000FFFF`，40 KB，32 字节对齐、DMA 可访问 |
-| 任务栈专区 | `0x20010000..0x2001FFFF`，64 KB（4 KB defaultTask + 60 KB动态池） |
+| CCM | 64 KB，只能由 CPU 访问，禁止 DMA |
+| 普通片上 SRAM | `0x20000000..0x2000BFFF`，48 KB，供普通 RW/ZI 使用 |
+| 视频独占片上 SRAM | `0x2000C000..0x2001FFFF`，80 KB，32 字节对齐、DMA 可访问 |
 | 外部 SRAM | 1 MB，地址 `0x68000000` |
 | `SRAMEX` 分配数据区 | 960 KB |
 | `SRAMEX` 分配映射表 | 约 60 KB |
 | 预留/guard | 约 4 KB |
 | LVGL 全屏帧缓冲 | 153600 B |
 
-视频池和任务栈专区均由 scatter 文件固定隔离。普通 RW/ZI 超过 24 KB、视频池超过 40 KB、任务栈区超过 64 KB或 CCM map 超过 4 KB时，链接器会直接报错。
+视频池由 scatter 文件固定隔离，不占 CCM，也不进入外部 SRAM 的 `sys_malloc` 管理范围。普通 RW/ZI 当前约占 46 KB，链接器会在其超过 48 KB 时直接报错，防止静默侵入视频池。
 
 ### 10.2 首版新增工作缓冲建议
 
@@ -904,13 +902,13 @@ MJPEG 每帧都是独立 JPEG，通常可视作可随机进入的视频帧；PCM
 | AVI/JPEG source I/O 缓冲 | 8 KB | 视频池 | 32 字节对齐，按读取次数和丢帧率实测调整 |
 | RGB565 双 8 行条带 | 10 KB | 视频池 | SPI DMA 源，减少 DMA 提交次数 |
 | RGB888 扫描行 | 960 B | 视频池 | 320 像素、RGB888 |
-| LibJPEG 临时工作区 | 38 KB arena + 控制对象 | CCM | 通过 per-instance provider 自动回收，禁止 DMA |
+| LibJPEG 临时工作区 | 约 38 KB 预算 | 视频池 | 通过 per-instance provider 自动回收 |
 | 命令/路径/统计 | 包含在上下文 | 视频池 | 路径采用固定上限 |
-| VideoTask 栈 | 8 KB | 任务栈专区 | 8 字节对齐，由高水位决定最终值 |
+| VideoTask 栈 | 8 KB | 视频池 | 32 字节对齐，由高水位决定最终值 |
 | PCM FIFO | 32 KB | SRAMEX | demux 前瞻和 JPEG/SDIO 抖动缓冲 |
 | PCM I/O 缓冲 | 4 KB | SRAMEX | FatFs 分段读取及 I2S 半缓冲填充 |
 
-池采用 32 字节对齐、地址有序的一次适配分配器，释放时前后合并。40 KB 是硬上限，分配失败会返回 `VIDEO_RESULT_NO_MEMORY`，不会回退到系统堆。LibJPEG arena 已迁出，因此典型峰值约 37 KB，仍需用多素材真机验证余量。
+池采用 32 字节对齐、地址有序的一次适配分配器，释放时前后合并。80 KB 是硬上限，分配失败会返回 `VIDEO_RESULT_NO_MEMORY`，不会回退到系统堆。
 
 ### 10.3 必须真机测量的峰值
 

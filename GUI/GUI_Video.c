@@ -1,13 +1,13 @@
 #include "GUI_Video.h"
 
 #include "GUI_FileManage.h"
+#include "GUI_Theme.h"
 #include "System_Status.h"
 #include "Video.h"
 #include "Video_Memory.h"
 
 #include <string.h>
 
-#define GUI_VIDEO_ACCENT    0xD81B60U
 #define GUI_VIDEO_POLL_MS   100U
 
 typedef struct GUI_VideoContext
@@ -66,7 +66,8 @@ int GUI_Video_Show(void)
 			return code;
 		}
 	}
-	return Page_Show_Anim(GUI_PAGE_VIDEO, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+	return Page_Show_Anim(GUI_PAGE_VIDEO, LV_SCR_LOAD_ANIM_MOVE_LEFT,
+	                      GUI_M3_MOTION_PAGE, 0U);
 }
 
 static int GUI_Video_PageBuild(Page_Struct_t *page)
@@ -94,7 +95,7 @@ static int GUI_Video_PageBuild(Page_Struct_t *page)
 	config.extensions = s_video_extensions;
 	config.extension_count = (u8)(sizeof(s_video_extensions) /
 	                              sizeof(s_video_extensions[0]));
-	config.accent_color = GUI_VIDEO_ACCENT;
+	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
 	config.open = GUI_Video_OpenFile;
 	config.back = GUI_Video_Back;
 	config.user_data = context;

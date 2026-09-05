@@ -11,7 +11,6 @@
 #include "shell_support.h"
 #include "ccm_memory.h"
 #include "Malloc.h"
-#include "Video_Memory.h"
 
 extern Shell shell;
 
@@ -422,110 +421,57 @@ hexdump, shellHexdump, hexdump <addr> <len>);
 
 extern volatile uint32_t cpu_idle_ticks;
 
-static u32 shell_percent_x10(u32 used, u32 total)
-{
-	if(total == 0U)
-	{
-		return 0U;
-	}
-	return (used * 1000U) / total;
-}
-
 int shellSysStats(int argc, char *argv[])
 {
-	u32 idle_start;
-	u32 idle_end;
-	u32 idle_delta;
-	u32 elapsed_ticks;
-	u32 cpu_used_x10;
-	u32 heap_free;
-	u32 heap_total;
-	u32 ccm_used_bytes;
-	u32 ext_used_bytes;
-	u32 stack_occupied;
-	u32 stack_used_x10;
-	mem_frag_info_t ccm_frag;
-	mem_frag_info_t ext_frag;
-	thread_stack_stats_t stack_stats;
-	Video_MemoryStats_t video_stats;
+	uint32_t idle_start, idle_end, idle_delta, elapsed_ticks, cpu_used_x10;
+	uint16_t ccm_used, sram_used;
+	uint32_t heap_free, heap_total;
 	TickType_t delay_ticks;
 	(void)argc;
 	(void)argv;
 
+	/* ---- CPU usage via 200ms idle sampling ---- */
 	delay_ticks = pdMS_TO_TICKS(200);
-	if(delay_ticks == 0U)
-	{
-		delay_ticks = 1U;
-	}
+	if (delay_ticks == 0) delay_ticks = 1;
 	idle_start = cpu_idle_ticks;
 	elapsed_ticks = xTaskGetTickCount();
 	vTaskDelay(delay_ticks);
 	idle_end = cpu_idle_ticks;
 	elapsed_ticks = xTaskGetTickCount() - elapsed_ticks;
 
-	if(elapsed_ticks == 0U)
-	{
-		elapsed_ticks = delay_ticks;
-	}
+	if (elapsed_ticks == 0) elapsed_ticks = delay_ticks;
 	idle_delta = idle_end - idle_start;
-	if(idle_delta > elapsed_ticks)
-	{
-		idle_delta = elapsed_ticks;
-	}
-	cpu_used_x10 = 1000U - (idle_delta * 1000U / elapsed_ticks);
-	if(cpu_used_x10 > 1000U)
-	{
-		cpu_used_x10 = 1000U;
-	}
+	if (idle_delta > elapsed_ticks) idle_delta = elapsed_ticks;
+	cpu_used_x10 = 1000 - (idle_delta * 1000 / elapsed_ticks);
 
-	sys_mem_frag_info(SRAMCCM, &ccm_frag);
-	sys_mem_frag_info(SRAMEX, &ext_frag);
-	sys_thread_stack_get_stats(&stack_stats);
-	Video_Memory_GetStats(&video_stats);
-	ccm_used_bytes = ccm_frag.used_blocks * ccm_frag.block_size;
-	ext_used_bytes = ext_frag.used_blocks * ext_frag.block_size;
-	stack_occupied = stack_stats.fixed_bytes + stack_stats.dynamic_used_bytes;
-	stack_used_x10 = shell_percent_x10(stack_occupied, stack_stats.region_size);
+	if (cpu_used_x10 > 1000) cpu_used_x10 = 1000;
 
+	/* ---- SRAM usage ---- */
+	ccm_used  = sys_mem_perused(SRAMCCM);   /* 0-1000, 0.0%-100.0% */
+	sram_used = sys_mem_perused(SRAMEX);    /* external 1MB SRAM */
+
+	/* ---- FreeRTOS heap ---- */
 	heap_free = xPortGetFreeHeapSize();
 	heap_total = configTOTAL_HEAP_SIZE;
 
 	shellPrintEndLine(&shell, "\n===== System Stats =====\n");
 	shellPrintEndLine(&shell, "CPU Usage:       %lu.%lu%%\n",
-	                  cpu_used_x10 / 10U, cpu_used_x10 % 10U);
-	shellPrintEndLine(&shell, "\n--- Internal SRAM Layout ---\n");
-	shellPrintEndLine(&shell,
-	                  "RW/ZI cap: 24 KB | Video heap: 40 KB | Task region: 64 KB\n");
-	shellPrintEndLine(&shell,
-	                  "Task stacks:     %lu.%lu%% occupied (%lu/%lu KB, %lu KB free)\n",
-	                  stack_used_x10 / 10U, stack_used_x10 % 10U,
-	                  stack_occupied / 1024U, stack_stats.region_size / 1024U,
-	                  stack_stats.free_bytes / 1024U);
-	shellPrintEndLine(&shell,
-	                  "  dynamic:       %lu/%lu KB used, largest free %lu KB, fixed reserve %lu KB\n",
-	                  stack_stats.dynamic_used_bytes / 1024U,
-	                  stack_stats.dynamic_pool_size / 1024U,
-	                  stack_stats.largest_free_block / 1024U,
-	                  stack_stats.fixed_bytes / 1024U);
-	shellPrintEndLine(&shell,
-	                  "CCM JPEG heap:   %lu/%lu KB used (%lu KB free)\n",
-	                  ccm_used_bytes / 1024U, (u32)CCM_HEAP_SIZE_KB,
-	                  (ccm_frag.free_blocks * ccm_frag.block_size) / 1024U);
-	shellPrintEndLine(&shell,
-	                  "Video fast heap: %lu/%lu KB current, %lu KB peak, %lu KB free\n",
-	                  video_stats.current_bytes / 1024U,
-	                  video_stats.pool_size / 1024U,
-	                  video_stats.peak_bytes / 1024U,
-	                  video_stats.free_bytes / 1024U);
-	shellPrintEndLine(&shell,
-	                  "External heap:   %lu/%lu KB used (%lu KB free)\n",
-	                  ext_used_bytes / 1024U, (u32)(MEM3_MAX_SIZE / 1024U),
-	                  (ext_frag.free_blocks * ext_frag.block_size) / 1024U);
+	                  cpu_used_x10 / 10, cpu_used_x10 % 10);
+	shellPrintEndLine(&shell, "\n--- SRAM ---\n");
+	shellPrintEndLine(&shell, "CCM heap (%luKB): %u.%u%% used (%lu/%lu KB free)\n",
+	                  (uint32_t)CCM_HEAP_SIZE_KB,
+	                  ccm_used / 10, ccm_used % 10,
+	                  (uint32_t)(CCM_HEAP_SIZE_KB - (CCM_HEAP_SIZE_KB * ccm_used / 1000)),
+	                  (uint32_t)CCM_HEAP_SIZE_KB);
+	shellPrintEndLine(&shell, "Ext (%luKB):     %u.%u%% used (%lu/%lu KB free)\n",
+	                  (uint32_t)(MEM3_MAX_SIZE / 1024U),
+	                  sram_used / 10, sram_used % 10,
+	                  (uint32_t)((MEM3_MAX_SIZE / 1024U) - ((MEM3_MAX_SIZE / 1024U) * sram_used / 1000U)),
+	                  (uint32_t)(MEM3_MAX_SIZE / 1024U));
 	shellPrintEndLine(&shell, "\n--- FreeRTOS Heap ---\n");
-	shellPrintEndLine(&shell,
-	                  "Heap:            %lu/%lu bytes free (%lu%% used)\n",
+	shellPrintEndLine(&shell, "Heap:            %lu/%lu bytes free (%lu%% used)\n",
 	                  heap_free, heap_total,
-	                  (heap_total - heap_free) * 100U / heap_total);
+	                  (heap_total - heap_free) * 100 / heap_total);
 	shellPrintEndLine(&shell, "========================\n");
 
 	return 0;
@@ -533,152 +479,122 @@ int shellSysStats(int argc, char *argv[])
 
 SHELL_EXPORT_CMD(
 SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_CMD_MAIN),
-sysstats, shellSysStats, show CPU and all memory-pool usage);
+sysstats, shellSysStats, show CPU and SRAM usage);
 
 /* ---- memfrag: memory fragmentation scanner ---- */
 static void shell_print_frag_info(const char *name, u8 memx)
 {
-	mem_frag_info_t info;
-	u32 used_pct_x10;
-	u32 frag_pct_x10;
-	u32 largest_bytes;
-	u32 total_bytes;
-	u32 i;
-	u32 chars_per_line = 64U;
-	u32 blocks_per_char;
-	u32 pos;
-	u32 used_in_group;
-	u32 group;
+    mem_frag_info_t info;
+    u32 used_pct_x10;
+    u32 frag_pct_x10;
+    u32 largest_bytes;
+    u32 total_bytes;
+    u32 i;
+    u32 chars_per_line = 64U;
+    u32 blocks_per_char;
+    u32 pos;
+    u32 used_in_group;
+    u32 group;
 
-	sys_mem_frag_info(memx, &info);
+    sys_mem_frag_info(memx, &info);
 
-	if(info.total_blocks == 0U)
-	{
-		shellPrintEndLine(&shell, "\n===== %s Pool =====\n", name);
-		shellPrintEndLine(&shell, "  (not initialized)\n");
-		return;
-	}
+    if (info.total_blocks == 0U)
+    {
+        shellPrintEndLine(&shell, "\n===== %s Pool =====\n", name);
+        shellPrintEndLine(&shell, "  (not initialized)\n");
+        return;
+    }
 
-	total_bytes = info.total_blocks * info.block_size;
-	largest_bytes = info.largest_free_blocks * info.block_size;
-	used_pct_x10 = shell_percent_x10(info.used_blocks, info.total_blocks);
-	frag_pct_x10 = (info.free_blocks > 0U)
-		? (1000U - (info.largest_free_blocks * 1000U / info.free_blocks)) : 0U;
+    total_bytes = info.total_blocks * info.block_size;
+    largest_bytes = info.largest_free_blocks * info.block_size;
 
-	shellPrintEndLine(&shell, "\n===== %s Pool =====\n", name);
-	shellPrintEndLine(&shell,
-		"Blocks:       %lu total, %lu used, %lu free (%lu.%lu%% used)\n",
-		info.total_blocks, info.used_blocks, info.free_blocks,
-		used_pct_x10 / 10U, used_pct_x10 % 10U);
-	shellPrintEndLine(&shell,
-		"Block size:   %lu B  |  Pool size: %lu KB\n",
-		info.block_size, total_bytes / 1024U);
-	shellPrintEndLine(&shell,
-		"Free holes:   %lu (%lu sandwiched fragments)\n",
-		info.hole_count, info.frag_count);
-	shellPrintEndLine(&shell,
-		"Largest free: %lu blocks (%lu.%02lu KB)\n",
-		info.largest_free_blocks, largest_bytes / 1024U,
-		(largest_bytes % 1024U) * 100U / 1024U);
-	shellPrintEndLine(&shell,
-		"Frag ratio:   %lu.%lu%%\n",
-		frag_pct_x10 / 10U, frag_pct_x10 % 10U);
+    used_pct_x10 = (info.total_blocks > 0U)
+        ? (info.used_blocks * 1000U / info.total_blocks) : 0U;
 
-	blocks_per_char = (info.total_blocks + chars_per_line - 1U) / chars_per_line;
-	if(blocks_per_char < 1U)
-	{
-		blocks_per_char = 1U;
-	}
-	shellPrintEndLine(&shell,
-		"Map [%lu blocks/char, #=used .=free -=mixed]:\n  ",
-		blocks_per_char);
+    /* Fragmentation ratio: 0 = no frag, 1000 = fully fragmented */
+    frag_pct_x10 = (info.free_blocks > 0U)
+        ? (1000U - (info.largest_free_blocks * 1000U / info.free_blocks)) : 0U;
 
-	pos = 0U;
-	for(i = 0U; i < info.total_blocks; i += blocks_per_char)
-	{
-		used_in_group = 0U;
-		for(group = 0U;
-		    group < blocks_per_char && (i + group) < info.total_blocks;
-		    group++)
-		{
-			if(mallco_dev.memmap[memx][i + group] != 0U)
-			{
-				used_in_group++;
-			}
-		}
+    shellPrintEndLine(&shell, "\n===== %s Pool =====\n", name);
+    shellPrintEndLine(&shell,
+        "Blocks:       %lu total, %lu used, %lu free (%lu.%lu%% used)\n",
+        info.total_blocks, info.used_blocks, info.free_blocks,
+        used_pct_x10 / 10U, used_pct_x10 % 10U);
+    shellPrintEndLine(&shell,
+        "Block size:   %lu B  |  Pool size: %lu KB\n",
+        info.block_size, total_bytes / 1024U);
+    shellPrintEndLine(&shell,
+        "Free holes:   %lu (%lu fragments, i.e. sandwiched free regions)\n",
+        info.hole_count, info.frag_count);
+    shellPrintEndLine(&shell,
+        "Largest free: %lu blocks (%lu.%02lu KB)\n",
+        info.largest_free_blocks,
+        largest_bytes / 1024U,
+        (largest_bytes % 1024U) * 100U / 1024U);
+    shellPrintEndLine(&shell,
+        "Frag ratio:   %lu.%lu%% (0%%=perfect, 100%%=fully scattered)\n",
+        frag_pct_x10 / 10U, frag_pct_x10 % 10U);
 
-		if(used_in_group == 0U)
-		{
-			shellWriteString(&shell, ".");
-		}
-		else if(used_in_group == group)
-		{
-			shellWriteString(&shell, "#");
-		}
-		else
-		{
-			shellWriteString(&shell, "-");
-		}
+    /* Visual fragmentation map (compressed to fit terminal width) */
+    blocks_per_char = (info.total_blocks + chars_per_line - 1U) / chars_per_line;
+    if (blocks_per_char < 1U) blocks_per_char = 1U;
 
-		pos++;
-		if(pos >= chars_per_line)
-		{
-			shellWriteString(&shell, "\n  ");
-			pos = 0U;
-		}
-	}
-	shellWriteString(&shell, "\n");
-}
+    shellPrintEndLine(&shell, "Map [.%lu blocks/char, #=used .=free -=mixed]:\n  ",
+                      blocks_per_char);
 
-static void shell_print_video_frag_info(void)
-{
-	Video_MemoryStats_t stats;
-	u32 used_pct_x10;
-	u32 frag_pct_x10;
+    pos = 0U;
+    for (i = 0U; i < info.total_blocks; i += blocks_per_char)
+    {
+        used_in_group = 0U;
+        for (group = 0U; group < blocks_per_char && (i + group) < info.total_blocks; group++)
+        {
+            if (mallco_dev.memmap[memx][i + group] != 0U)
+            {
+                used_in_group++;
+            }
+        }
 
-	Video_Memory_GetStats(&stats);
-	used_pct_x10 = shell_percent_x10(stats.current_bytes, stats.pool_size);
-	frag_pct_x10 = (stats.free_bytes > 0U)
-		? (1000U - (stats.largest_free_block * 1000U / stats.free_bytes)) : 0U;
+        if (used_in_group == 0U)
+            shellWriteString(&shell, ".");
+        else if (used_in_group == group)
+            shellWriteString(&shell, "#");
+        else
+            shellWriteString(&shell, "-");
 
-	shellPrintEndLine(&shell, "\n===== On-chip Video Fast Pool =====\n");
-	shellPrintEndLine(&shell,
-		"Usage:        %lu/%lu bytes (%lu.%lu%%), peak %lu, failures %lu\n",
-		stats.current_bytes, stats.pool_size,
-		used_pct_x10 / 10U, used_pct_x10 % 10U,
-		stats.peak_bytes, stats.allocation_failures);
-	shellPrintEndLine(&shell,
-		"Blocks:       %lu used allocations, %lu free holes\n",
-		stats.used_block_count, stats.free_block_count);
-	shellPrintEndLine(&shell,
-		"Free:         %lu bytes, largest %lu bytes\n",
-		stats.free_bytes, stats.largest_free_block);
-	shellPrintEndLine(&shell,
-		"Frag ratio:   %lu.%lu%%\n",
-		frag_pct_x10 / 10U, frag_pct_x10 % 10U);
+        pos++;
+        if (pos >= chars_per_line)
+        {
+            shellWriteString(&shell, "\n  ");
+            pos = 0U;
+        }
+    }
+    shellWriteString(&shell, "\n");
 }
 
 int shellMemFrag(int argc, char *argv[])
 {
-	(void)argc;
-	(void)argv;
+    (void)argc;
+    (void)argv;
 
-	shell_print_frag_info("Task stacks dynamic (60KB)", SRAMSTACK);
-	shell_print_frag_info("CCM JPEG (SRAMCCM)", SRAMCCM);
-	shell_print_video_frag_info();
-	shell_print_frag_info("External SRAM (SRAMEX)", SRAMEX);
+    /* CCM pool (SRAMCCM) */
+    shell_print_frag_info("CCM (SRAMCCM)", SRAMCCM);
 
-	shellPrintEndLine(&shell,
-		"\nTask region also contains a fixed 4KB CubeMX stack reserve.\n");
-	shellPrintEndLine(&shell,
-		"Frag ratio = 1 - (largest_free / total_free). Higher is worse.\n");
+    /* External SRAM pool (SRAMEX) */
+    shell_print_frag_info("External SRAM (SRAMEX)", SRAMEX);
 
-	return 0;
+    shellPrintEndLine(&shell,
+        "\nLegend: # = fully-used group, . = fully-free, - = mixed (fragmented)\n");
+    shellPrintEndLine(&shell,
+        "Frag ratio = 1 - (largest_free / total_free). Higher = more fragmented.\n");
+    shellPrintEndLine(&shell,
+        "Fragments = free holes trapped between used blocks (pattern: 101).\n");
+
+    return 0;
 }
 
 SHELL_EXPORT_CMD(
 SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_CMD_MAIN),
-memfrag, shellMemFrag, scan all memory pools for fragmentation);
+memfrag, shellMemFrag, scan memory fragmentation (101 pattern));
 
 #endif
 /***********************************************END*******************************************/

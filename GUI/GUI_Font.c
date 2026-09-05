@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define GUI_FONT_ACCENT                 0xF9A825U
 #define GUI_FONT_XBF_HEADER_SIZE        8U
 #define GUI_FONT_XBF_GLYPH_DSC_SIZE     6U
 #define GUI_FONT_IO_CHUNK_SIZE          4096U
@@ -174,7 +173,7 @@ int GUI_Font_Show(void)
 		}
 	}
 
-	return Page_Show_Anim(GUI_PAGE_FONT, LV_SCR_LOAD_ANIM_MOVE_LEFT, 120U, 0U);
+	return Page_Show_Anim(GUI_PAGE_FONT, LV_SCR_LOAD_ANIM_MOVE_LEFT, GUI_M3_MOTION_PAGE, 0U);
 }
 
 int GUI_Font_Uninstall(void)
@@ -268,7 +267,7 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 	config.status_text = "Fonts";
 	config.extensions = s_font_extensions;
 	config.extension_count = (u8)(sizeof(s_font_extensions) / sizeof(s_font_extensions[0]));
-	config.accent_color = GUI_FONT_ACCENT;
+	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
 	config.open = GUI_Font_OpenFile;
 	config.back = GUI_Font_Back;
 	config.user_data = context;
@@ -279,25 +278,22 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 		return code;
 	}
 
-	lv_obj_set_pos(context->file_manager.status_label, 12, 224);
+	lv_obj_set_pos(context->file_manager.status_label, 14, 224);
 
 	context->progress_bar = lv_bar_create(page->screen);
-	lv_obj_set_size(context->progress_bar, 236, 7);
-	lv_obj_set_pos(context->progress_bar, 12, 212);
+	lv_obj_set_size(context->progress_bar, 230, 6);
+	lv_obj_set_pos(context->progress_bar, 14, 213);
 	lv_bar_set_range(context->progress_bar, 0, 100);
 	lv_bar_set_value(context->progress_bar, 0, LV_ANIM_OFF);
-	lv_obj_set_style_radius(context->progress_bar, 2, 0);
-	lv_obj_set_style_bg_color(context->progress_bar, GUI_Theme_LvColor(GUI_THEME_COLOR_SLIDER_BG), 0);
-	lv_obj_set_style_bg_opa(context->progress_bar, LV_OPA_COVER, 0);
-	lv_obj_set_style_bg_color(context->progress_bar, lv_color_hex(GUI_FONT_ACCENT), LV_PART_INDICATOR);
-	lv_obj_set_style_bg_opa(context->progress_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+	GUI_M3_StyleBar(context->progress_bar);
 
 	context->progress_label = lv_label_create(page->screen);
 	lv_label_set_text(context->progress_label, "0%");
-	lv_obj_set_width(context->progress_label, 52);
-	lv_obj_set_pos(context->progress_label, 258, 207);
+	lv_obj_set_width(context->progress_label, 56);
+	lv_obj_set_pos(context->progress_label, 250, 206);
 	lv_obj_set_style_text_align(context->progress_label, LV_TEXT_ALIGN_RIGHT, 0);
-	lv_obj_set_style_text_color(context->progress_label, GUI_Theme_LvColor(GUI_THEME_COLOR_TEXT_SECONDARY), 0);
+	lv_obj_set_style_text_font(context->progress_label, GUI_M3_Font(GUI_M3_TYPE_LABEL), 0);
+	lv_obj_set_style_text_color(context->progress_label, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
 
 	context->timer = lv_timer_create(GUI_Font_Timer, 100U, context);
 	if (context->timer == NULL)

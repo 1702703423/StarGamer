@@ -248,7 +248,6 @@ u8 nes_load_rom(void)
 //释放内存 
 void nes_sram_free(void)
 { 
-	nes_ppu_lcd_buffer_free();
 	if(s_vrom_tiles_owned!=0U)sys_free(SRAMEX,VROM_tiles);
 	if(s_vrom_banks_owned!=0U)sys_free(SRAMEX,VROM_banks);
 	if(s_map1_owned!=0U)sys_free(SRAMEX,MAP1);
@@ -305,8 +304,7 @@ u8 nes_sram_malloc(u32 romsize)
 	apu=sys_malloc(SRAMEX,sizeof(apu_t));		//sizeof(apu_t)=  12588
 	wave_buffers=sys_malloc(SRAMEX,APU_PCMBUF_SIZE);
 
-	if(nes_ppu_lcd_buffer_alloc()!=0U||!NES_RAM||!NES_SRAM||!RomHeader||
-	   !NES_Mapper||!spr_ram||!ppu||!apu||!wave_buffers||!romfile)
+	if(!NES_RAM||!NES_SRAM||!RomHeader||!NES_Mapper||!spr_ram||!ppu||!apu||!wave_buffers||!romfile)
 	{
 		nes_sram_free();
 		return 1;
