@@ -2,8 +2,8 @@
 Build target 'Star Gamer'
 compiling GUI_Message.c...
 linking...
-Program Size: Code=625936 RO-data=292460 RW-data=1252 ZI-data=128164  
+Program Size: Code=625984 RO-data=292460 RW-data=1252 ZI-data=128164  
 FromELF: creating hex file...
 After Build - User command #1: fromelf.exe --bin -o "Star Gamer\Star Gamer.HEX.bin" "Star Gamer\Star Gamer.axf"
 "Star Gamer\Star Gamer.axf" - 0 Error(s), 0 Warning(s).
-Build Time Elapsed:  00:00:15
+Build Time Elapsed:  00:00:17

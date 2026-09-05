@@ -758,12 +758,34 @@ static void GUI_Message_DialogBtnEvent(lv_event_t *event)
 		GUI_Message_DialogClose((s_dialog.kind == (u8)GUI_MESSAGE_KIND_YESNO) ?
 		                        GUI_MESSAGE_RESULT_NO : GUI_MESSAGE_RESULT_CONFIRM);
 	}
-	else if (code == LV_EVENT_KEY && lv_event_get_key(event) == LV_KEY_ESC)
+	else if (code == LV_EVENT_KEY)
 	{
-		GUI_Message_DialogClose((s_dialog.kind == (u8)GUI_MESSAGE_KIND_YESNO) ?
-		                        GUI_MESSAGE_RESULT_NO : GUI_MESSAGE_RESULT_CONFIRM);
+		u32 key = lv_event_get_key(event);
+
+		if (key == LV_KEY_ESC)
+		{
+			GUI_Message_DialogClose((s_dialog.kind == (u8)GUI_MESSAGE_KIND_YESNO) ?
+			                        GUI_MESSAGE_RESULT_NO : GUI_MESSAGE_RESULT_CONFIRM);
+		}
+		else
+		{
+			/* Arrow keys move focus inside the dialog group; the group only
+			 * holds the dialog buttons, so focus cannot escape the dialog. */
+			lv_group_t *group = lv_obj_get_group(target);
+
+			if (group != NULL)
+			{
+				if (key == LV_KEY_UP || key == LV_KEY_LEFT)
+				{
+					lv_group_focus_prev(group);
+				}
+				else if (key == LV_KEY_DOWN || key == LV_KEY_RIGHT)
+				{
+					lv_group_focus_next(group);
+				}
+			}
+		}
 	}
-	/* Arrow keys are ignored on purpose: focus must stay inside the dialog. */
 }
 
 static void GUI_Message_DialogScrimEvent(lv_event_t *event)
