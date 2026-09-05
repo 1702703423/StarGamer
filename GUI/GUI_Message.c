@@ -81,6 +81,13 @@ static lv_timer_t *s_flush_timer;
 static GUI_Message_Active_t s_toast;
 static GUI_Message_Active_t s_dialog;
 
+/* Persistent keypad group for centered dialogs. Created once - groups are
+ * never created/deleted at dialog open/close time: lv_group_create/del
+ * modify the global group list (_lv_group_ll) and free its node memory,
+ * and the freed node blocks get reused by other allocations (e.g. label
+ * text buffers), which corrupted the list under stress testing. */
+static lv_group_t *s_msg_group;
+
 int GUI_Message_Init(void)
 {
 	if (s_flush_timer != NULL)
@@ -89,7 +96,23 @@ int GUI_Message_Init(void)
 	}
 
 	s_flush_timer = lv_timer_create(GUI_Message_FlushTimerCb, GUI_MESSAGE_FLUSH_PERIOD_MS, NULL);
-	return (s_flush_timer != NULL) ? SYSTEM_STATUS_OK : OUT_OF_HEAP_MEMORY;
+	if (s_flush_timer == NULL)
+	{
+		return OUT_OF_HEAP_MEMORY;
+	}
+
+	if (s_msg_group == NULL)
+	{
+		s_msg_group = lv_group_create();
+		if (s_msg_group != NULL)
+		{
+			lv_group_set_wrap(s_msg_group, true);
+		}
+		/* NULL is non-fatal: dialogs still render, only keypad navigation
+		 * inside them is unavailable. */
+	}
+
+	return SYSTEM_STATUS_OK;
 }
 
 u8 GUI_Message_ScreenAvailable(void)
@@ -614,17 +637,16 @@ static void GUI_Message_DialogCreate(const GUI_Message_Request_t *request)
 		lv_obj_add_event_cb(s_dialog.btn_secondary, GUI_Message_DialogBtnEvent, LV_EVENT_ALL, NULL);
 	}
 
-	/* Capture input: give the keypad a dedicated group holding only the
-	 * dialog buttons so navigation cannot reach the page underneath. */
+	/* Capture input: point the keypad at the persistent message group which
+	 * holds only the dialog buttons, so navigation cannot reach the page
+	 * underneath. The group itself is created once (see GUI_Message_Init);
+	 * only the button objects are added/removed per dialog. */
 	indev = GUI_Message_FindKeypadIndev();
-	group = lv_group_create();
-	if (group == NULL)
+	group = s_msg_group;
+	if (group != NULL)
 	{
-		lv_obj_del(scrim);
-		GUI_Message_NotifyDropped(request);
-		return;
+		lv_group_remove_all_objs(group);
 	}
-	lv_group_set_wrap(group, true);
 
 	s_dialog.focus_prev = (indev != NULL) ? lv_group_get_focused(indev->group) :
 	                       lv_group_get_focused(lv_group_get_default());
@@ -634,27 +656,22 @@ static void GUI_Message_DialogCreate(const GUI_Message_Request_t *request)
 		 * stale focus ring on the page underneath the scrim. */
 		lv_obj_clear_state(s_dialog.focus_prev, LV_STATE_FOCUSED);
 	}
-	lv_group_add_obj(group, s_dialog.btn_primary);
-	if (s_dialog.btn_secondary != NULL)
-	{
-		lv_group_add_obj(group, s_dialog.btn_secondary);
-	}
 
-	if (indev != NULL)
+	if (group != NULL)
 	{
-		s_dialog.indev = indev;
-		s_dialog.saved_group = indev->group;
-		lv_indev_set_group(indev, group);
+		lv_group_add_obj(group, s_dialog.btn_primary);
+		if (s_dialog.btn_secondary != NULL)
+		{
+			lv_group_add_obj(group, s_dialog.btn_secondary);
+		}
 		s_dialog.group = group;
 	}
 	else
 	{
-		/* No keypad indev: fall back to the default group. */
-		lv_group_del(group);
+		/* Persistent group unavailable (creation failed): fall back to the
+		 * shared default group so the buttons stay reachable. */
 		group = lv_group_get_default();
 		s_dialog.group = NULL;
-		s_dialog.saved_group = NULL;
-		s_dialog.indev = NULL;
 		if (group != NULL)
 		{
 			lv_group_add_obj(group, s_dialog.btn_primary);
@@ -664,7 +681,14 @@ static void GUI_Message_DialogCreate(const GUI_Message_Request_t *request)
 			}
 		}
 	}
-	if (group != NULL)
+
+	if (indev != NULL && s_dialog.group != NULL)
+	{
+		s_dialog.indev = indev;
+		s_dialog.saved_group = indev->group;
+		lv_indev_set_group(indev, s_dialog.group);
+	}
+	if (s_dialog.group != NULL)
 	{
 		lv_group_focus_obj(s_dialog.btn_primary);
 	}
@@ -680,6 +704,7 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 	void *user_data;
 	lv_obj_t *focus_prev;
 	lv_obj_t *scrim;
+	lv_group_t *group;
 	lv_group_t *saved_group;
 	lv_indev_t *indev;
 
@@ -692,20 +717,34 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 	user_data = s_dialog.user_data;
 	focus_prev = s_dialog.focus_prev;
 	scrim = s_dialog.obj;
+	group = s_dialog.group;
 	saved_group = s_dialog.saved_group;
 	indev = s_dialog.indev;
 
-	if (indev != NULL && s_dialog.group != NULL)
+	if (indev != NULL && group != NULL)
 	{
 		lv_indev_set_group(indev, saved_group);
 	}
-	if (s_dialog.group != NULL)
+
+	/* Detach the buttons from whichever group holds them. Never delete the
+	 * group itself: lv_group_del frees the group node on the global group
+	 * list and the recycled memory corrupted the list under stress. */
+	if (group != NULL)
 	{
-		lv_group_del(s_dialog.group);
+		if (s_dialog.btn_secondary != NULL &&
+		    lv_obj_get_group(s_dialog.btn_secondary) == group)
+		{
+			lv_group_remove_obj(s_dialog.btn_secondary);
+		}
+		if (s_dialog.btn_primary != NULL &&
+		    lv_obj_get_group(s_dialog.btn_primary) == group)
+		{
+			lv_group_remove_obj(s_dialog.btn_primary);
+		}
 	}
 	else
 	{
-		/* Fallback path: detach the buttons from the shared default group. */
+		/* Fallback path: buttons live in the shared default group. */
 		if (s_dialog.btn_secondary != NULL &&
 		    lv_obj_get_group(s_dialog.btn_secondary) != NULL)
 		{
