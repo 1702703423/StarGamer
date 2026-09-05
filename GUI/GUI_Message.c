@@ -68,6 +68,7 @@ static void GUI_Message_ToastHoldCb(lv_timer_t *timer);
 static void GUI_Message_ToastAnimReadyCb(lv_anim_t *anim);
 static void GUI_Message_DialogCreate(const GUI_Message_Request_t *request);
 static void GUI_Message_DialogClose(GUI_Message_Result_t result);
+static void GUI_Message_DialogDeleteAsync(void *obj);
 static void GUI_Message_DialogBtnEvent(lv_event_t *event);
 static void GUI_Message_DialogScrimEvent(lv_event_t *event);
 
@@ -678,6 +679,7 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 	GUI_Message_Callback_t callback;
 	void *user_data;
 	lv_obj_t *focus_prev;
+	lv_obj_t *scrim;
 	lv_group_t *saved_group;
 	lv_indev_t *indev;
 
@@ -689,22 +691,9 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 	callback = s_dialog.callback;
 	user_data = s_dialog.user_data;
 	focus_prev = s_dialog.focus_prev;
+	scrim = s_dialog.obj;
 	saved_group = s_dialog.saved_group;
 	indev = s_dialog.indev;
-
-	if (s_dialog.btn_secondary != NULL && s_dialog.group == NULL &&
-	    lv_obj_get_group(s_dialog.btn_secondary) != NULL)
-	{
-		lv_group_remove_obj(s_dialog.btn_secondary);
-	}
-	if (s_dialog.btn_primary != NULL && s_dialog.group == NULL &&
-	    lv_obj_get_group(s_dialog.btn_primary) != NULL)
-	{
-		lv_group_remove_obj(s_dialog.btn_primary);
-	}
-
-	lv_anim_del(s_dialog.obj, NULL);
-	lv_obj_del(s_dialog.obj);
 
 	if (indev != NULL && s_dialog.group != NULL)
 	{
@@ -713,6 +702,33 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 	if (s_dialog.group != NULL)
 	{
 		lv_group_del(s_dialog.group);
+	}
+	else
+	{
+		/* Fallback path: detach the buttons from the shared default group. */
+		if (s_dialog.btn_secondary != NULL &&
+		    lv_obj_get_group(s_dialog.btn_secondary) != NULL)
+		{
+			lv_group_remove_obj(s_dialog.btn_secondary);
+		}
+		if (s_dialog.btn_primary != NULL &&
+		    lv_obj_get_group(s_dialog.btn_primary) != NULL)
+		{
+			lv_group_remove_obj(s_dialog.btn_primary);
+		}
+	}
+
+	/* DialogClose usually runs inside the keypad indev's event cycle:
+	 * pressing ESC sends LV_EVENT_KEY followed by LV_EVENT_CANCEL to the
+	 * focused button, ENTER release sends RELEASED/SHORT_CLICKED/CLICKED.
+	 * Freeing the button here would leave the indev dispatching the next
+	 * event of the cycle on a dangling pointer (observed as a precise bus
+	 * HardFault inside event_send_core). Free the widget tree on the next
+	 * timer pass instead - the buttons stay alive until then but belong to
+	 * no group, so no further input events can reach them. */
+	if (lv_async_call(GUI_Message_DialogDeleteAsync, scrim) != LV_RES_OK)
+	{
+		lv_obj_del(scrim);
 	}
 
 	memset(&s_dialog, 0, sizeof(s_dialog));
@@ -727,6 +743,11 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 	{
 		callback(result, user_data);
 	}
+}
+
+static void GUI_Message_DialogDeleteAsync(void *obj)
+{
+	lv_obj_del((lv_obj_t *)obj);
 }
 
 static void GUI_Message_DialogBtnEvent(lv_event_t *event)
