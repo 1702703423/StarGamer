@@ -81,11 +81,8 @@ static lv_timer_t *s_flush_timer;
 static GUI_Message_Active_t s_toast;
 static GUI_Message_Active_t s_dialog;
 
-/* Persistent keypad group for centered dialogs. Created once - groups are
- * never created/deleted at dialog open/close time: lv_group_create/del
- * modify the global group list (_lv_group_ll) and free its node memory,
- * and the freed node blocks get reused by other allocations (e.g. label
- * text buffers), which corrupted the list under stress testing. */
+/* Reuse one keypad group for centered dialogs. Buttons must be detached
+ * from their old group before being added here. */
 static lv_group_t *s_msg_group;
 
 int GUI_Message_Init(void)
@@ -659,9 +656,13 @@ static void GUI_Message_DialogCreate(const GUI_Message_Request_t *request)
 
 	if (group != NULL)
 	{
+		/* Buttons auto-join the default group on creation. This LVGL version
+		 * does not unlink the old group when adding to another one. */
+		lv_group_remove_obj(s_dialog.btn_primary);
 		lv_group_add_obj(group, s_dialog.btn_primary);
 		if (s_dialog.btn_secondary != NULL)
 		{
+			lv_group_remove_obj(s_dialog.btn_secondary);
 			lv_group_add_obj(group, s_dialog.btn_secondary);
 		}
 		s_dialog.group = group;
@@ -726,9 +727,8 @@ static void GUI_Message_DialogClose(GUI_Message_Result_t result)
 		lv_indev_set_group(indev, saved_group);
 	}
 
-	/* Detach the buttons from whichever group holds them. Never delete the
-	 * group itself: lv_group_del frees the group node on the global group
-	 * list and the recycled memory corrupted the list under stress. */
+	/* Detach the buttons before asynchronous widget deletion; keep the
+	 * modal group available for the next dialog. */
 	if (group != NULL)
 	{
 		if (s_dialog.btn_secondary != NULL &&

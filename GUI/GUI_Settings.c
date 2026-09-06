@@ -1571,7 +1571,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	if (status == W25Q64_OK)
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.1.3-preview-oc\n"
+		               "Star Gamer 1.1.4-preview-oc\n"
 		               "CPU Clock:%d\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
@@ -1587,7 +1587,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	else
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.1.3-preview-oc\n"
+		               "Star Gamer 1.1.4-preview-oc\n"
 		               "CPU Clock:%d\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
