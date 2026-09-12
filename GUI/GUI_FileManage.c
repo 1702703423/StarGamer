@@ -150,6 +150,7 @@ int GUI_FileManage_Refresh(GUI_FileManage_t *manager)
 	}
 
 	GUI_FM_CloseDir(manager);
+	manager->scan_consumed = 0U;
 	code = GUI_FM_ReadDir(manager);
 	GUI_FM_RebuildList(manager);
 
@@ -559,6 +560,9 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 	u32 scan_limit = GUI_FILEMANAGE_SCAN_LIMIT;
 	u8 first_page = 0U;
 	u8 real_item_limit;
+	u8 reopened = 0U;
+	u8 path_changed;
+	u32 skip;
 
 	if (manager == NULL)
 	{
@@ -567,7 +571,13 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 
 	manager->item_count = 0U;
 	manager->has_more = 0U;
-	if (manager->dir_open == 0U || strcmp(manager->dir_path, manager->current_path) != 0)
+	path_changed = (strcmp(manager->dir_path, manager->current_path) != 0) ? 1U : 0U;
+	if (path_changed != 0U)
+	{
+		/* Browsing a different directory: the saved scan position is void. */
+		manager->scan_consumed = 0U;
+	}
+	if (manager->dir_open == 0U || path_changed != 0U)
 	{
 		GUI_FM_CloseDir(manager);
 
@@ -582,13 +592,19 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 		{
 			(void)f_closedir(&manager->dir);
 			manager->dir_path[0] = '\0';
+			manager->scan_consumed = 0U;
 			return OPERATE_FAILED;
 		}
 
 		manager->dir_open = 1U;
 		manager->dir_eof = 0U;
-		first_page = 1U;
+		reopened = 1U;
 	}
+
+	/* The scan position survives a closed DIR handle (e.g. after opening a
+	 * file on top of the browser), so a later "More..." resumes where the
+	 * previous page stopped instead of restarting from page one. */
+	first_page = (manager->scan_consumed == 0U) ? 1U : 0U;
 
 	if (scan_limit == 0U)
 	{
@@ -598,6 +614,31 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 	if (first_page != 0U)
 	{
 		code = GUI_FM_AddParent(manager);
+	}
+	else if (reopened != 0U)
+	{
+		/* A fresh DIR handle starts at entry zero: drop the entries the
+		 * earlier pages already showed. When the handle stayed open the
+		 * FatFs read pointer already sits at scan_consumed. */
+		skip = manager->scan_consumed;
+		while (code == SYSTEM_STATUS_OK && skip != 0U && manager->dir_eof == 0U)
+		{
+			memset(&info, 0, sizeof(info));
+			fr = f_readdir(&manager->dir, &info);
+			if (fr != FR_OK)
+			{
+				code = OPERATE_FAILED;
+				GUI_FileManage_SetStatus(manager, "Read directory failed");
+				break;
+			}
+			if (info.fname[0] == '\0')
+			{
+				/* Directory shrank underneath the saved position. */
+				manager->dir_eof = 1U;
+				break;
+			}
+			skip--;
+		}
 	}
 
 	real_item_limit = GUI_FILEMANAGE_MAX_ITEMS;
@@ -628,6 +669,8 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 
 		code = GUI_FM_AddInfo(manager, &info);
 	}
+
+	manager->scan_consumed += scanned;
 
 	if (code == SYSTEM_STATUS_OK && manager->dir_eof == 0U)
 	{
@@ -930,6 +973,11 @@ static void GUI_FM_RemoveChildrenFromGroup(lv_obj_t *parent)
 	}
 }
 
+/* Close the DIR handle only. The logical scan position (dir_path +
+ * scan_consumed + has_more) is kept so paging resumes after the handle was
+ * dropped, e.g. because a file was opened on top of the browser. Callers
+ * that restart browsing reset scan_consumed themselves (Refresh) or change
+ * current_path, which voids the position in GUI_FM_ReadDir. */
 static void GUI_FM_CloseDir(GUI_FileManage_t *manager)
 {
 	if (manager == NULL || manager->dir_open == 0U)
@@ -940,8 +988,6 @@ static void GUI_FM_CloseDir(GUI_FileManage_t *manager)
 	(void)f_closedir(&manager->dir);
 	manager->dir_open = 0U;
 	manager->dir_eof = 0U;
-	manager->has_more = 0U;
-	manager->dir_path[0] = '\0';
 }
 
 static u8 GUI_FM_IsRootPath(const GUI_FileManage_t *manager)

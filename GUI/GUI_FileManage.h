@@ -96,6 +96,10 @@ struct GUI_FileManage
 	u8 dir_eof;
 	u8 has_more;
 	u8 locked;
+	/* f_readdir hits already consumed by the current page chain. Survives a
+	 * closed DIR handle so "More..." can resume paging after a file was
+	 * opened on top of the browser. */
+	u32 scan_consumed;
 };
 
 int GUI_FileManage_Create(GUI_FileManage_t *manager, Page_Struct_t *page, const GUI_FileManageConfig_t *config);
