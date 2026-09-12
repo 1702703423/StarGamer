@@ -76,7 +76,7 @@ static void lvgl_timer_task(void *arg)
 			lv_obj_invalidate(lv_scr_act());
 		}
 		lv_timer_handler();
-		osDelay(1);
+		osDelay(10);
 	}
 }
 
@@ -938,38 +938,8 @@ void init(void)
 	{
 		shellPrintEndLine(&shell,"USBMSCApplyFailed\r\n");
 	}
-//	nes_load((u8*)"0://SICHUAN.NES");
+
 	lvgl_start_task();
-//	LCD_Fill(1, 1, 320, 240, BLACK, p);
-//	LCD_Flush(p);lcd_test();
-
-//	if (res)
-//	{
-//		DL_Handler DL;
-//		int (*enterFunc)(int argc, char *argv[]);
-//		DL_Err_Type err;
-
-//		osKernelLock();
-//		err = dl_load_file(&DL, "0:/debug.axf");
-//		osKernelUnlock();
-
-//		shellPrintEndLine(&shell, "err:%d\n", err);
-
-//		if (err) {
-//			while (1);
-//		}
-
-//		enterFunc = dl_get_entry(&DL);
-//		shellPrintEndLine(&shell, "StartAddressAt:%p\n", enterFunc);
-
-//		if (enterFunc == NULL) {
-//			shellPrintEndLine(&shell, "cant find entry\n");
-//		}
-
-//		shellPrintEndLine(&shell, "NeedExecute:%p\n", AxfDebugInfoPushToUart);
-//		shellPrintEndLine(&shell, "res:%d\n", enterFunc(0, NULL));
-//		dl_destroy_lib(&DL);
-//	}
 
 	if (res) {
 		while (1) {
