@@ -91,7 +91,6 @@ static int GUI_Video_PageBuild(Page_Struct_t *page)
 	config.title = "Video";
 	config.root_path = "0:/";
 	config.empty_text = "No AVI files";
-	config.status_text = "MJPEG / PCM AVI";
 	config.extensions = s_video_extensions;
 	config.extension_count = (u8)(sizeof(s_video_extensions) /
 	                              sizeof(s_video_extensions[0]));
@@ -123,8 +122,8 @@ static int GUI_Video_PageLoaded(Page_Struct_t *page, void *user_data)
 	if(context->active != 0U)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage,
-		                        GUI_Video_StateText(Video_GetState()));
+		(void)GUI_FileManage_Notify(&context->file_manage,
+		                            GUI_Video_StateText(Video_GetState()));
 	}
 	return GUI_FileManage_PageLoaded(&context->file_manage);
 }
@@ -156,23 +155,23 @@ static int GUI_Video_OpenFile(GUI_FileManage_t *manager,
 	Video_Cleanup();
 	if(Video_IsBusy() != 0U || context->active != 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Video is busy");
+		(void)GUI_FileManage_ReportError(manager, "Video is busy");
 		return OPERATE_FAILED;
 	}
 	if(GUI_FileManage_BuildItemPath(manager, item, context->path,
 	                                sizeof(context->path)) == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		(void)GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 
 	GUI_FileManage_SetLocked(manager, 1U);
-	GUI_FileManage_SetStatus(manager, "Opening AVI");
+	(void)GUI_FileManage_Notify(manager, "Opening AVI");
 	code = Video_Play(context->path);
 	if(code != SYSTEM_STATUS_OK)
 	{
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, Video_ResultText(Video_GetResult()));
+		(void)GUI_FileManage_ReportError(manager, Video_ResultText(Video_GetResult()));
 		return code;
 	}
 	context->active = 1U;
@@ -188,7 +187,7 @@ static int GUI_Video_Back(GUI_FileManage_t *manager, void *user_data)
 		(void)Video_Stop();
 		if(manager != NULL)
 		{
-			GUI_FileManage_SetStatus(manager, "Stopping video");
+			(void)GUI_FileManage_Notify(manager, "Stopping video");
 		}
 		return OPERATE_FAILED;
 	}
@@ -212,7 +211,16 @@ static void GUI_Video_PollTimer(lv_timer_t *timer)
 		result = Video_GetResult();
 		context->active = 0U;
 		GUI_FileManage_SetLocked(&context->file_manage, 0U);
-		GUI_FileManage_SetStatus(&context->file_manage, Video_ResultText(result));
+		if(state == VIDEO_STATE_ERROR)
+		{
+			(void)GUI_FileManage_ReportError(&context->file_manage,
+			                                 Video_ResultText(result));
+		}
+		else
+		{
+			(void)GUI_FileManage_Notify(&context->file_manage,
+			                            Video_ResultText(result));
+		}
 		Video_Cleanup();
 		if(Page_GetCurrent() == GUI_PAGE_VIDEO)
 		{
@@ -223,7 +231,7 @@ static void GUI_Video_PollTimer(lv_timer_t *timer)
 	}
 
 	GUI_FileManage_SetLocked(&context->file_manage, 1U);
-	GUI_FileManage_SetStatus(&context->file_manage, GUI_Video_StateText(state));
+	(void)GUI_FileManage_Notify(&context->file_manage, GUI_Video_StateText(state));
 }
 
 static const char *GUI_Video_StateText(Video_State_t state)

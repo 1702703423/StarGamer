@@ -178,7 +178,6 @@ static int GUI_Axf_PageBuild(Page_Struct_t *page)
 	config.title = "AXF Loader";
 	config.root_path = "0:/";
 	config.empty_text = "No AXF files";
-	config.status_text = "PB7 exits AXF";
 	config.extensions = s_axf_extensions;
 	config.extension_count = (u8)(sizeof(s_axf_extensions) /
 	                              sizeof(s_axf_extensions[0]));
@@ -256,18 +255,18 @@ static int GUI_Axf_OpenFile(GUI_FileManage_t *manager,
 	if (GUI_Axf_IsBusy(context) != 0U || context->app_thread_id != NULL ||
 	    context->monitor_thread_id != NULL || context->handler_loaded != 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "AXF is busy");
+		(void)GUI_FileManage_ReportError(manager, "AXF is busy");
 		return OPERATE_FAILED;
 	}
 	if (GUI_FileManage_BuildItemPath(manager, item, context->path,
 	                                sizeof(context->path)) == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		(void)GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 
 	GUI_FileManage_SetLocked(manager, 1U);
-	GUI_FileManage_SetStatus(manager, "Loading AXF");
+	(void)GUI_FileManage_Notify(manager, "Loading AXF");
 	context->state = GUI_AXF_STATE_LOADING;
 	context->result = GUI_AXF_RESULT_NONE;
 	context->load_error = DL_NO_ERR;
@@ -364,7 +363,7 @@ static int GUI_Axf_Back(GUI_FileManage_t *manager, void *user_data)
 		__DMB();
 		if (manager != NULL)
 		{
-			GUI_FileManage_SetStatus(manager, "Stopping AXF");
+			(void)GUI_FileManage_Notify(manager, "Stopping AXF");
 		}
 		return OPERATE_FAILED;
 	}
@@ -515,22 +514,22 @@ static void GUI_Axf_PollTimer(lv_timer_t *timer)
 	if (state == GUI_AXF_STATE_LOADING)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "Loading AXF");
+		(void)GUI_FileManage_Notify(&context->file_manage, "Loading AXF");
 	}
 	else if (state == GUI_AXF_STATE_STARTING)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "Starting AXF");
+		(void)GUI_FileManage_Notify(&context->file_manage, "Starting AXF");
 	}
 	else if (state == GUI_AXF_STATE_RUNNING)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "AXF running - PB7 exits");
+		(void)GUI_FileManage_Notify(&context->file_manage, "AXF running - PB7 exits");
 	}
 	else if (state == GUI_AXF_STATE_STOPPING)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "Stopping AXF");
+		(void)GUI_FileManage_Notify(&context->file_manage, "Stopping AXF");
 	}
 	else if ((state == GUI_AXF_STATE_FINISHED || state == GUI_AXF_STATE_ERROR) &&
 	         context->app_thread_id == NULL && context->monitor_thread_id == NULL &&
@@ -538,7 +537,14 @@ static void GUI_Axf_PollTimer(lv_timer_t *timer)
 	{
 		GUI_Axf_ResultText(context, status, sizeof(status));
 		GUI_FileManage_SetLocked(&context->file_manage, 0U);
-		GUI_FileManage_SetStatus(&context->file_manage, status);
+		if (state == GUI_AXF_STATE_ERROR)
+		{
+			(void)GUI_FileManage_ReportError(&context->file_manage, status);
+		}
+		else
+		{
+			(void)GUI_FileManage_Notify(&context->file_manage, status);
+		}
 		context->state = GUI_AXF_STATE_IDLE;
 		if (Page_GetCurrent() == GUI_PAGE_AXF_LOADER)
 		{

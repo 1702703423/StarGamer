@@ -77,7 +77,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - **主题系统**: `GUI_Theme.c/h` — 深色/浅色主题切换，定义 20+ 颜色 token（`GUI_ThemeColor_t`），统一管理 GUI 配色
 
 - **起始页**: `GUI_Start.c` — 启动动画（spinner + 状态文字），初始化完成后回调进入主菜单，支持 ready 回调
-- **文件浏览器**: `GUI_FileManage.c/h` — 可复用的 FatFs 文件浏览器组件，支持扩展过滤、OEM/UTF-8 转码、异步分页加载（`GUI_FILEMANAGE_MAX_ITEMS=32`）
+- **文件浏览器**: `GUI_FileManage.c/h` — 可复用的 FatFs 文件浏览器组件，支持扩展过滤、OEM/UTF-8 转码、异步分页加载（`GUI_FILEMANAGE_MAX_ITEMS=32`），More/Prev 双向翻页（Prev 基于页基址栈 `GUI_FILEMANAGE_PAGE_HISTORY`，回退时重绕目录并重放扫描位置）
 - **消息框服务**: `GUI_Message.c/h` — 全局消息框（LVGL 顶层 layer 渲染）。三种形式：顶部线性动画下滑 Toast（自动消失时长由设置 `ToastDuration` 控制，1–10 秒）、屏幕中心 Confirm 对话框、Yes/No 对话框（圆角矩形 + 遮罩，模态：临时切换 keypad indev 到专用按键组）。**仅当 LVGL 持有屏幕时可用**（`lvgl_ui_is_active()`），其他线程持有屏幕时所有入口返回失败；线程安全——请求经单槽邮箱由 LVGL 定时器在 LVGL 线程执行，回调也在 LVGL 线程触发
 - **生命周期**: `Page_Create(init, callback)` → `Page_Show(id)` / `Page_Show_Anim()` → `Page_Back()` → `Page_Delete(id)`
 - **导航**: 内置页面历史栈，支持返回上一页

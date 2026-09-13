@@ -156,6 +156,9 @@ static void GUI_Settings_WaitInputRelease(void);
 static u8 GUI_Settings_HandleKey(u32 key);
 static u8 GUI_Settings_IsSwitchToggleKey(u32 key);
 static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsAction_t action);
+static void GUI_Settings_FontInstallResult(GUI_Message_Result_t result, void *user_data);
+static void GUI_Settings_FontUninstallResult(GUI_Message_Result_t result, void *user_data);
+static void GUI_Settings_UpdateResult(GUI_Message_Result_t result, void *user_data);
 static void GUI_Settings_UpdateProgress(u8 percent, void *context);
 static void GUI_Settings_ShowAbout(GUI_SettingsContext_t *context);
 static void GUI_Settings_HideAbout(GUI_SettingsContext_t *context);
@@ -1299,29 +1302,29 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 			else
 			{
 				GUI_Settings_WaitInputRelease();
-				if (GUI_Font_Show() == SYSTEM_STATUS_OK)
+				if (GUI_Message_Show(GUI_MESSAGE_KIND_YESNO, "Install Font",
+				                     "Pick an XBF font file and write it to SPI flash? The font area is erased.",
+				                     GUI_Settings_FontInstallResult, context) != SYSTEM_STATUS_OK)
 				{
-					GUI_Settings_SetStatus(context, "Select XBF font bin");
+					GUI_Settings_SetStatus(context, "Dialog unavailable");
 				}
 				else
 				{
-					GUI_Settings_SetStatus(context, "Font installer failed");
+					GUI_Settings_SetStatus(context, "Confirm font install");
 				}
 			}
 			break;
 		case GUI_SETTINGS_ACTION_FONT_UNINSTALL:
 			GUI_Settings_WaitInputRelease();
-			if (GUI_Font_Uninstall() == SYSTEM_STATUS_OK)
+			if (GUI_Message_Show(GUI_MESSAGE_KIND_YESNO, "Uninstall Font",
+			                     "Remove the installed font? Text pages fall back to the built-in font.",
+			                     GUI_Settings_FontUninstallResult, context) != SYSTEM_STATUS_OK)
 			{
-				GUI_Settings_UpdateFontState(context);
-				GUI_Settings_SetStatus(context, "Font uninstalled");
-				GUI_Settings_RebuildFocus(context, context->font_install_btn);
+				GUI_Settings_SetStatus(context, "Dialog unavailable");
 			}
 			else
 			{
-				GUI_Settings_UpdateFontState(context);
-				GUI_Settings_SetStatus(context, "Font uninstall failed");
-				GUI_Settings_RebuildFocus(context, context->font_uninstall_btn);
+				GUI_Settings_SetStatus(context, "Confirm font uninstall");
 			}
 			break;
 		case GUI_SETTINGS_ACTION_UPDATE:
@@ -1331,16 +1334,16 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 			}
 			else
 			{
-				IAP_Status_t status;
-
 				GUI_Settings_WaitInputRelease();
-				status = IAP_PrepareUpdate(GUI_Settings_UpdateProgress, context);
-				GUI_Settings_SetStatus(context, IAP_StatusString(status));
-				lv_refr_now(NULL);
-				if (status == IAP_STATUS_OK)
+				if (GUI_Message_Show(GUI_MESSAGE_KIND_YESNO, "Install Update",
+				                     "Verify 0:/update.bin, stage it and reboot to flash? Do not power off.",
+				                     GUI_Settings_UpdateResult, context) != SYSTEM_STATUS_OK)
 				{
-					(void)osDelay(500U);
-					NVIC_SystemReset();
+					GUI_Settings_SetStatus(context, "Dialog unavailable");
+				}
+				else
+				{
+					GUI_Settings_SetStatus(context, "Confirm firmware update");
 				}
 			}
 			break;
@@ -1352,6 +1355,85 @@ static void GUI_Settings_RunAction(GUI_SettingsContext_t *context, GUI_SettingsA
 			break;
 		default:
 			break;
+	}
+}
+
+/* Yes/No callbacks run in the LVGL thread after the dialog closed and the
+ * previous focus was restored, so page switches and focus rebuilds are safe. */
+static void GUI_Settings_FontInstallResult(GUI_Message_Result_t result, void *user_data)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)user_data;
+
+	if (context == NULL)
+	{
+		return;
+	}
+	if (result != GUI_MESSAGE_RESULT_YES)
+	{
+		GUI_Settings_SetStatus(context, "Install canceled");
+		return;
+	}
+
+	if (GUI_Font_Show() == SYSTEM_STATUS_OK)
+	{
+		GUI_Settings_SetStatus(context, "Select XBF font bin");
+	}
+	else
+	{
+		GUI_Settings_SetStatus(context, "Font installer failed");
+	}
+}
+
+static void GUI_Settings_FontUninstallResult(GUI_Message_Result_t result, void *user_data)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)user_data;
+
+	if (context == NULL)
+	{
+		return;
+	}
+	if (result != GUI_MESSAGE_RESULT_YES)
+	{
+		GUI_Settings_SetStatus(context, "Uninstall canceled");
+		return;
+	}
+
+	if (GUI_Font_Uninstall() == SYSTEM_STATUS_OK)
+	{
+		GUI_Settings_UpdateFontState(context);
+		GUI_Settings_SetStatus(context, "Font uninstalled");
+		GUI_Settings_RebuildFocus(context, context->font_install_btn);
+	}
+	else
+	{
+		GUI_Settings_UpdateFontState(context);
+		GUI_Settings_SetStatus(context, "Font uninstall failed");
+		GUI_Settings_RebuildFocus(context, context->font_uninstall_btn);
+	}
+}
+
+static void GUI_Settings_UpdateResult(GUI_Message_Result_t result, void *user_data)
+{
+	GUI_SettingsContext_t *context = (GUI_SettingsContext_t *)user_data;
+	IAP_Status_t status;
+
+	if (context == NULL)
+	{
+		return;
+	}
+	if (result != GUI_MESSAGE_RESULT_YES)
+	{
+		GUI_Settings_SetStatus(context, "Update canceled");
+		return;
+	}
+
+	status = IAP_PrepareUpdate(GUI_Settings_UpdateProgress, context);
+	GUI_Settings_SetStatus(context, IAP_StatusString(status));
+	lv_refr_now(NULL);
+	if (status == IAP_STATUS_OK)
+	{
+		(void)osDelay(500U);
+		NVIC_SystemReset();
 	}
 }
 
@@ -1571,7 +1653,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	if (status == W25Q64_OK)
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.1.4-preview-oc\n"
+		               "Star Gamer 1.1.5-preview-oc\n"
 		               "CPU Clock:%d\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"
@@ -1587,7 +1669,7 @@ static void GUI_Settings_UpdateAboutText(GUI_SettingsContext_t *context)
 	else
 	{
 		(void)snprintf(context->about_text, sizeof(context->about_text),
-		               "Star Gamer 1.1.4-preview-oc\n"
+		               "Star Gamer 1.1.5-preview-oc\n"
 		               "CPU Clock:%d\n"
 		               "MCU/LCD: STM32F407ZGT6 / ST7789\n"
 		               "Audio: PCM5102\n"

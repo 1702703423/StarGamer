@@ -203,7 +203,6 @@ static int GUI_Text_PageBuild(Page_Struct_t *page)
 	config.title = "Text";
 	config.root_path = "0:/";
 	config.empty_text = "No text files";
-	config.status_text = "Text";
 	config.extensions = s_text_extensions;
 	config.extension_count = (u8)(sizeof(s_text_extensions) / sizeof(s_text_extensions[0]));
 	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
@@ -247,7 +246,7 @@ static int GUI_Text_PageLoaded(Page_Struct_t *page, void *user_data)
 
 	if (GUI_Font_IsInstalled() == 0U)
 	{
-		GUI_FileManage_SetStatus(&context->file_manage, "Install font first");
+		(void)GUI_FileManage_ReportError(&context->file_manage, "Install font first");
 	}
 
 	return GUI_FileManage_PageLoaded(&context->file_manage);
@@ -277,21 +276,21 @@ static int GUI_Text_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 		return OPERATE_FAILED;
 	}
 
-	GUI_FileManage_SetStatus(manager, "Checking text");
+	(void)GUI_FileManage_Notify(manager, "Checking text");
 	GUI_FileManage_SetLocked(manager, 1U);
 
 	result = GUI_Text_PrepareFile(context, item);
 	if (result != GUI_TEXT_OPEN_OK)
 	{
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, GUI_Text_ResultText(result));
+		(void)GUI_FileManage_ReportError(manager, GUI_Text_ResultText(result));
 		return (result == GUI_TEXT_OPEN_MEMORY) ? OUT_OF_HEAP_MEMORY : OPERATE_FAILED;
 	}
 
 	if (GUI_Text_LoadPage(context, context->text_start_offset) != SYSTEM_STATUS_OK)
 	{
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, "Read text failed");
+		(void)GUI_FileManage_ReportError(manager, "Read text failed");
 		return OPERATE_FAILED;
 	}
 
@@ -584,7 +583,7 @@ static void GUI_Text_CloseViewer(GUI_TextContext_t *context)
 		lv_obj_add_flag(context->viewer, LV_OBJ_FLAG_HIDDEN);
 	}
 	GUI_FileManage_SetLocked(&context->file_manage, 0U);
-	GUI_FileManage_SetStatus(&context->file_manage, "Text closed");
+	(void)GUI_FileManage_Notify(&context->file_manage, "Text closed");
 	(void)GUI_FileManage_PageLoaded(&context->file_manage);
 }
 

@@ -20,6 +20,9 @@
 #define GUI_FONT_CLEANUP_DELAY_TICKS    2U
 #define GUI_FONT_DEFAULT_LINE_HEIGHT    21U
 #define GUI_FONT_DEFAULT_BASE_LINE      0U
+/* The shared file browser grows to the screen bottom, but this page keeps the
+ * progress bar strip reserved below the list. */
+#define GUI_FONT_LIST_H                 146U
 
 typedef StaticTask_t osStaticThreadDef_t;
 
@@ -264,7 +267,6 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 	config.title = "Font Install";
 	config.root_path = "0:";
 	config.empty_text = "No font files";
-	config.status_text = "Fonts";
 	config.extensions = s_font_extensions;
 	config.extension_count = (u8)(sizeof(s_font_extensions) / sizeof(s_font_extensions[0]));
 	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
@@ -278,7 +280,10 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 		return code;
 	}
 
-	lv_obj_set_pos(context->file_manager.status_label, 14, 224);
+	if (context->file_manager.list != NULL)
+	{
+		lv_obj_set_height(context->file_manager.list, GUI_FONT_LIST_H);
+	}
 
 	context->progress_bar = lv_bar_create(page->screen);
 	lv_obj_set_size(context->progress_bar, 230, 6);
@@ -304,7 +309,7 @@ static int GUI_Font_PageBuild(Page_Struct_t *page)
 	if (GUI_Font_IsInstalled() != 0U)
 	{
 		GUI_FileManage_SetLocked(&context->file_manager, 0U);
-		GUI_FileManage_SetStatus(&context->file_manager, "Font already installed");
+		(void)GUI_FileManage_Notify(&context->file_manager, "Font already installed");
 		lv_bar_set_value(context->progress_bar, 100, LV_ANIM_OFF);
 		lv_label_set_text(context->progress_label, "100%");
 	}
@@ -328,7 +333,7 @@ static int GUI_Font_PageLoaded(Page_Struct_t *page, void *user_data)
 	if (GUI_Font_IsInstalled() != 0U && context->installing == 0U)
 	{
 		GUI_FileManage_SetLocked(&context->file_manager, 0U);
-		GUI_FileManage_SetStatus(&context->file_manager, "Font already installed");
+		(void)GUI_FileManage_Notify(&context->file_manager, "Font already installed");
 	}
 	else if (context->installing != 0U)
 	{
@@ -366,38 +371,38 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 
 	if (GUI_Font_IsInstalled() != 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Font already installed");
+		(void)GUI_FileManage_Notify(manager, "Font already installed");
 		return SYSTEM_STATUS_OK;
 	}
 
 	GUI_Font_CleanupInstallThread(context);
 	if (context->installing != 0U || context->thread_active != 0U || context->install_thread != NULL)
 	{
-		GUI_FileManage_SetStatus(manager, "Install is running");
+		(void)GUI_FileManage_ReportError(manager, "Install is running");
 		return OPERATE_FAILED;
 	}
 
 	if (item->size == 0U || item->size > SYSTEM_FONT_FLASH_SIZE)
 	{
-		GUI_FileManage_SetStatus(manager, "Font file is too large");
+		(void)GUI_FileManage_ReportError(manager, "Font file is too large");
 		return OPERATE_FAILED;
 	}
 
 	if (GUI_FileManage_BuildItemPath(manager, item, context->install_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		(void)GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 
 	if (GUI_Font_EnsureIoBuffers() == 0U || GUI_Font_EnsureBitmapBuffer() == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Font memory error");
+		(void)GUI_FileManage_ReportError(manager, "Font memory error");
 		return OUT_OF_HEAP_MEMORY;
 	}
 
 	if (GUI_Font_EnsureInstallStack() == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Font thread stack error");
+		(void)GUI_FileManage_ReportError(manager, "Font thread stack error");
 		return OUT_OF_HEAP_MEMORY;
 	}
 
@@ -408,7 +413,7 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 	context->exit_tick = 0U;
 	GUI_Font_SetInstallState(context, GUI_FONT_STAGE_VALIDATE, 0U, GUI_FONT_ERROR_NONE);
 	GUI_FileManage_SetLocked(manager, 1U);
-	GUI_FileManage_SetStatus(manager, "Validating font");
+	(void)GUI_FileManage_Notify(manager, "Validating font");
 
 	tid = osThreadNew(GUI_Font_InstallThread, context, &s_font_install_thread_attr);
 	if (tid == NULL)
@@ -419,7 +424,7 @@ static int GUI_Font_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageItem
 		context->installing = 0U;
 		GUI_Font_SetInstallState(context, GUI_FONT_STAGE_ERROR, 0U, GUI_FONT_ERROR_THREAD);
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, "Install thread failed");
+		(void)GUI_FileManage_ReportError(manager, "Install thread failed");
 		return OPERATE_FAILED;
 	}
 
@@ -440,7 +445,7 @@ static int GUI_Font_Back(GUI_FileManage_t *manager, void *user_data)
 	{
 		if (manager != NULL)
 		{
-			GUI_FileManage_SetStatus(manager, "Install is running");
+			(void)GUI_FileManage_ReportError(manager, "Install is running");
 		}
 		return OPERATE_FAILED;
 	}
@@ -485,7 +490,7 @@ static void GUI_Font_Timer(lv_timer_t *timer)
 		context->installing = 0U;
 		GUI_FileManage_SetLocked(&context->file_manager, 0U);
 		(void)snprintf(context->status_text, sizeof(context->status_text), "Install failed: %s", GUI_Font_ErrorText(error));
-		GUI_FileManage_SetStatus(&context->file_manager, context->status_text);
+		(void)GUI_FileManage_ReportError(&context->file_manager, context->status_text);
 		GUI_Font_CleanupInstallThread(context);
 	}
 	else if (stage == (u8)GUI_FONT_STAGE_DONE)
@@ -498,18 +503,18 @@ static void GUI_Font_Timer(lv_timer_t *timer)
 		{
 			(void)GUI_FileManage_Refresh(&context->file_manager);
 		}
-		GUI_FileManage_SetStatus(&context->file_manager, "Font installed");
+		(void)GUI_FileManage_Notify(&context->file_manager, "Font installed");
 		GUI_Font_CleanupInstallThread(context);
 	}
 	else if (context->installing != 0U)
 	{
 		GUI_FileManage_SetLocked(&context->file_manager, 1U);
-		GUI_FileManage_SetStatus(&context->file_manager, GUI_Font_StageText(stage));
+		(void)GUI_FileManage_Notify(&context->file_manager, GUI_Font_StageText(stage));
 	}
 	else if (GUI_Font_IsInstalled() != 0U)
 	{
 		GUI_FileManage_SetLocked(&context->file_manager, 0U);
-		GUI_FileManage_SetStatus(&context->file_manager, "Font already installed");
+		(void)GUI_FileManage_Notify(&context->file_manager, "Font already installed");
 	}
 }
 

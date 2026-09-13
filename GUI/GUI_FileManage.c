@@ -1,5 +1,6 @@
 #include "GUI_FileManage.h"
 #include "GUI_Font.h"
+#include "GUI_Message.h"
 #include "GUI_Theme.h"
 
 #define GUI_FM_SCREEN_W             320
@@ -7,9 +8,12 @@
 #define GUI_FM_LIST_X               10
 #define GUI_FM_LIST_Y               62
 #define GUI_FM_LIST_W               300
-#define GUI_FM_LIST_H               146
+/* Stretches down to the screen bottom edge; the old status label area is
+ * reused, so one more row fits into the viewport. */
+#define GUI_FM_LIST_H               174
 #define GUI_FM_ROW_H                GUI_M3_LIST_ROW_H
-#define GUI_FM_STATUS_LEN           48U
+#define GUI_FM_MSG_KIND_INFO        0U
+#define GUI_FM_MSG_KIND_ERROR       1U
 #define GUI_FM_NAME_UTF8_SIZE       (((GUI_FILEMANAGE_NAME_SIZE - 1U) * 3U / 2U) + 2U)
 #define GUI_FM_PATH_UTF8_SIZE       (((GUI_FILEMANAGE_PATH_SIZE - 1U) * 3U / 2U) + 2U)
 
@@ -24,7 +28,9 @@ static void GUI_FM_WaitInputRelease(void);
 static int GUI_FM_ScheduleAction(GUI_FileManage_t *manager, GUI_FileManagePending_t action, const char *path);
 static void GUI_FM_AsyncAction(void *user_data);
 static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager);
-static int GUI_FM_ReadDir(GUI_FileManage_t *manager);
+static int GUI_FM_OpenPrevPage(GUI_FileManage_t *manager);
+static void GUI_FM_PushPageBase(GUI_FileManage_t *manager, u32 base);
+static int GUI_FM_ReadDir(GUI_FileManage_t *manager, u32 start_from);
 static int GUI_FM_ScheduleItemPath(GUI_FileManageItem_t *item);
 static int GUI_FM_AddParent(GUI_FileManage_t *manager);
 static int GUI_FM_AddPageNav(GUI_FileManage_t *manager, GUI_FileManageItemType_t type, const char *name);
@@ -44,7 +50,7 @@ static u8 GUI_FM_ExtensionAccepted(GUI_FileManage_t *manager, const FILINFO *inf
 static int GUI_FM_StrCaseCmp(const char *a, const char *b);
 static const char *GUI_FM_GetName(const FILINFO *info);
 static const char *GUI_FM_GetExt(const char *name);
-static void GUI_FM_SetDefaultStatus(GUI_FileManage_t *manager);
+static int GUI_FM_ShowMessage(GUI_FileManage_t *manager, u8 kind, const char *text);
 
 int GUI_FileManage_Create(GUI_FileManage_t *manager, Page_Struct_t *page, const GUI_FileManageConfig_t *config)
 {
@@ -73,7 +79,6 @@ int GUI_FileManage_Create(GUI_FileManage_t *manager, Page_Struct_t *page, const 
 	GUI_FM_ApplyScreenBase(page->screen);
 	GUI_FM_CreateHeader(manager);
 	GUI_FM_CreateList(manager);
-	GUI_FM_SetDefaultStatus(manager);
 
 	return GUI_FileManage_Refresh(manager);
 }
@@ -151,7 +156,8 @@ int GUI_FileManage_Refresh(GUI_FileManage_t *manager)
 
 	GUI_FM_CloseDir(manager);
 	manager->scan_consumed = 0U;
-	code = GUI_FM_ReadDir(manager);
+	manager->prev_count = 0U;
+	code = GUI_FM_ReadDir(manager, 0U);
 	GUI_FM_RebuildList(manager);
 
 	return code;
@@ -188,14 +194,14 @@ int GUI_FileManage_PageLoaded(GUI_FileManage_t *manager)
 	return SYSTEM_STATUS_OK;
 }
 
-void GUI_FileManage_SetStatus(GUI_FileManage_t *manager, const char *text)
+int GUI_FileManage_Notify(GUI_FileManage_t *manager, const char *text)
 {
-	if (manager == NULL || manager->status_label == NULL)
-	{
-		return;
-	}
+	return GUI_FM_ShowMessage(manager, GUI_FM_MSG_KIND_INFO, text);
+}
 
-	lv_label_set_text(manager->status_label, (text != NULL) ? text : "");
+int GUI_FileManage_ReportError(GUI_FileManage_t *manager, const char *text)
+{
+	return GUI_FM_ShowMessage(manager, GUI_FM_MSG_KIND_ERROR, text);
 }
 
 void GUI_FileManage_SetLocked(GUI_FileManage_t *manager, u8 locked)
@@ -274,12 +280,6 @@ static void GUI_FM_CreateList(GUI_FileManage_t *manager)
 	lv_obj_set_pos(manager->list, GUI_FM_LIST_X, GUI_FM_LIST_Y);
 	GUI_M3_StyleList(manager->list);
 	lv_obj_set_scrollbar_mode(manager->list, LV_SCROLLBAR_MODE_AUTO);
-
-	manager->status_label = lv_label_create(manager->screen);
-	lv_label_set_long_mode(manager->status_label, LV_LABEL_LONG_DOT);
-	lv_obj_set_width(manager->status_label, GUI_FM_SCREEN_W - 28);
-	lv_obj_set_pos(manager->status_label, 14, 216);
-	lv_obj_set_style_text_color(manager->status_label, GUI_Theme_LvColor(GUI_THEME_COLOR_ON_SURFACE_VARIANT), 0);
 }
 
 static void GUI_FM_BackEvent(lv_event_t *event)
@@ -356,6 +356,10 @@ static void GUI_FM_ItemEvent(lv_event_t *event)
 		{
 			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_NEXT, NULL);
 		}
+		else if (item->type == GUI_FILEMANAGE_ITEM_PREV)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PREV, NULL);
+		}
 		else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 		{
 			(void)GUI_FM_ScheduleItemPath(item);
@@ -375,6 +379,10 @@ static void GUI_FM_ItemEvent(lv_event_t *event)
 		else if (item->type == GUI_FILEMANAGE_ITEM_NEXT)
 		{
 			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_NEXT, NULL);
+		}
+		else if (item->type == GUI_FILEMANAGE_ITEM_PREV)
+		{
+			(void)GUI_FM_ScheduleAction(item->manager, GUI_FILEMANAGE_PENDING_PREV, NULL);
 		}
 		else if (item->type == GUI_FILEMANAGE_ITEM_DIR)
 		{
@@ -458,7 +466,7 @@ static int GUI_FM_ScheduleAction(GUI_FileManage_t *manager, GUI_FileManagePendin
 		if (path != manager->pending_path &&
 		    GUI_FM_CopyText(manager->pending_path, GUI_FILEMANAGE_PATH_SIZE, path) == 0U)
 		{
-			GUI_FileManage_SetStatus(manager, "Path too long");
+			GUI_FileManage_ReportError(manager, "Path too long");
 			return OPERATE_FAILED;
 		}
 	}
@@ -515,10 +523,15 @@ static void GUI_FM_AsyncAction(void *user_data)
 	{
 		(void)GUI_FM_OpenNextPage(manager);
 	}
+	else if (action == (u8)GUI_FILEMANAGE_PENDING_PREV)
+	{
+		(void)GUI_FM_OpenPrevPage(manager);
+	}
 }
 
 static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager)
 {
+	u32 base;
 	int code;
 
 	if (manager == NULL || manager->locked != 0U || manager->has_more == 0U)
@@ -526,10 +539,63 @@ static int GUI_FM_OpenNextPage(GUI_FileManage_t *manager)
 		return OPERATE_FAILED;
 	}
 
-	code = GUI_FM_ReadDir(manager);
+	/* The base of the page being left becomes the target of "Prev...". It is
+	 * only recorded once the next page was actually read, so a failed read
+	 * keeps the history consistent. */
+	base = manager->page_base;
+	code = GUI_FM_ReadDir(manager, manager->scan_consumed);
+	if (code == SYSTEM_STATUS_OK)
+	{
+		GUI_FM_PushPageBase(manager, base);
+	}
 	GUI_FM_RebuildList(manager);
 
 	return code;
+}
+
+static int GUI_FM_OpenPrevPage(GUI_FileManage_t *manager)
+{
+	u32 base;
+	int code;
+
+	if (manager == NULL || manager->locked != 0U)
+	{
+		return OPERATE_FAILED;
+	}
+
+	if (manager->prev_count == 0U)
+	{
+		GUI_FileManage_ReportError(manager, "No previous page");
+		return OPERATE_FAILED;
+	}
+
+	/* The stack top is where the page before the current one starts. Pop it
+	 * only after the replay succeeded, so a failed seek keeps the history
+	 * intact and the user can retry. */
+	base = manager->prev_bases[manager->prev_count - 1U];
+	code = GUI_FM_ReadDir(manager, base);
+	if (code == SYSTEM_STATUS_OK)
+	{
+		manager->prev_count--;
+	}
+	GUI_FM_RebuildList(manager);
+
+	return code;
+}
+
+static void GUI_FM_PushPageBase(GUI_FileManage_t *manager, u32 base)
+{
+	if (manager->prev_count >= GUI_FILEMANAGE_PAGE_HISTORY)
+	{
+		/* History full: drop the oldest base so the most recent pages stay
+		 * reachable. Refresh still returns to page one. */
+		memmove(&manager->prev_bases[0], &manager->prev_bases[1],
+		        (GUI_FILEMANAGE_PAGE_HISTORY - 1U) * sizeof(manager->prev_bases[0]));
+		manager->prev_count = GUI_FILEMANAGE_PAGE_HISTORY - 1U;
+	}
+
+	manager->prev_bases[manager->prev_count] = base;
+	manager->prev_count++;
 }
 
 static int GUI_FM_ScheduleItemPath(GUI_FileManageItem_t *item)
@@ -544,21 +610,20 @@ static int GUI_FM_ScheduleItemPath(GUI_FileManageItem_t *item)
 	manager = item->manager;
 	if (GUI_FileManage_BuildItemPath(manager, item, manager->pending_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 
 	return GUI_FM_ScheduleAction(manager, GUI_FILEMANAGE_PENDING_PATH, manager->pending_path);
 }
 
-static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
+static int GUI_FM_ReadDir(GUI_FileManage_t *manager, u32 start_from)
 {
 	FILINFO info;
 	FRESULT fr;
 	int code = SYSTEM_STATUS_OK;
 	u32 scanned = 0U;
 	u32 scan_limit = GUI_FILEMANAGE_SCAN_LIMIT;
-	u8 first_page = 0U;
 	u8 real_item_limit;
 	u8 reopened = 0U;
 	u8 path_changed;
@@ -574,8 +639,11 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 	path_changed = (strcmp(manager->dir_path, manager->current_path) != 0) ? 1U : 0U;
 	if (path_changed != 0U)
 	{
-		/* Browsing a different directory: the saved scan position is void. */
+		/* Browsing a different directory: the saved scan position and the
+		 * page history are void. */
 		manager->scan_consumed = 0U;
+		manager->prev_count = 0U;
+		start_from = 0U;
 	}
 	if (manager->dir_open == 0U || path_changed != 0U)
 	{
@@ -584,7 +652,7 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 		fr = f_opendir(&manager->dir, manager->current_path);
 		if (fr != FR_OK)
 		{
-			GUI_FileManage_SetStatus(manager, "Open directory failed");
+			GUI_FileManage_ReportError(manager, "Open directory failed");
 			return OPERATE_FAILED;
 		}
 
@@ -593,6 +661,7 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 			(void)f_closedir(&manager->dir);
 			manager->dir_path[0] = '\0';
 			manager->scan_consumed = 0U;
+			manager->prev_count = 0U;
 			return OPERATE_FAILED;
 		}
 
@@ -601,26 +670,25 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 		reopened = 1U;
 	}
 
-	/* The scan position survives a closed DIR handle (e.g. after opening a
-	 * file on top of the browser), so a later "More..." resumes where the
-	 * previous page stopped instead of restarting from page one. */
-	first_page = (manager->scan_consumed == 0U) ? 1U : 0U;
-
 	if (scan_limit == 0U)
 	{
 		scan_limit = 1U;
 	}
 
-	if (first_page != 0U)
+	/* The logical scan position survives a closed DIR handle (e.g. after a
+	 * file was opened on top of the browser), so "More..." resumes where the
+	 * previous page stopped. A fresh handle starts at entry zero and a live
+	 * handle sits at scan_consumed; any requested page start that differs
+	 * from the stream position needs a rewind plus a replay of the entries
+	 * before start_from - that is also how "Prev..." pages backward. */
+	if (reopened == 0U && start_from != manager->scan_consumed)
 	{
-		code = GUI_FM_AddParent(manager);
+		f_rewinddir(&manager->dir);
+		manager->dir_eof = 0U;
 	}
-	else if (reopened != 0U)
+	if (reopened != 0U || start_from != manager->scan_consumed)
 	{
-		/* A fresh DIR handle starts at entry zero: drop the entries the
-		 * earlier pages already showed. When the handle stayed open the
-		 * FatFs read pointer already sits at scan_consumed. */
-		skip = manager->scan_consumed;
+		skip = start_from;
 		while (code == SYSTEM_STATUS_OK && skip != 0U && manager->dir_eof == 0U)
 		{
 			memset(&info, 0, sizeof(info));
@@ -628,7 +696,7 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 			if (fr != FR_OK)
 			{
 				code = OPERATE_FAILED;
-				GUI_FileManage_SetStatus(manager, "Read directory failed");
+				GUI_FileManage_ReportError(manager, "Read directory failed");
 				break;
 			}
 			if (info.fname[0] == '\0')
@@ -638,6 +706,26 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 				break;
 			}
 			skip--;
+		}
+	}
+
+	if (code == SYSTEM_STATUS_OK)
+	{
+		manager->scan_consumed = start_from;
+		manager->page_base = start_from;
+	}
+
+	/* Top-of-list navigation: ".." (parent directory) on page one,
+	 * "Prev..." (previous page) on every later page. */
+	if (code == SYSTEM_STATUS_OK)
+	{
+		if (start_from == 0U)
+		{
+			code = GUI_FM_AddParent(manager);
+		}
+		else
+		{
+			code = GUI_FM_AddPageNav(manager, GUI_FILEMANAGE_ITEM_PREV, "Prev...");
 		}
 	}
 
@@ -655,7 +743,7 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 		if (fr != FR_OK)
 		{
 			code = OPERATE_FAILED;
-			GUI_FileManage_SetStatus(manager, "Read directory failed");
+			GUI_FileManage_ReportError(manager, "Read directory failed");
 			break;
 		}
 
@@ -681,11 +769,6 @@ static int GUI_FM_ReadDir(GUI_FileManage_t *manager)
 	if (code != SYSTEM_STATUS_OK || manager->dir_eof != 0U)
 	{
 		GUI_FM_CloseDir(manager);
-	}
-
-	if (code == SYSTEM_STATUS_OK)
-	{
-		GUI_FM_SetDefaultStatus(manager);
 	}
 
 	return code;
@@ -770,13 +853,14 @@ static int GUI_FM_AddInfo(GUI_FileManage_t *manager, const FILINFO *info)
 
 	if (manager->item_count >= GUI_FILEMANAGE_MAX_ITEMS)
 	{
-		GUI_FileManage_SetStatus(manager, "More files omitted");
+		GUI_FileManage_ReportError(manager, "More files omitted");
 		return SYSTEM_STATUS_OK;
 	}
 
 	if (strlen(name) >= GUI_FILEMANAGE_NAME_SIZE)
 	{
-		GUI_FileManage_SetStatus(manager, "Name too long");
+		/* The name cannot be represented; skip it silently. Copying it would
+		 * truncate the entry and produce a wrong path. */
 		return SYSTEM_STATUS_OK;
 	}
 
@@ -872,6 +956,10 @@ static void GUI_FM_AddListItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *
 	{
 		icon = GUI_ICON_MORE_HORIZ;
 	}
+	else if (item->type == GUI_FILEMANAGE_ITEM_PREV)
+	{
+		icon = GUI_ICON_ARROW_BACK;
+	}
 	else
 	{
 		icon = GUI_ICON_DESCRIPTION;
@@ -907,7 +995,7 @@ static int GUI_FM_OpenItem(GUI_FileManage_t *manager, GUI_FileManageItem_t *item
 	{
 		if (GUI_FileManage_BuildItemPath(manager, item, manager->pending_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
 		{
-			GUI_FileManage_SetStatus(manager, "Path too long");
+			GUI_FileManage_ReportError(manager, "Path too long");
 			return OPERATE_FAILED;
 		}
 		return GUI_FileManage_OpenPath(manager, manager->pending_path);
@@ -1274,47 +1362,40 @@ static const char *GUI_FM_GetExt(const char *name)
 	return dot;
 }
 
-static void GUI_FM_SetDefaultStatus(GUI_FileManage_t *manager)
+/* Status reporting has no dedicated label anymore: informational notes go to
+ * the toast service and errors to a modal confirm dialog. The last shown
+ * text is remembered so periodic poll timers repeating the same state do not
+ * enqueue a new message every tick. */
+static int GUI_FM_ShowMessage(GUI_FileManage_t *manager, u8 kind, const char *text)
 {
-	char text[GUI_FM_STATUS_LEN];
-	const char *prefix;
-	u32 len;
-	u32 count;
+	int code;
 
-	if (manager == NULL || manager->status_label == NULL)
+	if (manager == NULL || text == NULL)
 	{
-		return;
-	}
-	if (manager->config.hide_default_status != 0U)
-	{
-		GUI_FileManage_SetStatus(manager, "");
-		return;
+		return OPERATE_FAILED;
 	}
 
-	prefix = (manager->config.status_text != NULL) ? manager->config.status_text : "Items";
-	len = (u32)strlen(prefix);
-	if (len >= (GUI_FM_STATUS_LEN - 8U))
+	if (manager->last_msg_kind == kind && strcmp(manager->last_msg, text) == 0)
 	{
-		len = GUI_FM_STATUS_LEN - 8U;
+		return SYSTEM_STATUS_OK;
 	}
 
-	memcpy(text, prefix, len);
-	text[len++] = ':';
-	text[len++] = ' ';
-
-	count = manager->item_count;
-	if (count >= 100U)
+	if (kind == GUI_FM_MSG_KIND_ERROR)
 	{
-		text[len++] = (char)('0' + ((count / 100U) % 10U));
+		code = GUI_Message_Confirm(text, NULL, NULL);
 	}
-	if (count >= 10U)
+	else
 	{
-		text[len++] = (char)('0' + ((count / 10U) % 10U));
+		code = GUI_Message_Toast(text, NULL, NULL);
 	}
-	text[len++] = (char)('0' + (count % 10U));
-	text[len] = '\0';
 
-	GUI_FileManage_SetStatus(manager, text);
+	if (code == SYSTEM_STATUS_OK)
+	{
+		(void)GUI_FM_CopyText(manager->last_msg, sizeof(manager->last_msg), text);
+		manager->last_msg_kind = kind;
+	}
+
+	return code;
 }
 
 /* MD3 keeps one primary accent per scheme, so the legacy per-page accent_color

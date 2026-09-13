@@ -180,7 +180,6 @@ static int GUI_Image_PageBuild(Page_Struct_t *page)
 	config.title = "Image";
 	config.root_path = "0:/";
 	config.empty_text = "No JPG files";
-	config.status_text = "Image";
 	config.extensions = s_image_extensions;
 	config.extension_count = (u8)(sizeof(s_image_extensions) / sizeof(s_image_extensions[0]));
 	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
@@ -226,7 +225,7 @@ static int GUI_Image_PageLoaded(Page_Struct_t *page, void *user_data)
 	if (context->decoding != 0U)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "Decoding JPG");
+		(void)GUI_FileManage_Notify(&context->file_manage, "Decoding JPG");
 	}
 
 	return GUI_FileManage_PageLoaded(&context->file_manage);
@@ -264,7 +263,7 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	if (context->decoding != 0U || context->decode_thread != NULL)
 	{
 		GUI_IMAGE_JPEG_LOG("open busy name=%s", item->name);
-		GUI_FileManage_SetStatus(manager, "Decoding JPG");
+		(void)GUI_FileManage_Notify(manager, "Decoding JPG");
 		return OPERATE_FAILED;
 	}
 
@@ -272,7 +271,7 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	    GUI_Image_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name) == 0U)
 	{
 		GUI_IMAGE_JPEG_LOG("open path too long name=%s", item->name);
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		(void)GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 
@@ -289,7 +288,7 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	if (s_image_decode_thread_attr.stack_mem == NULL)
 	{
 		GUI_IMAGE_JPEG_LOG("stack alloc fail size=%lu", (unsigned long)s_image_decode_thread_attr.stack_size);
-		GUI_FileManage_SetStatus(manager, "JPG stack memory error");
+		(void)GUI_FileManage_ReportError(manager, "JPG stack memory error");
 		return OUT_OF_HEAP_MEMORY;
 	}
 
@@ -300,7 +299,7 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 	context->decode_exit_tick = 0U;
 	context->decoding = 1U;
 	GUI_FileManage_SetLocked(manager, 1U);
-	GUI_FileManage_SetStatus(manager, "Decoding JPG");
+	(void)GUI_FileManage_Notify(manager, "Decoding JPG");
 
 	tid = osThreadNew(GUI_Image_DecodeThread, context, &s_image_decode_thread_attr);
 	if (tid == NULL)
@@ -310,7 +309,7 @@ static int GUI_Image_OpenFile(GUI_FileManage_t *manager, const GUI_FileManageIte
 		s_image_decode_thread_attr.stack_mem = NULL;
 		context->decoding = 0U;
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, "JPG thread failed");
+		(void)GUI_FileManage_ReportError(manager, "JPG thread failed");
 		return OUT_OF_HEAP_MEMORY;
 	}
 
@@ -328,7 +327,7 @@ static int GUI_Image_Back(GUI_FileManage_t *manager, void *user_data)
 
 	if (context != NULL && context->decoding != 0U)
 	{
-		GUI_FileManage_SetStatus(&context->file_manage, "Decoding JPG");
+		(void)GUI_FileManage_Notify(&context->file_manage, "Decoding JPG");
 		return OPERATE_FAILED;
 	}
 
@@ -437,7 +436,7 @@ static void GUI_Image_Timer(lv_timer_t *timer)
 		               context->current_name,
 		               (unsigned int)context->image_w,
 		               (unsigned int)context->image_h);
-		GUI_FileManage_SetStatus(&context->file_manage, context->status_text);
+		(void)GUI_FileManage_Notify(&context->file_manage, context->status_text);
 		if (Page_GetCurrent() == GUI_PAGE_IMAGE)
 		{
 			GUI_Image_ShowViewer(context);
@@ -449,7 +448,7 @@ static void GUI_Image_Timer(lv_timer_t *timer)
 		GUI_IMAGE_JPEG_LOG("decode failed result=%u text=%s",
 		                   (unsigned int)result,
 		                   GUI_Image_ResultText(result));
-		GUI_FileManage_SetStatus(&context->file_manage, GUI_Image_ResultText(result));
+		(void)GUI_FileManage_ReportError(&context->file_manage, GUI_Image_ResultText(result));
 		if (Page_GetCurrent() == GUI_PAGE_IMAGE)
 		{
 			(void)GUI_FileManage_PageLoaded(&context->file_manage);

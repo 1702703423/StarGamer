@@ -165,11 +165,9 @@ static int GUI_Player_PageBuild(Page_Struct_t *page)
 	config.title = "Music";
 	config.root_path = "0:/";
 	config.empty_text = "No audio files";
-	config.status_text = "Audio";
 	config.extensions = s_player_extensions;
 	config.extension_count = (u8)(sizeof(s_player_extensions) / sizeof(s_player_extensions[0]));
 	config.accent_color = GUI_Theme_Color(GUI_THEME_COLOR_PRIMARY);
-	config.hide_default_status = 1U;
 	config.open = GUI_Player_OpenAudio;
 	config.back = GUI_Player_Back;
 	config.user_data = context;
@@ -184,10 +182,6 @@ static int GUI_Player_PageBuild(Page_Struct_t *page)
 	{
 		lv_obj_set_pos(context->file_manage.list, 10, GUI_PLAYER_LIST_Y);
 		lv_obj_set_height(context->file_manage.list, GUI_PLAYER_LIST_H);
-	}
-	if (context->file_manage.status_label != NULL)
-	{
-		lv_obj_add_flag(context->file_manage.status_label, LV_OBJ_FLAG_HIDDEN);
 	}
 
 	context->volume = (u8)GUI_Player_LimitVolume(audio_card_get_volume());
@@ -240,7 +234,7 @@ static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageI
 	if (PlayerIsBusy() != 0U)
 	{
 		GUI_Player_SetLabelTextIfChanged(context->state_label, "Stop current audio first");
-		GUI_FileManage_SetStatus(manager, "Stop current audio first");
+		(void)GUI_FileManage_ReportError(manager, "Stop current audio first");
 		return OPERATE_FAILED;
 	}
 
@@ -248,7 +242,7 @@ static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageI
 	    GUI_Player_CopyText(context->current_name, GUI_FILEMANAGE_NAME_SIZE, item->name) == 0U)
 	{
 		GUI_Player_SetLabelTextIfChanged(context->state_label, "Path too long");
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		(void)GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 	if (GUI_FileManage_OemToUtf8(context->current_name_utf8, sizeof(context->current_name_utf8), item->name) == 0U)
@@ -257,18 +251,18 @@ static int GUI_Player_OpenAudio(GUI_FileManage_t *manager, const GUI_FileManageI
 	}
 
 	GUI_Player_SetLabelTextIfChanged(context->state_label, "Starting audio");
-	GUI_FileManage_SetStatus(manager, "Starting audio");
+	(void)GUI_FileManage_Notify(manager, "Starting audio");
 	code = PlayerStart((const TCHAR *)context->current_path);
 	if (code != SYSTEM_STATUS_OK)
 	{
 		GUI_Player_SetLabelTextIfChanged(context->state_label, "Play failed");
-		GUI_FileManage_SetStatus(manager, "Play failed");
+		(void)GUI_FileManage_ReportError(manager, "Play failed");
 		GUI_Player_UpdateView(context);
 		return code;
 	}
 	(void)audio_card_chg_volume(context->volume);
 
-	GUI_FileManage_SetStatus(manager, "Playing");
+	(void)GUI_FileManage_Notify(manager, "Playing");
 	GUI_Player_UpdateView(context);
 	return SYSTEM_STATUS_OK;
 }

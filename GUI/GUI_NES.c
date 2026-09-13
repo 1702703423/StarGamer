@@ -128,7 +128,6 @@ static int GUI_NES_PageBuild(Page_Struct_t *page)
 	config.title = "NES";
 	config.root_path = "0:/";
 	config.empty_text = "No NES ROMs";
-	config.status_text = "ROM";
 	config.extensions = s_nes_extensions;
 	config.extension_count = (u8)(sizeof(s_nes_extensions) / sizeof(s_nes_extensions[0]));
 	config.open = GUI_NES_OpenRom;
@@ -182,18 +181,18 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 	GUI_NES_CleanupThread(context);
 	if (context->active != 0U || context->thread_id != NULL)
 	{
-		GUI_FileManage_SetStatus(manager, "NES busy");
+		GUI_FileManage_ReportError(manager, "NES busy");
 		return OPERATE_FAILED;
 	}
 
 	if (GUI_FileManage_BuildItemPath(manager, item, context->rom_path, GUI_FILEMANAGE_PATH_SIZE) == 0U)
 	{
-		GUI_FileManage_SetStatus(manager, "Path too long");
+		GUI_FileManage_ReportError(manager, "Path too long");
 		return OPERATE_FAILED;
 	}
 
 	GUI_FileManage_SetLocked(manager, 1U);
-	GUI_FileManage_SetStatus(manager, "Starting NES");
+	(void)GUI_FileManage_Notify(manager, "Starting NES");
 	context->result = GUI_NES_RESULT_PENDING;
 	context->state = GUI_NES_STATE_STARTING;
 	context->active = 1U;
@@ -210,7 +209,7 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 		context->state = GUI_NES_STATE_ERROR;
 		context->active = 0U;
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, GUI_NES_ResultText(context->result));
+		GUI_FileManage_ReportError(manager, GUI_NES_ResultText(context->result));
 		return OUT_OF_HEAP_MEMORY;
 	}
 
@@ -223,7 +222,7 @@ static int GUI_NES_OpenRom(GUI_FileManage_t *manager, const GUI_FileManageItem_t
 		context->state = GUI_NES_STATE_ERROR;
 		context->active = 0U;
 		GUI_FileManage_SetLocked(manager, 0U);
-		GUI_FileManage_SetStatus(manager, GUI_NES_ResultText(context->result));
+		GUI_FileManage_ReportError(manager, GUI_NES_ResultText(context->result));
 		return OUT_OF_HEAP_MEMORY;
 	}
 
@@ -238,7 +237,7 @@ static int GUI_NES_Back(GUI_FileManage_t *manager, void *user_data)
 	{
 		if (manager != NULL)
 		{
-			GUI_FileManage_SetStatus(manager, "NES running");
+			(void)GUI_FileManage_ReportError(manager, "NES running");
 		}
 		return OPERATE_FAILED;
 	}
@@ -302,18 +301,25 @@ static void GUI_NES_PollTimer(lv_timer_t *timer)
 	if (state == GUI_NES_STATE_STARTING)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "Starting NES");
+		(void)GUI_FileManage_Notify(&context->file_manage, "Starting NES");
 	}
 	else if (state == GUI_NES_STATE_RUNNING)
 	{
 		GUI_FileManage_SetLocked(&context->file_manage, 1U);
-		GUI_FileManage_SetStatus(&context->file_manage, "NES running");
+		(void)GUI_FileManage_Notify(&context->file_manage, "NES running");
 	}
 	else if (state == GUI_NES_STATE_FINISHED || state == GUI_NES_STATE_ERROR)
 	{
 		result = context->result;
 		GUI_FileManage_SetLocked(&context->file_manage, 0U);
-		GUI_FileManage_SetStatus(&context->file_manage, GUI_NES_ResultText(result));
+		if (state == GUI_NES_STATE_ERROR)
+		{
+			(void)GUI_FileManage_ReportError(&context->file_manage, GUI_NES_ResultText(result));
+		}
+		else
+		{
+			(void)GUI_FileManage_Notify(&context->file_manage, GUI_NES_ResultText(result));
+		}
 		GUI_NES_CleanupThread(context);
 		context->state = GUI_NES_STATE_IDLE;
 
