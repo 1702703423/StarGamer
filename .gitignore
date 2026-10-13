@@ -55,3 +55,12 @@ Desktop.ini
 # === CubeMX generated (tracked by .ioc instead) ===
 # Uncomment if you prefer not to track the generated project file:
 # .mxproject
+
+# === Python / PyInstaller build artifacts ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+Tools/build/
+Tools/dist/
+*.exe
