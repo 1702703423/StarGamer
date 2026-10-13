@@ -11,6 +11,7 @@
 #include "key.h"
 #include "shell.h"
 #include "shell_support.h"
+#include "usb_device.h"
 
 #include <string.h>
 
@@ -110,6 +111,7 @@ typedef struct Video_Context
 	u8 seek_pending;
 	u8 resume_after_seek;
 	u8 hud_visible;
+	u8 usb_msc_was_started;
 } Video_Context_t;
 
 typedef StaticTask_t osStaticThreadDef_t;
@@ -222,12 +224,12 @@ int Video_Play(const char *path)
 
 	if(s_video_thread_attr.stack_mem == NULL)
 	{
-		VIDEO_DIAG_LOG("start failed: task stack\r\n");
 		s_video_thread_attr.stack_mem = sys_thread_stack_alloc(
 			(u32)s_video_thread_attr.stack_size);
 	}
 	if(s_video_thread_attr.stack_mem == NULL)
 	{
+		VIDEO_DIAG_LOG("start failed: task stack\r\n");
 		context->result = VIDEO_RESULT_NO_MEMORY;
 		context->state = VIDEO_STATE_ERROR;
 		return OUT_OF_HEAP_MEMORY;
@@ -498,6 +500,16 @@ static void video_task(void *argument)
 
 	context->state = VIDEO_STATE_OPENING;
 	video_set_phase(context, VIDEO_PHASE_OPEN);
+	context->usb_msc_was_started = USB_DEVICE_MSC_IsStarted();
+	if(context->usb_msc_was_started != 0U)
+	{
+		if(USB_DEVICE_MSC_Stop() != SYSTEM_STATUS_OK)
+		{
+			context->usb_msc_was_started = 0U;
+			video_finish(context, VIDEO_RESULT_IO_FAILED);
+			return;
+		}
+	}
 	if(f_open(&context->file, (const TCHAR *)context->path, FA_READ) != FR_OK)
 	{
 		video_finish(context, VIDEO_RESULT_OPEN_FAILED);
@@ -1532,6 +1544,15 @@ static void video_finish(Video_Context_t *context, Video_Result_t result)
 	{
 		(void)f_close(&context->file);
 		context->file_opened = 0U;
+	}
+	if(context->usb_msc_was_started != 0U)
+	{
+		if(USB_DEVICE_MSC_ApplySetting() != SYSTEM_STATUS_OK &&
+		   result == VIDEO_RESULT_OK)
+		{
+			result = VIDEO_RESULT_IO_FAILED;
+		}
+		context->usb_msc_was_started = 0U;
 	}
 	if(context->lcd_owned != 0U)
 	{

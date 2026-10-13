@@ -1343,7 +1343,7 @@ static u32 System_Settings_ClockPllQForProfile(u8 profile)
 			return 9UL;
 		case SYSTEM_CLOCK_240MHZ:
 		default:
-			return 10UL;
+			return 5UL;
 	}
 }
 

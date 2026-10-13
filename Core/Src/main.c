@@ -292,7 +292,7 @@ void SystemClock_Config(void)
   /* USER CODE BEGIN ClockPll */
   RCC_OscInitStruct.PLL.PLLN = System_Settings_ClockPllN();
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = System_Settings_ClockPllQ();
+  RCC_OscInitStruct.PLL.PLLQ = 5;
   /* USER CODE END ClockPll */
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -463,7 +463,7 @@ static void MX_SDIO_SD_Init(void)
   hsd.Init.ClockPowerSave = SDIO_CLOCK_POWER_SAVE_DISABLE;
   hsd.Init.BusWide = SDIO_BUS_WIDE_1B;
   hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
-  hsd.Init.ClockDiv = 4;
+  hsd.Init.ClockDiv = 0;
   /* USER CODE BEGIN SDIO_Init 2 */
 
   /* USER CODE END SDIO_Init 2 */

@@ -43,7 +43,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | **Docs** | `Docs/` | 架构设计文档：AVI 视频播放器（完整设计 + 撕裂分析 + 高码率卡顿优化方案 + 日志优化点）、BootLoader 设计、Arduboy 移植、Helix MP3 移植、CCM 栈优化、GUI SRAM 优化、SRAMEX 优化、内存规划重构、用户手册 |
 | **Star Gamer ELF** | `Star Gamer ELF/` | 独立 Keil ARMCLANG 工程，构建 AXF 可重定位 demo 应用（`axf_demo.c` — 图形绘制/按键计数器，`dl_User_api.h` — 用户 API 编号），产物 `Star Gamer ELF.axf` 放到 SD 卡根目录后由 AXF Loader 页面加载运行 |
 | **Star Gamer ELF - 2048** | `Star Gamer ELF - 2048/` | 独立 Keil 工程，构建 AXF 2048 游戏应用（`game_2048.c` — 320×240 RGB565 帧缓冲、方向键滑动、PB7 退出），产物 `Star Gamer ELF - 2048.axf` 由 AXF Loader 加载运行 |
-| **Tools** | `Tools/` | PC 端开发工具：`hexdump`（文件十六进制查看，C + Python）、`map_analyzer`（ARMCLANG .map 内存分析，C + Python tkinter GUI + PyInstaller 打包 .exe） |
+| **Tools** | `Tools/` | PC 端开发工具：`hexdump`（文件十六进制查看，C + Python：CLI 与 tkinter GUI 双前端，共用同一转储内核 + PyInstaller 打包 .exe）、`map_analyzer`（ARMCLANG .map 内存分析，C + Python tkinter GUI + PyInstaller 打包 .exe） |
 | **Tests** | `Tests/AVI_Parser_Host/`、`Tests/AXF_Loader_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`）；AXF 加载器主机端验证脚本 `validate_axf.py`；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
 
 ### 启动流程

@@ -149,6 +149,29 @@ extern SD_HandleTypeDef hsd;
 static void SD_FlushQueue(void);
 static void SD_RecoverDmaTransfer(void);
 
+/*
+ * The STM32F4 SD DMA path is reliable with the statically allocated scratch
+ * buffer, while FatFs may hand us buffers embedded in objects located in the
+ * external FSMC SRAM.  Keep the existing 4-byte alignment rule and also
+ * stage all external-SRAM transfers through scratch.
+ */
+static int SD_BufferNeedsScratch(const void *buffer)
+{
+  u32 address = (u32)buffer;
+
+  if ((address & 0x3U) != 0U)
+  {
+    return 1;
+  }
+
+  if ((address >= 0x68000000UL) && (address < 0x68100000UL))
+  {
+    return 1;
+  }
+
+  return 0;
+}
+
 #if FATFS_LOG_ENABLE
 static int SD_CheckStatusWithTimeout(u32 timeout);
 
@@ -372,7 +395,7 @@ SD_READ_RETRY:
   }
 
 #if defined(ENABLE_SCRATCH_BUFFER)
-  if (!((uint32_t)buff & 0x3))
+  if (!SD_BufferNeedsScratch(buff))
   {
 #endif
     /* Fast path cause destination buffer is correctly aligned */
@@ -563,7 +586,7 @@ SD_WRITE_RETRY:
   }
 
 #if defined(ENABLE_SCRATCH_BUFFER)
-  if (!((uint32_t)buff & 0x3))
+  if (!SD_BufferNeedsScratch(buff))
   {
 #endif
 #if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
