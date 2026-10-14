@@ -93,6 +93,25 @@ RealNetworks Public Source License 1.0 被自由软件基金会（FSF）归类�
 - `minimp3` —— CC0（公共领域贡献）
 - `dr_mp3` —— MIT-0 / Public Domain
 
+**上游核实（2026-10-14）**：常见的嵌入式分发仓库
+[`ultraembedded/libhelix-mp3`](https://github.com/ultraembedded/libhelix-mp3) 的 `LICENSE.txt` 原文为：
+
+```
+Copyright (c) 1995-2004 RealNetworks, Inc. All Rights Reserved.
+
+The contents of this directory ... are subject to the current version of the
+RealNetworks Public Source License (the "RPSL") available at RPSL.txt in this
+directory, unless you have licensed the directory under the current version of
+the RealNetworks Community Source License (the "RCSL") ...
+```
+
+该仓库根目录仅有 `LICENSE.txt`、`RPSL.txt`、`RCSL.txt` 三个许可文件，
+**不存在任何宽松许可（无 BSD / MIT / Apache）**。其他分发渠道（如 Microchip 的
+`helix_mp3`）同样标注 RPSL / RCSL。
+
+> 结论：**Helix MP3 解码器不存在宽松许可版本**，任何分发都必须走 RPSL 或商业 RCSL。
+> 因此若要坚持 GPL-3.0，只能更换解码器实现，不能靠"换个 fork"绕过。
+
 ### 2. NES 模拟器 —— 来源与授权不明
 
 `Middlewares/Third_Party/NES/` 源文件仅含以下来源注释，**未附带任何许可声明**：
