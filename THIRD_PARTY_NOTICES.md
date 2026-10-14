@@ -85,8 +85,41 @@
  * http://www.helixcommunity.org/content/rpsl ...
 ```
 
-RealNetworks Public Source License 1.0 被自由软件基金会（FSF）归类为**自由软件但不兼容 GPL**。
+#### 依据：RPSL 原文自身明确排除了 GPL
+
+本仓库已随 `Middlewares/libhelix/` 一并保留上游三个许可文件（`LICENSE.txt`、`RPSL.txt`、
+`RCSL.txt`）。RPSL 1.0 原文（`RPSL.txt`）第 4 条与 Exhibit B 直接回答了兼容性问题：
+
+`RPSL.txt` §4.1：
+
+> You must cause any Derivative Work that you distribute ... to be licensed as a
+> whole at no charge to all third parties under the terms of this License and
+> **no other license except as provided in Section 4.2**.
+
+`RPSL.txt` Exhibit B 虽把 GPL 列入 "Compatible Source Licenses"，但**脚注 (1) 随即否定了它**：
+
+> **(1) Note:** because this license contains certain reciprocal licensing terms that
+> purport to extend to independently developed code, You may be prohibited under
+> the terms of this otherwise compatible license from using code licensed under
+> its terms with Covered Code because Covered Code may only be licensed under the
+> RealNetworks Public Source License. **Any attempt to apply non RPSL license terms,
+> including without limitation the GPL, to Covered Code is expressly forbidden.**
+
+即：RPSL 要求衍生作品**整体**只能以「RPSL + 兼容许可」的组合授权，且 RPSL 部分必须保持
+RPSL；而 GPL 的互惠条款会要求整体（含 RPSL 部分）转为 GPL —— 这被脚注 (1) **明文禁止**，
+且特别点名了 GPL。
+
 因此 **不能将 libhelix 与本项目一起以 GPL-3.0 分发**。
+
+（`RPSL.txt` §4.3 的 "mere aggregation" 例外仅适用于与 Covered Code 无关的独立作品在
+同一介质上的单纯汇集，不适用于链接进同一程序的情形。）
+
+> **关于 `pschatzmann/codec-helix` 等先例**：该仓库根目录为 GPL-3.0，同时在
+> `src/libhelix-mp3/` 保留了 `RPSL.txt` / `RCSL.txt`，README 亦明示解码器为 RPSL。
+> 这种做法（保留上游许可 + 明示第三方协议）本身是正确的，也是本仓库应当效仿的；
+> 但它**并不改变 RPSL 与 GPL 无法合并这一事实** —— 该仓库同样处于上述冲突之中。
+> GitHub 首页显示的 "GPL-3.0" 只是对根目录 LICENSE 文件的自动识别，
+> 不构成对整个仓库（含 libhelix）的法律声明。
 
 如需使整个固件可依 GPL-3.0 分发，须将 MP3 解码器替换为 GPL 兼容实现，例如：
 
