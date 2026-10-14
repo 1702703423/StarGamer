@@ -229,6 +229,44 @@ the RealNetworks Community Source License (the "RCSL") ...
 
 ---
 
+### 补充：改成"库链接、不并入代码库"能否规避？
+
+**不能。** 这是常见误解 —— 许可判定看的是"是否构成同一程序"，而非"文件放在哪个目录"。
+
+**RPSL 一侧**：`RPSL.txt` §4.2 的措辞已经把链接情形写了进去：
+
+> ...the software module, **including any software that is linked to, integrated with, or
+> part of the same applications as**, the software module **by any method** must be
+> wholly subject to one of the Compatible Source Licenses.
+
+即：只要"以任何方式链接"，就必须整体适用兼容许可 —— 而脚注 (1) 已排除 GPL。
+§4.3 的 "mere aggregation" 例外要求是**与 Covered Code 无关的独立作品在同一介质上的
+单纯汇集**，链接成同一程序不属于此列。
+
+**GPL-3.0 一侧**：§5 末段的 "aggregate" 例外同样要求是
+"separate and independent works, which are not by their nature extensions of the covered
+work, and **which are not combined with it such as to form a larger program**"。
+固件是单一静态链接产物，被编译进同一个 `.bin` 并由同一份代码调用 —— 属于
+"combined ... to form a larger program"，不是 aggregate。
+
+**结论**：本项目的固件是**静态链接的单一镜像**，没有动态链接 / 进程隔离可用，
+因此"改为库链接"不改变任何结论。
+
+**什么才真正有影响**：
+
+| 做法 | 效果 |
+|---|---|
+| 只发布源码、不发布固件二进制 | 聚合主张明显更强（copyleft 义务由"分发"触发）|
+| 第三方代码单独成目录 / 独立仓库、单独构建、保留其许可 | **有价值** —— 让分层清晰、便于审计，但不解决兼容性 |
+| 真正的进程 / 地址空间隔离（独立程序 + 定义明确的接口）| 可显著弱化"同一作品"认定；**但 MCU 单一固件做不到** |
+| 替换为许可兼容的实现 | **唯一彻底的解法** |
+
+> 注：本项目自带 AXF 动态加载器，理论上可把解码器做成独立加载的应用。但该加载器本身
+> 正受 GPL-2.0 约束（见第 4 项），且 SVC 向量表耦合紧密，主张"独立程序"仍很薄弱，
+> 不建议作为主要方案。
+
+---
+
 ## 四、再分发义务提示
 
 若你分发本项目（源码或固件），须同时注意：
