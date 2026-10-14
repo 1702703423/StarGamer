@@ -25,7 +25,7 @@
 | `Media/` | 播放器核心与 codec 抽象、WAV/MP3 解码封装、AVI 解析、MJPEG 解码、PCM 音频 |
 | `APP/Arduboy/` | Arduboy 运行时与硬件移植层（**不含** `Middlewares/Third_Party/Arduboy/`）|
 | `IAP/` | 在应用编程模块 |
-| `ELF Loader/` | 动态 ELF 加载器 |
+| `ELF Loader/`（仅 `dl_vector.c`、`dl_vector_api.c`、`dl_user_api.h`、`common/`）| SVC 向量分发、用户 API 编号、C 标准库 SVC shim（**核心 `dl_*` 为第三方，见第二节**）|
 | `EXTERN API/` | AXF 动态加载宿主端 API |
 | `Debug/` | 调试命令、性能统计（**不含** Letter Shell，见下）|
 | `Tools/` | PC 端工具（hexdump、map_analyzer）|
@@ -54,13 +54,14 @@
 | STM32F4xx HAL Driver | `Drivers/STM32F4xx_HAL_Driver/` | — | ST Package License（BSD-3 系）| ✅ 是 |
 | STM32 USB Device Library | `Middlewares/ST/STM32_USB_Device_Library/` | — | ST Package License（BSD-3 系）| ✅ 是 |
 | BMP（占位）| `Middlewares/Third_Party/BMP/` | — | 文件为 0 字节，无实质内容 | ✅ 是 |
+| **dl_lib（ELF 动态加载核心）** | `ELF Loader/dl_lib.c`、`dl_lib.h`、`dl_arch.c`、`dl_elf.h`、`dl_port.c`、`dl_port.h` | 1.0（2021-12-3，© wzh）| **未声明**；源自 RT-Thread（Apache-2.0）| ⚠️ **不明** |
 | **Helix MP3 解码器** | `Middlewares/libhelix/` | — | **RCSL 1.0 / RPSL 1.0** | ❌ **不兼容** |
 | **NES 模拟器** | `Middlewares/Third_Party/NES/` | — | **未声明** | ⚠️ **不明** |
 | **Arduboy 兼容层** | `Middlewares/Third_Party/Arduboy/` | — | **未声明** | ⚠️ **不明** |
 
 ---
 
-## 三、需要特别注意的三项
+## 三、需要特别注意的组件
 
 ### 1. Helix MP3 解码器 —— 与 GPL-3.0 不兼容
 
@@ -110,6 +111,38 @@ RealNetworks Public Source License 1.0 被自由软件基金会（FSF）归类�
 
 即：上游来源、版权与许可均缺失，**再分发前必须先厘清来源**。
 
+### 4. dl_lib（ELF 动态加载核心）—— 未声明许可，且源自 RT-Thread
+
+`ELF Loader/` 下的核心文件仅带以下文件头，**只有作者与日期，没有任何版权或许可声明**：
+
+```
+/*
+*   @file name: dl_elf.h
+*   @author: wzh
+*   @version: 1.0
+*   @date: 2021-12-3
+*   @description: elf文件格式描述
+*   @brief	移植自RT-Thread的动态加载模块的实现，主要用于解码elf文件
+*/
+```
+
+`dl_arch.c:15` 另注：`部分参考了RT-Thread的Moudle实现`。
+
+涉及文件：`dl_lib.c`、`dl_lib.h`、`dl_arch.c`、`dl_elf.h`、`dl_port.c`、`dl_port.h`
+（六者均署名 `wzh`，版本 1.0 / 2021-12-3）。仓库内**没有任何 LICENSE 或 COPYING 文件**。
+
+两点需要处理：
+
+- **上游 `dl_lib` 作者的许可未知** —— 无法确认 `wzh` 对该代码的授权范围，
+  亦未在仓库中找到该项目的上游地址。
+- **RT-Thread 采用 Apache-2.0** —— 该协议与 GPL-3.0 兼容，但 §4 要求保留版权与归属声明、
+  随附许可副本、并声明所做修改。当前代码中**三者皆无**，严格来说不符合 Apache-2.0
+  的再分发条件；补上这些声明即可满足。
+
+> 注：`ELF Loader/` 中的 `dl_vector.c`、`dl_vector_api.c`、`dl_user_api.h` 与 `common/`
+> 为本项目自行编写的 SVC 胶水层（无 `wzh` 署名，且直接引用项目内部头文件），
+> 不受本条影响。
+
 ---
 
 ## 四、再分发义务提示
@@ -121,7 +154,7 @@ RealNetworks Public Source License 1.0 被自由软件基金会（FSF）归类�
    固件的手段。本项目具备 IAP + BootLoader（SD 卡刷机）能力，但若对固件施加签名校验或
    密钥锁定，将违反该条款。
 3. **完整对应源码**：GPL-3.0 要求提供完整的对应源码，包含用于构建固件的脚本与配置。
-4. **上述第 1、2、3 项问题组件**（Helix / NES / Arduboy）在授权厘清前，不应随固件分发。
+4. **上述第 1～4 项问题组件**（Helix / NES / Arduboy / dl_lib）在授权厘清前，不应随固件分发。
 
 ---
 
