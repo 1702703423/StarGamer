@@ -44,7 +44,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 | **Star Gamer ELF** | `Star Gamer ELF/` | 独立 Keil ARMCLANG 工程，构建 AXF 可重定位 demo 应用（`axf_demo.c` — 图形绘制/按键计数器，`dl_User_api.h` — 用户 API 编号），产物 `Star Gamer ELF.axf` 放到 SD 卡根目录后由 AXF Loader 页面加载运行 |
 | **Star Gamer ELF - 2048** | `Star Gamer ELF - 2048/` | 独立 Keil 工程，构建 AXF 2048 游戏应用（`game_2048.c` — 320×240 RGB565 帧缓冲、方向键滑动、PB7 退出），产物 `Star Gamer ELF - 2048.axf` 由 AXF Loader 加载运行 |
 | **Tools** | `Tools/` | PC 端开发工具：`hexdump`（文件十六进制查看，C + Python：CLI 与 tkinter GUI 双前端，共用同一转储内核 + PyInstaller 打包 .exe）、`map_analyzer`（ARMCLANG .map 内存分析，C + Python tkinter GUI + PyInstaller 打包 .exe） |
-| **Tests** | `Tests/AVI_Parser_Host/`、`Tests/AXF_Loader_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试 + 真实 AVI 样本文件 `Tests/样本/`）；AXF 加载器主机端验证脚本 `validate_axf.py`；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
+| **Tests** | `Tests/AVI_Parser_Host/`、`Tests/AXF_Loader_Host/`、`Tests/SDIO_Config_Host/` | AVI 解析器 PC 端回归测试（含边界条件单元测试；AVI 样本需自备，不入库）；AXF 加载器主机端验证脚本 `validate_axf.py`；SDIO IRQ 优先级验证脚本（验证 DMA 流中断优先级高于 SDIO 中断） |
 
 ### 启动流程
 
@@ -218,7 +218,7 @@ STM32F407ZG 掌上游戏机 — NES 模拟器 / Arduboy 游戏 / AVI 视频播�
 - `IAP/` 已完整实现（含跳转前 Flash ART 缓存刷新、CONTROL 寄存器清零等加固措施），App 和 BootLoader 通过 `IAP_Protocol.h` 共享协议定义
 - `PCB/` 含立创 EDA 硬件设计工程文件
 - `Docs/` 目录含详细设计文档，修改前应查阅相关文档；`Docs/内存规划重构.md` 描述当前 SRAM 分区布局
-- `Tests/` 含 AVI 解析器 PC 端回归测试 + AXF 加载器主机端验证 + SDIO IRQ 优先级验证脚本 + 真实 AVI 样本文件
+- `Tests/` 含 AVI 解析器 PC 端回归测试 + AXF 加载器主机端验证 + SDIO IRQ 优先级验证脚本（AVI 样本需自备，不入库）
 - `Middlewares/libhelix/port/helix_support.c` 为 Helix MP3 移植适配层
 - `Middlewares/Third_Party/BMP/` 为 BMP 图像库占位，尚未实现
 - ELF Loader 源自 `dl_lib`（Cortex-M 系列通用），当前适配 STM32F407；AXF 应用通过 `stargamer_axf_api.h`（`SG_*` 前缀）使用 SVC 调用宿主 LCD/按键/延时 API

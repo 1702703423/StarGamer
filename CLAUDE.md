@@ -51,7 +51,7 @@ Post-build actions automatically generate `.bin` files from the ELF output.
 | `Star Gamer ELF - 2048/` | Independent Keil project for AXF 2048 game (`game_2048.c` — 320×240 RGB565 framebuffer, directional sliding, PB7 exit); output `.axf` loaded by AXF Loader |
 | `Docs/` | Design docs: AVI player (full design + tearing analysis + high-bitrate optimization + log analysis), BootLoader, Arduboy port, Helix MP3, CCM stack, GUI SRAM |
 | `Tools/` | PC dev tools: `hexdump` (hex viewer, C+Python), `map_analyzer` (ARMCLANG .map memory analyzer, C+Python tkinter + PyInstaller .exe) |
-| `Tests/AVI_Parser_Host/`, `Tests/AXF_Loader_Host/`, `Tests/SDIO_Config_Host/` | AVI parser PC-hosted regression tests (boundary-condition unit tests + real AVI samples under `Tests/样本/`); AXF loader host-side validation (`validate_axf.py`); SDIO IRQ priority validation script |
+| `Tests/AVI_Parser_Host/`, `Tests/AXF_Loader_Host/`, `Tests/SDIO_Config_Host/` | AVI parser PC-hosted regression tests (boundary-condition unit tests; AVI samples are not bundled — supply your own); AXF loader host-side validation (`validate_axf.py`); SDIO IRQ priority validation script |
 
 ### Boot Sequence
 

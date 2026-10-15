@@ -64,3 +64,7 @@ __pycache__/
 Tools/build/
 Tools/dist/
 *.exe
+
+# === Test media samples (large / third-party content) ===
+# 测试样本不入库：AVI 等媒体体积大，且可能涉及第三方版权
+*.avi
