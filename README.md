@@ -1,6 +1,6 @@
 # Star Gamer
 
-基于 **STM32F407ZGT6** 的掌上游戏机固件。单芯片集成 NES 模拟器、Arduboy 游戏运行环境、AVI 视频播放、MP3 / WAV 音乐播放、图片与文本浏览，以及支持 SD 卡刷机的 IAP + BootLoader。
+基于 **STM32F407ZGT6** 的掌上游戏机固件。单芯片集成 NES 模拟器、Arduboy 游戏运行环境、AVI 视频播放、MP3 / WAV 音乐播放、图片与文本浏览，AXF动态加载，以及支持 SD 卡刷机的 IAP + BootLoader。
 
 ## 硬件与工具链
 
